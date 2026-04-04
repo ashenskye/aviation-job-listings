@@ -1,0 +1,20 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Run Flutter Web (Chrome) with Supabase",
+			"type": "shell",
+			"command": "flutter",
+			"args": [
+				"run",
+				"-d",
+				"chrome",
+				"--dart-define=SUPABASE_URL=https://agwwrrzemmuztzciuamn.supabase.co",
+				"--dart-define=SUPABASE_PUBLISHABLE_KEY=sb_publishable_ohxdWpUf_-SJpk-5JpNG0g_KcblPeAO"
+			],
+			"isBackground": true
+		}
+	]
+}
+
+
