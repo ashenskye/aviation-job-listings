@@ -18,7 +18,8 @@
         },
         "git init": true,
         "git add": true,
-        "git commit": true
+        "git commit": true,
+        "git config": true
     },
     "sqltools.connections": []
 }
