@@ -1,4 +1,6 @@
 class JobSeekerProfile {
+  final String firstName;
+  final String lastName;
   final String fullName;
   final String email;
   final String phone;
@@ -15,6 +17,8 @@ class JobSeekerProfile {
   final int totalFlightHours;
 
   const JobSeekerProfile({
+    this.firstName = '',
+    this.lastName = '',
     this.fullName = '',
     this.email = '',
     this.phone = '',
@@ -31,9 +35,44 @@ class JobSeekerProfile {
     this.totalFlightHours = 0,
   });
 
+  static List<String> _splitFullName(String fullName) {
+    final normalized = fullName.trim().replaceAll(RegExp(r'\s+'), ' ');
+    if (normalized.isEmpty) {
+      return const ['', ''];
+    }
+
+    final parts = normalized.split(' ');
+    if (parts.length == 1) {
+      return [parts.first, ''];
+    }
+
+    return [parts.first, parts.sublist(1).join(' ')];
+  }
+
+  static String combineName(String firstName, String lastName) {
+    final parts = [firstName.trim(), lastName.trim()]
+        .where((part) => part.isNotEmpty)
+        .toList(growable: false);
+    return parts.join(' ');
+  }
+
   factory JobSeekerProfile.fromJson(Map<String, dynamic> json) {
+    final firstName = json['firstName']?.toString().trim() ?? '';
+    final lastName = json['lastName']?.toString().trim() ?? '';
+    final legacyFullName = json['fullName']?.toString() ?? '';
+    final splitLegacyName = _splitFullName(legacyFullName);
+    final resolvedFirstName = firstName.isNotEmpty
+        ? firstName
+        : splitLegacyName[0];
+    final resolvedLastName = lastName.isNotEmpty ? lastName : splitLegacyName[1];
+    final resolvedFullName = combineName(resolvedFirstName, resolvedLastName);
+
     return JobSeekerProfile(
-      fullName: json['fullName']?.toString() ?? '',
+      firstName: resolvedFirstName,
+      lastName: resolvedLastName,
+      fullName: resolvedFullName.isNotEmpty
+          ? resolvedFullName
+          : legacyFullName.trim(),
       email: json['email']?.toString() ?? '',
       phone: json['phone']?.toString() ?? '',
       city: json['city']?.toString() ?? '',
@@ -82,7 +121,11 @@ class JobSeekerProfile {
   }
 
   Map<String, dynamic> toJson() => {
-    'fullName': fullName,
+    'firstName': firstName,
+    'lastName': lastName,
+    'fullName': combineName(firstName, lastName).isNotEmpty
+        ? combineName(firstName, lastName)
+        : fullName,
     'email': email,
     'phone': phone,
     'city': city,
@@ -99,6 +142,8 @@ class JobSeekerProfile {
   };
 
   JobSeekerProfile copyWith({
+    String? firstName,
+    String? lastName,
     String? fullName,
     String? email,
     String? phone,
@@ -114,8 +159,17 @@ class JobSeekerProfile {
     List<String>? aircraftFlown,
     int? totalFlightHours,
   }) {
+    final splitFullName = fullName == null ? null : _splitFullName(fullName);
+    final nextFirstName = firstName ?? splitFullName?[0] ?? this.firstName;
+    final nextLastName = lastName ?? splitFullName?[1] ?? this.lastName;
+    final combinedName = combineName(nextFirstName, nextLastName);
+
     return JobSeekerProfile(
-      fullName: fullName ?? this.fullName,
+      firstName: nextFirstName,
+      lastName: nextLastName,
+      fullName: combinedName.isNotEmpty
+          ? combinedName
+          : (fullName ?? this.fullName).trim(),
       email: email ?? this.email,
       phone: phone ?? this.phone,
       city: city ?? this.city,

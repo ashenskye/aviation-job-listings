@@ -65,6 +65,7 @@ create table if not exists public.employer_profiles (
   contact_email text not null default '',
   contact_phone text not null default '',
   company_description text not null default '',
+  company_benefits text[] not null default '{}',
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );

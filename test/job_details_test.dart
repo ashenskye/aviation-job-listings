@@ -6,7 +6,7 @@ import 'package:aviation_job_listings/models/job_listing.dart';
 import 'package:aviation_job_listings/models/job_seeker_profile.dart';
 
 void main() {
-  testWidgets('Job details shows unmet comparison text and no toggle labels', (
+  testWidgets('Job details shows unmet comparison details without toggle labels', (
     WidgetTester tester,
   ) async {
     const job = JobListing(
@@ -39,7 +39,8 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Commercial Pilot (CPL) (Not yet met)'), findsOneWidget);
+    expect(find.text('Commercial Pilot (CPL) (Not yet met)'), findsNothing);
+    expect(find.text('Commercial Pilot (CPL)'), findsWidgets);
     expect(
       find.text('Current: 0 hrs • Required: 100 hrs • Progress: 0%'),
       findsOneWidget,

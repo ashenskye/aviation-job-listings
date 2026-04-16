@@ -7,11 +7,14 @@ class EmployerProfile {
   final String headquartersState;
   final String headquartersPostalCode;
   final String headquartersCountry;
+  final String companyBannerUrl;
+  final String companyLogoUrl;
   final String website;
   final String contactName;
   final String contactEmail;
   final String contactPhone;
   final String companyDescription;
+  final List<String> companyBenefits;
 
   const EmployerProfile({
     required this.id,
@@ -22,11 +25,14 @@ class EmployerProfile {
     this.headquartersState = '',
     this.headquartersPostalCode = '',
     this.headquartersCountry = '',
+    this.companyBannerUrl = '',
+    this.companyLogoUrl = '',
     this.website = '',
     this.contactName = '',
     this.contactEmail = '',
     this.contactPhone = '',
     this.companyDescription = '',
+    this.companyBenefits = const [],
   });
 
   factory EmployerProfile.fromJson(Map<String, dynamic> json) {
@@ -40,14 +46,24 @@ class EmployerProfile {
           json['headquartersAddressLine2']?.toString() ?? '',
       headquartersCity: json['headquartersCity']?.toString() ?? '',
       headquartersState: json['headquartersState']?.toString() ?? '',
-      headquartersPostalCode:
-          json['headquartersPostalCode']?.toString() ?? '',
+      headquartersPostalCode: json['headquartersPostalCode']?.toString() ?? '',
       headquartersCountry: json['headquartersCountry']?.toString() ?? '',
+      companyBannerUrl:
+          json['companyBannerUrl']?.toString() ??
+          json['company_banner_url']?.toString() ??
+          '',
+      companyLogoUrl:
+          json['companyLogoUrl']?.toString() ??
+          json['company_logo_url']?.toString() ??
+          '',
       website: json['website']?.toString() ?? '',
       contactName: json['contactName']?.toString() ?? '',
       contactEmail: json['contactEmail']?.toString() ?? '',
       contactPhone: json['contactPhone']?.toString() ?? '',
       companyDescription: json['companyDescription']?.toString() ?? '',
+      companyBenefits: List<String>.from(
+        (json['companyBenefits'] as List?) ?? const [],
+      ),
     );
   }
 
@@ -61,10 +77,13 @@ class EmployerProfile {
     'headquartersState': headquartersState,
     'headquartersPostalCode': headquartersPostalCode,
     'headquartersCountry': headquartersCountry,
+    'companyBannerUrl': companyBannerUrl,
+    'companyLogoUrl': companyLogoUrl,
     'website': website,
     'contactName': contactName,
     'contactEmail': contactEmail,
     'contactPhone': contactPhone,
     'companyDescription': companyDescription,
+    'companyBenefits': companyBenefits,
   };
 }

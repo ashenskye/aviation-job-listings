@@ -1,5 +1,6 @@
 import 'package:aviation_job_listings/models/employer_profiles_data.dart';
 import 'package:aviation_job_listings/models/job_listing.dart';
+import 'package:aviation_job_listings/models/job_listing_template.dart';
 import 'package:aviation_job_listings/models/job_load_result.dart';
 import 'package:aviation_job_listings/models/job_seeker_profile.dart';
 import 'package:aviation_job_listings/repositories/app_repository.dart';
@@ -9,6 +10,7 @@ class FakeAppRepository implements AppRepository {
   JobSeekerProfile _profile = const JobSeekerProfile();
   EmployerProfilesData _employerData = const EmployerProfilesData.empty();
   final List<JobListing> _jobs = <JobListing>[];
+  final List<JobListingTemplate> _templates = <JobListingTemplate>[];
 
   @override
   Future<Set<String>> loadFavoriteIds() async => _favoriteIds;
@@ -37,10 +39,20 @@ class FakeAppRepository implements AppRepository {
   }
 
   @override
+  Future<List<JobListingTemplate>> loadJobTemplates() async =>
+      List<JobListingTemplate>.from(_templates);
+
+  @override
+  Future<void> saveJobTemplates(List<JobListingTemplate> templates) async {
+    _templates
+      ..clear()
+      ..addAll(templates);
+  }
+
+  @override
   Future<JobLoadResult> loadJobs({
     required String backendUrl,
     required List<JobListing> fallbackJobs,
-    required JobListing testingJob,
   }) async {
     return JobLoadResult(jobs: List<JobListing>.from(_jobs));
   }

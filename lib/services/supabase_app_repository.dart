@@ -1,6 +1,7 @@
 import '../models/employer_profile.dart';
 import '../models/employer_profiles_data.dart';
 import '../models/job_listing.dart';
+import '../models/job_listing_template.dart';
 import '../models/job_load_result.dart';
 import '../models/job_seeker_profile.dart';
 import '../repositories/app_repository.dart';
@@ -144,16 +145,60 @@ class SupabaseAppRepository implements AppRepository {
   }
 
   @override
+  Future<List<JobListingTemplate>> loadJobTemplates() async {
+    final userId = _currentUserId;
+    if (!SupabaseBootstrap.isConfigured || userId == null) {
+      return localFallback.loadJobTemplates();
+    }
+
+    try {
+      final rows = await _client
+          .from('job_listing_templates')
+          .select()
+          .eq('owner_user_id', userId)
+          .order('updated_at', ascending: false);
+      return rows
+          .map((row) => JobListingTemplate.fromJson(_fromTemplateRow(row)))
+          .toList();
+    } catch (_) {
+      return localFallback.loadJobTemplates();
+    }
+  }
+
+  @override
+  Future<void> saveJobTemplates(List<JobListingTemplate> templates) async {
+    final userId = _currentUserId;
+    if (!SupabaseBootstrap.isConfigured || userId == null) {
+      await localFallback.saveJobTemplates(templates);
+      return;
+    }
+
+    try {
+      await _client
+          .from('job_listing_templates')
+          .delete()
+          .eq('owner_user_id', userId);
+
+      if (templates.isNotEmpty) {
+        final payload = templates
+            .map((template) => _toTemplateRow(template, ownerUserId: userId))
+            .toList();
+        await _client.from('job_listing_templates').insert(payload);
+      }
+    } catch (_) {
+      await localFallback.saveJobTemplates(templates);
+    }
+  }
+
+  @override
   Future<JobLoadResult> loadJobs({
     required String backendUrl,
     required List<JobListing> fallbackJobs,
-    required JobListing testingJob,
   }) async {
     if (!SupabaseBootstrap.isConfigured || _currentUserId == null) {
       return localFallback.loadJobs(
         backendUrl: backendUrl,
         fallbackJobs: fallbackJobs,
-        testingJob: testingJob,
       );
     }
 
@@ -167,9 +212,7 @@ class SupabaseAppRepository implements AppRepository {
       final jobs = rows
           .map((row) => JobListing.fromJson(_fromJobListingRow(row)))
           .toList();
-
-      final nonTestJobs = jobs.where((job) => job.id != testingJob.id).toList();
-      return JobLoadResult(jobs: [testingJob, ...nonTestJobs]);
+      return JobLoadResult(jobs: jobs);
     } catch (_) {
       return JobLoadResult(
         jobs: fallbackJobs,
@@ -355,6 +398,8 @@ class SupabaseAppRepository implements AppRepository {
       'minimumHours': row['minimum_hours'],
       'benefits': List<String>.from((row['benefits'] as List?) ?? const []),
       'deadlineDate': row['deadline_date'],
+      'createdAt': row['created_at'],
+      'updatedAt': row['updated_at'],
     };
   }
 
@@ -419,11 +464,14 @@ class SupabaseAppRepository implements AppRepository {
       'headquarters_state': profile.headquartersState,
       'headquarters_postal_code': profile.headquartersPostalCode,
       'headquarters_country': profile.headquartersCountry,
+      'company_banner_url': profile.companyBannerUrl,
+      'company_logo_url': profile.companyLogoUrl,
       'website': profile.website,
       'contact_name': profile.contactName,
       'contact_email': profile.contactEmail,
       'contact_phone': profile.contactPhone,
       'company_description': profile.companyDescription,
+      'company_benefits': profile.companyBenefits,
     };
   }
 
@@ -437,11 +485,42 @@ class SupabaseAppRepository implements AppRepository {
       'headquartersState': row['headquarters_state'],
       'headquartersPostalCode': row['headquarters_postal_code'],
       'headquartersCountry': row['headquarters_country'],
+      'companyBannerUrl': row['company_banner_url'],
+      'companyLogoUrl': row['company_logo_url'],
       'website': row['website'],
       'contactName': row['contact_name'],
       'contactEmail': row['contact_email'],
       'contactPhone': row['contact_phone'],
       'companyDescription': row['company_description'],
+      'companyBenefits': List<String>.from(
+        (row['company_benefits'] as List?) ?? const [],
+      ),
+    };
+  }
+
+  Map<String, dynamic> _toTemplateRow(
+    JobListingTemplate template, {
+    required String ownerUserId,
+  }) {
+    return {
+      'id': template.id,
+      'owner_user_id': ownerUserId,
+      'employer_id': template.employerId,
+      'template_name': template.name,
+      'listing': template.listing.toJson(),
+    };
+  }
+
+  Map<String, dynamic> _fromTemplateRow(Map<String, dynamic> row) {
+    return {
+      'id': row['id'],
+      'employerId': row['employer_id'],
+      'name': row['template_name'],
+      'listing': Map<String, dynamic>.from(
+        (row['listing'] as Map?) ?? const {},
+      ),
+      'createdAt': row['created_at'],
+      'updatedAt': row['updated_at'],
     };
   }
 }

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -21,7 +22,75 @@ class _SignInScreenState extends State<SignInScreen> {
 
   bool _isSignUp = false;
   bool _isLoading = false;
+  bool _isResendingConfirmation = false;
+  bool _isSendingPasswordReset = false;
   SignUpPath _signUpPath = SignUpPath.jobSeeker;
+  String? _lastSignUpEmail;
+  DateTime? _emailActionCooldownUntil;
+
+  static const Duration _emailActionCooldown = Duration(seconds: 60);
+
+  bool get _emailActionCoolingDown {
+    final until = _emailActionCooldownUntil;
+    return until != null && DateTime.now().isBefore(until);
+  }
+
+  int get _emailActionSecondsRemaining {
+    final until = _emailActionCooldownUntil;
+    if (until == null) {
+      return 0;
+    }
+    final diff = until.difference(DateTime.now()).inSeconds;
+    return diff > 0 ? diff : 0;
+  }
+
+  String? get _developmentEmailRedirectUrl {
+    if (!kDebugMode || !kIsWeb) {
+      return null;
+    }
+
+    final host = Uri.base.host.toLowerCase();
+    if (host == 'localhost' || host == '127.0.0.1') {
+      return Uri.base.origin;
+    }
+    return null;
+  }
+
+  void _startEmailActionCooldown([Duration duration = _emailActionCooldown]) {
+    final until = DateTime.now().add(duration);
+    setState(() => _emailActionCooldownUntil = until);
+
+    Future<void>.delayed(duration, () {
+      if (!mounted) {
+        return;
+      }
+      if (_emailActionCooldownUntil == null ||
+          DateTime.now().isBefore(_emailActionCooldownUntil!)) {
+        return;
+      }
+      setState(() => _emailActionCooldownUntil = null);
+    });
+  }
+
+  void _showEmailRateLimitMessage() {
+    final waitSeconds = _emailActionSecondsRemaining > 0
+        ? _emailActionSecondsRemaining
+        : _emailActionCooldown.inSeconds;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Email rate limit reached. Please wait about $waitSeconds seconds before trying again.',
+        ),
+      ),
+    );
+  }
+
+  bool _authMessageIndicatesRateLimit(String message) {
+    final lower = message.toLowerCase();
+    return lower.contains('rate limit') ||
+        lower.contains('too many requests') ||
+        lower.contains('429');
+  }
 
   @override
   void dispose() {
@@ -39,6 +108,7 @@ class _SignInScreenState extends State<SignInScreen> {
       final client = Supabase.instance.client;
       final email = _emailController.text.trim();
       final password = _passwordController.text;
+      final redirectUrl = _developmentEmailRedirectUrl;
 
       if (_isSignUp) {
         final roleValue = _signUpPath == SignUpPath.employer
@@ -47,9 +117,11 @@ class _SignInScreenState extends State<SignInScreen> {
         await client.auth.signUp(
           email: email,
           password: password,
+          emailRedirectTo: redirectUrl,
           data: {'profile_type': roleValue},
         );
         if (!mounted) return;
+        final signedUpEmail = email;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
@@ -57,7 +129,10 @@ class _SignInScreenState extends State<SignInScreen> {
             ),
           ),
         );
-        setState(() => _isSignUp = false);
+        setState(() {
+          _lastSignUpEmail = signedUpEmail;
+          _isSignUp = false;
+        });
       } else {
         await client.auth.signInWithPassword(email: email, password: password);
         // AuthGate stream handles navigation — no explicit push needed.
@@ -74,6 +149,126 @@ class _SignInScreenState extends State<SignInScreen> {
       );
     } finally {
       if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _resendConfirmationEmail() async {
+    if (_emailActionCoolingDown) {
+      _showEmailRateLimitMessage();
+      return;
+    }
+
+    final email = _emailController.text.trim().isNotEmpty
+        ? _emailController.text.trim()
+        : (_lastSignUpEmail ?? '').trim();
+
+    if (email.isEmpty || !email.contains('@')) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Enter the account email to resend confirmation.'),
+        ),
+      );
+      return;
+    }
+
+    setState(() => _isResendingConfirmation = true);
+    try {
+      final redirectUrl = _developmentEmailRedirectUrl;
+      await Supabase.instance.client.auth.resend(
+        type: OtpType.signup,
+        email: email,
+        emailRedirectTo: redirectUrl,
+      );
+      if (!mounted) {
+        return;
+      }
+      _startEmailActionCooldown();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Confirmation email sent to $email.')),
+      );
+    } on AuthException catch (e) {
+      if (!mounted) {
+        return;
+      }
+      if (_authMessageIndicatesRateLimit(e.message)) {
+        _startEmailActionCooldown();
+        _showEmailRateLimitMessage();
+      } else {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(e.message)));
+      }
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not resend confirmation email right now.'),
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isResendingConfirmation = false);
+      }
+    }
+  }
+
+  Future<void> _sendPasswordResetEmail() async {
+    if (_emailActionCoolingDown) {
+      _showEmailRateLimitMessage();
+      return;
+    }
+
+    final email = _emailController.text.trim();
+    if (email.isEmpty || !email.contains('@')) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Enter a valid account email to reset password.'),
+        ),
+      );
+      return;
+    }
+
+    setState(() => _isSendingPasswordReset = true);
+    try {
+      final redirectUrl = _developmentEmailRedirectUrl;
+      await Supabase.instance.client.auth.resetPasswordForEmail(
+        email,
+        redirectTo: redirectUrl,
+      );
+      if (!mounted) {
+        return;
+      }
+      _startEmailActionCooldown();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Password reset email sent to $email.')),
+      );
+    } on AuthException catch (e) {
+      if (!mounted) {
+        return;
+      }
+      if (_authMessageIndicatesRateLimit(e.message)) {
+        _startEmailActionCooldown();
+        _showEmailRateLimitMessage();
+      } else {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(e.message)));
+      }
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not send password reset email right now.'),
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isSendingPasswordReset = false);
+      }
     }
   }
 
@@ -199,6 +394,38 @@ class _SignInScreenState extends State<SignInScreen> {
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
                         : Text(_isSignUp ? 'Create Account' : 'Sign In'),
+                  ),
+                  const SizedBox(height: 8),
+                  TextButton(
+                    onPressed:
+                        (_isLoading ||
+                            _isResendingConfirmation ||
+                            _emailActionCoolingDown)
+                        ? null
+                        : _resendConfirmationEmail,
+                    child: _isResendingConfirmation
+                        ? const SizedBox(
+                            height: 18,
+                            width: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Text('Resend Confirmation Email'),
+                  ),
+                  TextButton(
+                    onPressed:
+                        (_isLoading ||
+                            _isResendingConfirmation ||
+                            _isSendingPasswordReset ||
+                            _emailActionCoolingDown)
+                        ? null
+                        : _sendPasswordResetEmail,
+                    child: _isSendingPasswordReset
+                        ? const SizedBox(
+                            height: 18,
+                            width: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Text('Send Password Reset Email'),
                   ),
                   const SizedBox(height: 12),
                   TextButton(

@@ -13,8 +13,19 @@
 				"--dart-define=SUPABASE_PUBLISHABLE_KEY=sb_publishable_ohxdWpUf_-SJpk-5JpNG0g_KcblPeAO"
 			],
 			"isBackground": true
+		},
+		{
+			"label": "Run Flutter Phone Debug (SM S928U)",
+			"type": "shell",
+			"command": "flutter",
+			"args": [
+				"run",
+				"-d",
+				"R5CXB1CK3HD",
+				"--dart-define=SUPABASE_URL=https://agwwrrzemmuztzciuamn.supabase.co",
+				"--dart-define=SUPABASE_PUBLISHABLE_KEY=sb_publishable_ohxdWpUf_-SJpk-5JpNG0g_KcblPeAO"
+			],
+			"isBackground": true
 		}
 	]
 }
-
-

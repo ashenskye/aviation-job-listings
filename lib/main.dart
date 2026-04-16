@@ -1,15 +1,25 @@
+import 'dart:math' as math;
+import 'dart:convert';
+
+import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'models/aviation_certificate_utils.dart';
 import 'models/employer_profile.dart';
 import 'models/employer_profiles_data.dart';
 import 'models/job_listing.dart';
+import 'models/job_listing_template.dart';
 import 'models/job_seeker_profile.dart';
 import 'repositories/app_repository.dart';
 import 'screens/sign_in_screen.dart';
 import 'services/app_repository_factory.dart';
 import 'services/supabase_bootstrap.dart';
+import 'services/web_image_file_picker.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -109,6 +119,123 @@ String _formatHoursRequirementMissing(String label, String name, int hours) {
   return '$label: $name';
 }
 
+String _formatYmd(DateTime date) {
+  return '${date.month.toString().padLeft(2, '0')}/${date.day.toString().padLeft(2, '0')}/${date.year}';
+}
+
+int? _parsePositiveInt(String value) {
+  final parsed = int.tryParse(value.trim());
+  if (parsed == null || parsed <= 0) {
+    return null;
+  }
+  return parsed;
+}
+
+String _phoneDigits(String value) => value.replaceAll(RegExp(r'\D'), '');
+
+String _formatPhoneNumber(String value) {
+  final digits = _phoneDigits(value);
+  if (digits.isEmpty) {
+    return '';
+  }
+
+  if (digits.length <= 3) {
+    return '($digits';
+  }
+
+  if (digits.length <= 6) {
+    return '(${digits.substring(0, 3)}) ${digits.substring(3)}';
+  }
+
+  final localEnd = math.min(10, digits.length);
+  final base =
+      '(${digits.substring(0, 3)}) ${digits.substring(3, 6)}-${digits.substring(6, localEnd)}';
+
+  if (digits.length > 10) {
+    return '$base x${digits.substring(10)}';
+  }
+
+  return base;
+}
+
+int _phoneCursorOffset(String formatted, int digitCount) {
+  if (digitCount <= 0) {
+    return 0;
+  }
+
+  var seen = 0;
+  for (var i = 0; i < formatted.length; i++) {
+    final char = formatted[i];
+    if (RegExp(r'\d').hasMatch(char)) {
+      seen++;
+      if (seen >= digitCount) {
+        return i + 1;
+      }
+    }
+  }
+
+  return formatted.length;
+}
+
+class _PhoneNumberTextInputFormatter extends TextInputFormatter {
+  const _PhoneNumberTextInputFormatter();
+
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    final formatted = _formatPhoneNumber(newValue.text);
+    final baseOffset = newValue.selection.baseOffset;
+    final clampedOffset = math.max(
+      0,
+      math.min(baseOffset, newValue.text.length),
+    );
+    final digitsBeforeCursor = _phoneDigits(
+      newValue.text.substring(0, clampedOffset),
+    ).length;
+    final selectionOffset = _phoneCursorOffset(formatted, digitsBeforeCursor);
+
+    return TextEditingValue(
+      text: formatted,
+      selection: TextSelection.collapsed(offset: selectionOffset),
+      composing: TextRange.empty,
+    );
+  }
+}
+
+bool _shouldShowUpdatedDate({DateTime? createdAt, DateTime? updatedAt}) {
+  if (updatedAt == null) {
+    return false;
+  }
+  if (createdAt == null) {
+    return true;
+  }
+  return updatedAt.toUtc().isAfter(createdAt.toUtc());
+}
+
+List<String> _buildTimelineLabels({
+  DateTime? createdAt,
+  DateTime? updatedAt,
+  bool includeUnavailable = false,
+}) {
+  final labels = <String>[];
+
+  if (createdAt != null) {
+    labels.add('Posted: ${_formatYmd(createdAt.toLocal())}');
+  } else if (includeUnavailable) {
+    labels.add('Posted: Unavailable');
+  }
+
+  if (_shouldShowUpdatedDate(createdAt: createdAt, updatedAt: updatedAt)) {
+    labels.add('Last Updated: ${_formatYmd(updatedAt!.toLocal())}');
+  } else if (includeUnavailable && updatedAt == null) {
+    labels.add('Last Updated: Unavailable');
+  }
+
+  return labels;
+}
+
 class _MatchResult {
   final bool isFullMatch;
   final int matchedCount;
@@ -125,6 +252,7 @@ class _MatchResult {
   int get matchPercentage =>
       totalCount == 0 ? 100 : ((matchedCount * 100) ~/ totalCount);
 }
+
 _MatchResult _evaluateJobMatchForProfile({
   required JobListing job,
   required JobSeekerProfile profile,
@@ -239,6 +367,8 @@ _MatchResult _evaluateJobMatchForProfile({
 }
 
 class _MyHomePageState extends State<MyHomePage> {
+  static const String _cookieConsentAcceptedKey = 'web_cookie_consent_accepted';
+
   // ============================================================================
   // CONFIGURATION: Static Options for Aviation Categories
   // (Edit these sections to add/remove/customize aviation options)
@@ -393,6 +523,18 @@ class _MyHomePageState extends State<MyHomePage> {
     ..._canadaProvinceOptions,
   ];
 
+  static const List<String> _companyBenefitOptions = [
+    'Health Insurance',
+    '401K',
+    'Relocation Reinbursement',
+    'Sign-On Bonus',
+    'Longevity Bonus',
+    'Flight Benefits',
+    'Paid Vacation',
+    'Paid Sick Leave',
+    'Maternity Leave',
+  ];
+
   static const Map<String, String> _stateProvinceAbbreviations = {
     'Alabama': 'AL',
     'Alaska': 'AK',
@@ -478,14 +620,15 @@ class _MyHomePageState extends State<MyHomePage> {
 
   final TextEditingController _searchController = TextEditingController();
   final TextEditingController _createTitleController = TextEditingController();
+  final FocusNode _createTitleFocusNode = FocusNode();
   final TextEditingController _createCompanyController =
       TextEditingController();
   final TextEditingController _createLocationController =
       TextEditingController();
   final TextEditingController _createTypeController = TextEditingController();
-    final TextEditingController _createStartingPayController =
+  final TextEditingController _createStartingPayController =
       TextEditingController();
-    final TextEditingController _createPayForExperienceController =
+  final TextEditingController _createPayForExperienceController =
       TextEditingController();
   final TextEditingController _createDescriptionController =
       TextEditingController();
@@ -525,12 +668,16 @@ class _MyHomePageState extends State<MyHomePage> {
   int _page = 1;
   bool _loading = true;
   String? _loadingError;
+  bool _showCookieConsentBanner = false;
+  bool _uploadingEmployerLogoImage = false;
+  bool _uploadingEmployerBannerImage = false;
 
   // ============================================================================
   // JOB LISTING STATE: Data models and data persistence
   // ============================================================================
 
   late List<JobListing> _allJobs;
+  List<JobListingTemplate> _jobTemplates = const [];
   final Set<String> _favoriteIds = {};
 
   // ============================================================================
@@ -548,9 +695,15 @@ class _MyHomePageState extends State<MyHomePage> {
   final Set<String> _preferredInstructorHours = {};
   final Map<String, int> _selectedSpecialtyHours = {};
   final Set<String> _preferredSpecialtyHours = {};
+  DateTime? _createDeadlineDate;
+  bool _createOpenListing = true;
+  final Set<String> _selectedEmployerBenefits = {};
   int _createJobStep = 0;
   String? _selectedCreatePositionOption;
   String? _selectedCreatePayRateMetric;
+  String? _selectedTemplateId;
+  String? _editingTemplateId;
+  bool _createOpenedFromTemplate = false;
   String? _expandedCreateRequirementsSection = 'Certificates and Ratings';
 
   // ============================================================================
@@ -579,6 +732,10 @@ class _MyHomePageState extends State<MyHomePage> {
   final TextEditingController _employerPostalCodeController =
       TextEditingController();
   final TextEditingController _employerCountryController =
+      TextEditingController();
+  final TextEditingController _employerBannerUrlController =
+      TextEditingController();
+  final TextEditingController _employerLogoUrlController =
       TextEditingController();
   final TextEditingController _employerWebsiteController =
       TextEditingController();
@@ -610,7 +767,74 @@ class _MyHomePageState extends State<MyHomePage> {
     _loadFavorites();
     _loadJobSeekerProfile();
     _loadEmployerProfiles();
+    _loadJobTemplates();
+    _loadCookieConsentPreference();
     _fetchJobs();
+  }
+
+  Future<void> _loadCookieConsentPreference() async {
+    if (!kIsWeb) {
+      return;
+    }
+
+    final preferences = await SharedPreferences.getInstance();
+    final accepted = preferences.getBool(_cookieConsentAcceptedKey) ?? false;
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _showCookieConsentBanner = !accepted;
+    });
+  }
+
+  Future<void> _acceptCookieConsent() async {
+    if (!kIsWeb) {
+      return;
+    }
+
+    final preferences = await SharedPreferences.getInstance();
+    await preferences.setBool(_cookieConsentAcceptedKey, true);
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _showCookieConsentBanner = false;
+    });
+  }
+
+  Widget _buildCookieConsentBanner() {
+    return Material(
+      elevation: 8,
+      color: Colors.blueGrey.shade900,
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(
+                child: Text(
+                  'This website uses cookies and similar technologies to improve functionality, analyze traffic, and personalize your experience. By continuing to use this site, you agree to our use of cookies.',
+                  style: const TextStyle(color: Colors.white),
+                ),
+              ),
+              const SizedBox(width: 12),
+              FilledButton(
+                onPressed: _acceptCookieConsent,
+                style: FilledButton.styleFrom(
+                  backgroundColor: Colors.white,
+                  foregroundColor: Colors.blueGrey.shade900,
+                ),
+                child: const Text('Accept'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   Future<void> _loadFavorites() async {
@@ -705,6 +929,8 @@ class _MyHomePageState extends State<MyHomePage> {
       minimumHours: job.minimumHours,
       benefits: List<String>.from(job.benefits),
       deadlineDate: job.deadlineDate,
+      createdAt: job.createdAt,
+      updatedAt: job.updatedAt,
       employerId: job.employerId,
     );
   }
@@ -712,7 +938,7 @@ class _MyHomePageState extends State<MyHomePage> {
   void _syncJobSeekerProfileControllers(JobSeekerProfile profile) {
     _profileFullNameController.text = profile.fullName;
     _profileEmailController.text = _resolvedJobSeekerEmail(profile);
-    _profilePhoneController.text = profile.phone;
+    _profilePhoneController.text = _formatPhoneNumber(profile.phone);
     _profileCityController.text = profile.city;
     _profileStateController.text = profile.stateOrProvince;
     _profileCountryController.text = profile.country;
@@ -752,6 +978,522 @@ class _MyHomePageState extends State<MyHomePage> {
         ],
       ),
     );
+  }
+
+  String _summaryValue(String value) {
+    final trimmed = value.trim();
+    return trimmed.isEmpty ? 'Not provided' : trimmed;
+  }
+
+  Widget _buildInlineInfoItem(IconData icon, String text) {
+    final hasValue = text.trim().isNotEmpty;
+    final displayText = hasValue ? text.trim() : 'Not provided';
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 15, color: Colors.blueGrey.shade700),
+        const SizedBox(width: 6),
+        Flexible(
+          child: Text(
+            displayText,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 13,
+              fontStyle: hasValue ? FontStyle.normal : FontStyle.italic,
+              color: hasValue ? Colors.blueGrey.shade900 : Colors.grey.shade600,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildWebsiteSummaryRow(String url) {
+    if (url.isEmpty) {
+      return _buildProfileSummaryRow('Website', '');
+    }
+
+    final normalized =
+        url.startsWith('http://') || url.startsWith('https://')
+        ? url
+        : 'https://$url';
+    final uri = Uri.tryParse(normalized);
+
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 140,
+            child: Text(
+              'Website',
+              style: TextStyle(
+                fontWeight: FontWeight.w600,
+                color: Colors.grey.shade700,
+              ),
+            ),
+          ),
+          Expanded(
+            child: GestureDetector(
+              onTap: uri == null
+                  ? null
+                  : () => launchUrl(
+                        uri,
+                        mode: LaunchMode.externalApplication,
+                      ),
+              child: Text(
+                url,
+                style: const TextStyle(
+                  color: Colors.blue,
+                  decoration: TextDecoration.underline,
+                  decorationColor: Colors.blue,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCompanyLogoPreview(String logoUrl, {double size = 82}) {
+    final normalized = _normalizeExternalUrl(logoUrl);
+    final hasLogo = normalized.isNotEmpty;
+    final logoBytes = _decodeDataImageUri(normalized);
+    final isDataUri = logoBytes != null;
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        border: Border.all(color: Colors.grey.shade300),
+        color: Colors.grey.shade100,
+      ),
+      child: ClipOval(
+        child: hasLogo
+            ? (isDataUri
+                  ? Image.memory(
+                      logoBytes,
+                      fit: BoxFit.cover,
+                      errorBuilder: (context, _, _) => Icon(
+                        Icons.business,
+                        size: size * 0.45,
+                        color: Colors.blueGrey.shade500,
+                      ),
+                    )
+                  : Image.network(
+                      normalized,
+                      fit: BoxFit.cover,
+                      webHtmlElementStrategy: WebHtmlElementStrategy.prefer,
+                      errorBuilder: (context, _, _) => Icon(
+                        Icons.business,
+                        size: size * 0.45,
+                        color: Colors.blueGrey.shade500,
+                      ),
+                    ))
+            : Icon(
+                Icons.business,
+                size: size * 0.45,
+                color: Colors.blueGrey.shade500,
+              ),
+      ),
+    );
+  }
+
+  Uint8List? _decodeDataImageUri(String value) {
+    final trimmed = value.trim();
+    if (!trimmed.toLowerCase().startsWith('data:image/')) {
+      return null;
+    }
+
+    final commaIndex = trimmed.indexOf(',');
+    if (commaIndex <= 0) {
+      return null;
+    }
+
+    final metadata = trimmed.substring(0, commaIndex).toLowerCase();
+    if (!metadata.contains(';base64')) {
+      return null;
+    }
+
+    final encoded = trimmed.substring(commaIndex + 1);
+    try {
+      return base64Decode(encoded);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String _imageMimeTypeFromExtension(String extension) {
+    switch (extension.toLowerCase()) {
+      case 'jpg':
+      case 'jpeg':
+        return 'image/jpeg';
+      case 'gif':
+        return 'image/gif';
+      case 'webp':
+        return 'image/webp';
+      case 'svg':
+        return 'image/svg+xml';
+      default:
+        return 'image/png';
+    }
+  }
+
+  Future<String?> _uploadEmployerImageToBackend({
+    required PlatformFile file,
+    required String imageType,
+  }) async {
+    final bytes = file.bytes;
+    if (bytes == null || bytes.isEmpty) {
+      return null;
+    }
+
+    final extension = (file.extension ?? 'png').toLowerCase();
+    final mime = _imageMimeTypeFromExtension(extension);
+
+    if (!SupabaseBootstrap.isConfigured) {
+      return 'data:$mime;base64,${base64Encode(bytes)}';
+    }
+
+    final userId = Supabase.instance.client.auth.currentUser?.id;
+    if (userId == null || userId.isEmpty) {
+      return null;
+    }
+
+    final sanitizedEmployerId = _currentEmployer.id.replaceAll(
+      RegExp(r'[^a-zA-Z0-9_-]'),
+      '_',
+    );
+    final objectPath =
+        '$userId/$sanitizedEmployerId/$imageType/${DateTime.now().millisecondsSinceEpoch}.$extension';
+
+    final bucket = Supabase.instance.client.storage.from('company-assets');
+    await bucket.uploadBinary(
+      objectPath,
+      bytes,
+      fileOptions: FileOptions(contentType: mime, upsert: false),
+    );
+    return bucket.getPublicUrl(objectPath);
+  }
+
+  String? _companyAssetObjectPathFromUrl(String imageUrl) {
+    final normalized = _normalizeExternalUrl(imageUrl);
+    if (normalized.isEmpty || normalized.startsWith('data:image/')) {
+      return null;
+    }
+
+    Uri uri;
+    try {
+      uri = Uri.parse(normalized);
+    } catch (_) {
+      return null;
+    }
+
+    final segments = uri.pathSegments;
+    if (segments.isEmpty) {
+      return null;
+    }
+
+    final publicIndex = segments.indexOf('public');
+    if (publicIndex < 0 || publicIndex + 1 >= segments.length) {
+      return null;
+    }
+    if (segments[publicIndex + 1] != 'company-assets') {
+      return null;
+    }
+
+    final objectSegments = segments.sublist(publicIndex + 2);
+    if (objectSegments.isEmpty) {
+      return null;
+    }
+
+    return objectSegments.map(Uri.decodeComponent).join('/');
+  }
+
+  Future<void> _deleteEmployerImageFromBackend(String imageUrl) async {
+    if (!SupabaseBootstrap.isConfigured) {
+      return;
+    }
+
+    final objectPath = _companyAssetObjectPathFromUrl(imageUrl);
+    if (objectPath == null || objectPath.isEmpty) {
+      return;
+    }
+
+    try {
+      await Supabase.instance.client.storage.from('company-assets').remove([
+        objectPath,
+      ]);
+    } catch (_) {
+      // Best effort cleanup only.
+    }
+  }
+
+  Future<void> _cleanupReplacedEmployerImages({
+    required EmployerProfile previous,
+    required EmployerProfile updated,
+  }) async {
+    final previousLogo = _normalizeExternalUrl(previous.companyLogoUrl);
+    final updatedLogo = _normalizeExternalUrl(updated.companyLogoUrl);
+    if (previousLogo.isNotEmpty && previousLogo != updatedLogo) {
+      await _deleteEmployerImageFromBackend(previousLogo);
+    }
+
+    final previousBanner = _normalizeExternalUrl(previous.companyBannerUrl);
+    final updatedBanner = _normalizeExternalUrl(updated.companyBannerUrl);
+    if (previousBanner.isNotEmpty && previousBanner != updatedBanner) {
+      await _deleteEmployerImageFromBackend(previousBanner);
+    }
+  }
+
+  Future<PlatformFile?> _pickEmployerImageFile() async {
+    if (kIsWeb) {
+      final webImage = await pickWebImageFile();
+      if (webImage == null) {
+        return null;
+      }
+      return PlatformFile(
+        name: webImage.name,
+        size: webImage.bytes.length,
+        bytes: webImage.bytes,
+      );
+    }
+
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.image,
+      withData: true,
+    );
+    if (result == null || result.files.isEmpty) {
+      return null;
+    }
+    return result.files.first;
+  }
+
+  Future<void> _pickEmployerLogoImageFile() async {
+    if (_uploadingEmployerLogoImage) {
+      return;
+    }
+
+    if (!_employerProfileEditing) {
+      _startEditingEmployerProfile();
+    }
+
+    setState(() {
+      _uploadingEmployerLogoImage = true;
+    });
+
+    try {
+      final file = await _pickEmployerImageFile();
+      if (!mounted || file == null) {
+        return;
+      }
+      final uploadedUrl = await _uploadEmployerImageToBackend(
+        file: file,
+        imageType: 'logo',
+      );
+      if (!mounted || uploadedUrl == null || uploadedUrl.isEmpty) {
+        return;
+      }
+      setState(() {
+        _employerLogoUrlController.text = uploadedUrl;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Logo image ready. Save changes to apply.'),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not upload logo image: $e')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _uploadingEmployerLogoImage = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _pickEmployerBannerImageFile() async {
+    if (_uploadingEmployerBannerImage) {
+      return;
+    }
+
+    if (!_employerProfileEditing) {
+      _startEditingEmployerProfile();
+    }
+
+    setState(() {
+      _uploadingEmployerBannerImage = true;
+    });
+
+    try {
+      final file = await _pickEmployerImageFile();
+      if (!mounted || file == null) {
+        return;
+      }
+      final uploadedUrl = await _uploadEmployerImageToBackend(
+        file: file,
+        imageType: 'banner',
+      );
+      if (!mounted || uploadedUrl == null || uploadedUrl.isEmpty) {
+        return;
+      }
+      setState(() {
+        _employerBannerUrlController.text = uploadedUrl;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Banner image ready. Save changes to apply.'),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not upload banner image: $e')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _uploadingEmployerBannerImage = false;
+        });
+      }
+    }
+  }
+
+  void _removeEmployerLogoImage() {
+    if (!_employerProfileEditing || _uploadingEmployerLogoImage) {
+      return;
+    }
+
+    setState(() {
+      _employerLogoUrlController.clear();
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Logo removed. Save changes to apply.')),
+    );
+  }
+
+  void _removeEmployerBannerImage() {
+    if (!_employerProfileEditing || _uploadingEmployerBannerImage) {
+      return;
+    }
+
+    setState(() {
+      _employerBannerUrlController.clear();
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Banner removed. Save changes to apply.')),
+    );
+  }
+
+  Widget _buildCompanyBannerPreview(String bannerUrl, {double height = 120}) {
+    final normalized = _normalizeExternalUrl(bannerUrl);
+    final hasBanner = normalized.isNotEmpty;
+    return Container(
+      width: double.infinity,
+      height: height,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.grey.shade300),
+        color: Colors.blueGrey.shade50,
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(14),
+        child: hasBanner
+            ? Image.network(
+                normalized,
+                fit: BoxFit.cover,
+                webHtmlElementStrategy: WebHtmlElementStrategy.prefer,
+                errorBuilder: (context, _, _) => Center(
+                  child: Icon(
+                    Icons.image_outlined,
+                    size: 34,
+                    color: Colors.blueGrey.shade500,
+                  ),
+                ),
+              )
+            : Center(
+                child: Icon(
+                  Icons.image_outlined,
+                  size: 34,
+                  color: Colors.blueGrey.shade500,
+                ),
+              ),
+      ),
+    );
+  }
+
+  String _normalizeExternalUrl(String value) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) {
+      return '';
+    }
+
+    if (trimmed.toLowerCase().startsWith('data:image/')) {
+      return trimmed;
+    }
+
+    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+      return trimmed;
+    }
+
+    return 'https://$trimmed';
+  }
+
+  EmployerProfile _normalizeEmployerImageUrls(EmployerProfile profile) {
+    final normalizedBannerUrl = _normalizeExternalUrl(profile.companyBannerUrl);
+    final normalizedLogoUrl = _normalizeExternalUrl(profile.companyLogoUrl);
+    if (normalizedBannerUrl == profile.companyBannerUrl &&
+        normalizedLogoUrl == profile.companyLogoUrl) {
+      return profile;
+    }
+
+    return EmployerProfile(
+      id: profile.id,
+      companyName: profile.companyName,
+      headquartersAddressLine1: profile.headquartersAddressLine1,
+      headquartersAddressLine2: profile.headquartersAddressLine2,
+      headquartersCity: profile.headquartersCity,
+      headquartersState: profile.headquartersState,
+      headquartersPostalCode: profile.headquartersPostalCode,
+      headquartersCountry: profile.headquartersCountry,
+      companyBannerUrl: normalizedBannerUrl,
+      companyLogoUrl: normalizedLogoUrl,
+      website: profile.website,
+      contactName: profile.contactName,
+      contactEmail: profile.contactEmail,
+      contactPhone: profile.contactPhone,
+      companyDescription: profile.companyDescription,
+      companyBenefits: List<String>.from(profile.companyBenefits),
+    );
+  }
+
+  Future<void> _openLocationInMaps(String locationQuery) async {
+    final trimmed = locationQuery.trim();
+    if (trimmed.isEmpty) {
+      return;
+    }
+
+    final uri = Uri.https('www.google.com', '/maps/search/', {
+      'api': '1',
+      'query': trimmed,
+    });
+    final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
+
+    if (!launched && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not open map for this location.')),
+      );
+    }
   }
 
   Widget _buildSummaryCountBadge(int count) {
@@ -841,12 +1583,15 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Future<void> _openEditPersonalInformation() async {
-    final fullNameController = TextEditingController(
-      text: _jobSeekerProfile.fullName,
+    final firstNameController = TextEditingController(
+      text: _jobSeekerProfile.firstName,
+    );
+    final lastNameController = TextEditingController(
+      text: _jobSeekerProfile.lastName,
     );
     final accountEmail = _resolvedJobSeekerEmail(_jobSeekerProfile);
     final phoneController = TextEditingController(
-      text: _jobSeekerProfile.phone,
+      text: _formatPhoneNumber(_jobSeekerProfile.phone),
     );
     final cityController = TextEditingController(text: _jobSeekerProfile.city);
     final stateController = TextEditingController(
@@ -966,10 +1711,14 @@ class _MyHomePageState extends State<MyHomePage> {
               }
 
               void saveProfile() {
+                final firstName = firstNameController.text.trim();
+                final lastName = lastNameController.text.trim();
                 final updated = _jobSeekerProfile.copyWith(
-                  fullName: fullNameController.text.trim(),
+                  firstName: firstName,
+                  lastName: lastName,
+                  fullName: JobSeekerProfile.combineName(firstName, lastName),
                   email: accountEmail,
-                  phone: phoneController.text.trim(),
+                  phone: _formatPhoneNumber(phoneController.text.trim()),
                   city: cityController.text.trim(),
                   stateOrProvince: stateController.text.trim(),
                   country: countryController.text.trim(),
@@ -978,9 +1727,12 @@ class _MyHomePageState extends State<MyHomePage> {
               }
 
               bool hasPersonalChanges() {
-                return fullNameController.text.trim() !=
-                        _jobSeekerProfile.fullName ||
-                    phoneController.text.trim() != _jobSeekerProfile.phone ||
+                return firstNameController.text.trim() !=
+                    _jobSeekerProfile.firstName ||
+                  lastNameController.text.trim() !=
+                    _jobSeekerProfile.lastName ||
+                    _phoneDigits(phoneController.text) !=
+                        _phoneDigits(_jobSeekerProfile.phone) ||
                     cityController.text.trim() != _jobSeekerProfile.city ||
                     stateController.text.trim() !=
                         _jobSeekerProfile.stateOrProvince ||
@@ -1003,12 +1755,28 @@ class _MyHomePageState extends State<MyHomePage> {
                           icon: Icons.person_outline,
                           child: Column(
                             children: [
-                              TextField(
-                                controller: fullNameController,
-                                onChanged: (_) => setPageState(() {}),
-                                decoration: const InputDecoration(
-                                  labelText: 'Full Name',
-                                ),
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: TextField(
+                                      controller: firstNameController,
+                                      onChanged: (_) => setPageState(() {}),
+                                      decoration: const InputDecoration(
+                                        labelText: 'First Name',
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: TextField(
+                                      controller: lastNameController,
+                                      onChanged: (_) => setPageState(() {}),
+                                      decoration: const InputDecoration(
+                                        labelText: 'Last Name',
+                                      ),
+                                    ),
+                                  ),
+                                ],
                               ),
                               const SizedBox(height: 12),
                               InputDecorator(
@@ -1030,6 +1798,10 @@ class _MyHomePageState extends State<MyHomePage> {
                               TextField(
                                 controller: phoneController,
                                 keyboardType: TextInputType.phone,
+                                inputFormatters: [
+                                  FilteringTextInputFormatter.digitsOnly,
+                                  _PhoneNumberTextInputFormatter(),
+                                ],
                                 onChanged: (_) => setPageState(() {}),
                                 decoration: const InputDecoration(
                                   labelText: 'Phone',
@@ -1135,7 +1907,8 @@ class _MyHomePageState extends State<MyHomePage> {
       ),
     );
 
-    fullNameController.dispose();
+    firstNameController.dispose();
+    lastNameController.dispose();
     phoneController.dispose();
     cityController.dispose();
     stateController.dispose();
@@ -1442,6 +2215,7 @@ class _MyHomePageState extends State<MyHomePage> {
       children: [
         TextField(
           controller: _createTitleController,
+          focusNode: _createTitleFocusNode,
           decoration: const InputDecoration(labelText: 'Title *'),
         ),
         const SizedBox(height: 8),
@@ -1476,21 +2250,17 @@ class _MyHomePageState extends State<MyHomePage> {
                     _useCompanyLocationForJob = value ?? true;
                   });
                 },
-                child: Row(
+                child: const Column(
                   children: [
-                    Expanded(
-                      child: RadioListTile<bool>(
-                        contentPadding: EdgeInsets.zero,
-                        title: const Text('Same as Company'),
-                        value: true,
-                      ),
+                    RadioListTile<bool>(
+                      contentPadding: EdgeInsets.zero,
+                      title: Text('Same as Company'),
+                      value: true,
                     ),
-                    Expanded(
-                      child: RadioListTile<bool>(
-                        contentPadding: EdgeInsets.zero,
-                        title: const Text('Custom'),
-                        value: false,
-                      ),
+                    RadioListTile<bool>(
+                      contentPadding: EdgeInsets.zero,
+                      title: Text('Custom'),
+                      value: false,
                     ),
                   ],
                 ),
@@ -1547,10 +2317,8 @@ class _MyHomePageState extends State<MyHomePage> {
           decoration: const InputDecoration(labelText: 'Employment Type'),
           items: _availableJobTypes
               .map(
-                (type) => DropdownMenuItem<String>(
-                  value: type,
-                  child: Text(type),
-                ),
+                (type) =>
+                    DropdownMenuItem<String>(value: type, child: Text(type)),
               )
               .toList(),
           onChanged: (value) {
@@ -1621,6 +2389,7 @@ class _MyHomePageState extends State<MyHomePage> {
                       key: const ValueKey('create-starting-pay'),
                       controller: _createStartingPayController,
                       keyboardType: TextInputType.number,
+                      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                       decoration: const InputDecoration(
                         labelText: 'Starting Pay *',
                         prefixText: r'$',
@@ -1634,6 +2403,7 @@ class _MyHomePageState extends State<MyHomePage> {
                       key: const ValueKey('create-pay-for-experience'),
                       controller: _createPayForExperienceController,
                       keyboardType: TextInputType.number,
+                      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                       decoration: const InputDecoration(
                         labelText: 'Top End Starting Pay (Optional)',
                         prefixText: r'$',
@@ -1676,22 +2446,77 @@ class _MyHomePageState extends State<MyHomePage> {
           maxLines: 4,
           decoration: const InputDecoration(labelText: 'Description *'),
         ),
-        const SizedBox(height: 16),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.end,
-          children: [
-            FilledButton.icon(
-              onPressed: () {
-                if (_validateCreateBasics()) {
+        const SizedBox(height: 8),
+        Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            border: Border.all(color: Colors.grey.shade300),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Application Timeline',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+              ),
+              const SizedBox(height: 8),
+              RadioGroup<bool>(
+                groupValue: _createOpenListing,
+                onChanged: (value) {
                   setState(() {
-                    _createJobStep = 1;
+                    _createOpenListing = value ?? true;
+                    if (_createOpenListing) {
+                      _createDeadlineDate = null;
+                    }
                   });
-                }
-              },
-              icon: const Icon(Icons.arrow_forward),
-              label: const Text('Next: Qualifications'),
-            ),
-          ],
+                },
+                child: const Column(
+                  children: [
+                    RadioListTile<bool>(
+                      contentPadding: EdgeInsets.zero,
+                      title: Text('Open Listing (No Deadline)'),
+                      value: true,
+                    ),
+                    RadioListTile<bool>(
+                      contentPadding: EdgeInsets.zero,
+                      title: Text('Set Application Deadline'),
+                      value: false,
+                    ),
+                  ],
+                ),
+              ),
+              if (!_createOpenListing)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: OutlinedButton.icon(
+                    onPressed: () async {
+                      final initialDate =
+                          _createDeadlineDate ??
+                          DateTime.now().add(const Duration(days: 30));
+                      final pickedDate = await showDatePicker(
+                        context: context,
+                        initialDate: initialDate,
+                        firstDate: DateTime.now(),
+                        lastDate: DateTime.now().add(const Duration(days: 730)),
+                      );
+                      if (pickedDate == null || !mounted) {
+                        return;
+                      }
+                      setState(() {
+                        _createDeadlineDate = pickedDate;
+                      });
+                    },
+                    icon: const Icon(Icons.event),
+                    label: Text(
+                      _createDeadlineDate == null
+                          ? 'Choose deadline date'
+                          : 'Application Deadline: ${_formatYmd(_createDeadlineDate!)}',
+                    ),
+                  ),
+                ),
+            ],
+          ),
         ),
       ],
     );
@@ -2431,8 +3256,12 @@ class _MyHomePageState extends State<MyHomePage> {
       return;
     }
 
+    final normalizedProfiles = data.profiles
+        .map(_normalizeEmployerImageUrls)
+        .toList();
+
     setState(() {
-      _employerProfiles = data.profiles;
+      _employerProfiles = normalizedProfiles;
       if (_employerProfiles.isNotEmpty) {
         _currentEmployer = _employerProfiles.firstWhere(
           (profile) => profile.id == data.currentEmployerId,
@@ -2453,12 +3282,40 @@ class _MyHomePageState extends State<MyHomePage> {
     );
   }
 
-  void _switchEmployer(EmployerProfile employer) {
+  Future<void> _loadJobTemplates() async {
+    final templates = await _appRepository.loadJobTemplates();
+    if (!mounted) {
+      return;
+    }
+
     setState(() {
-      _currentEmployer = employer;
+      _jobTemplates = templates;
+      if (_selectedTemplateId != null &&
+          !_jobTemplates.any(
+            (template) => template.id == _selectedTemplateId,
+          )) {
+        _selectedTemplateId = null;
+      }
+      if (_editingTemplateId != null &&
+          !_jobTemplates.any((template) => template.id == _editingTemplateId)) {
+        _editingTemplateId = null;
+      }
+    });
+  }
+
+  Future<void> _saveJobTemplates() async {
+    await _appRepository.saveJobTemplates(_jobTemplates);
+  }
+
+  void _switchEmployer(EmployerProfile employer) {
+    final normalizedEmployer = _normalizeEmployerImageUrls(employer);
+    setState(() {
+      _currentEmployer = normalizedEmployer;
       _employerProfileEditing = false;
+      _selectedTemplateId = null;
+      _editingTemplateId = null;
       // Keep the create-form company field in sync when switching employer.
-      _createCompanyController.text = employer.companyName;
+      _createCompanyController.text = normalizedEmployer.companyName;
     });
     _saveEmployerProfiles();
   }
@@ -2492,11 +3349,18 @@ class _MyHomePageState extends State<MyHomePage> {
     _employerPostalCodeController.text =
         _currentEmployer.headquartersPostalCode;
     _employerCountryController.text = _currentEmployer.headquartersCountry;
+    _employerBannerUrlController.text = _currentEmployer.companyBannerUrl;
+    _employerLogoUrlController.text = _currentEmployer.companyLogoUrl;
     _employerWebsiteController.text = _currentEmployer.website;
     _employerContactNameController.text = _currentEmployer.contactName;
     _employerContactEmailController.text = _currentEmployer.contactEmail;
-    _employerContactPhoneController.text = _currentEmployer.contactPhone;
+    _employerContactPhoneController.text = _formatPhoneNumber(
+      _currentEmployer.contactPhone,
+    );
     _employerDescriptionController.text = _currentEmployer.companyDescription;
+    _selectedEmployerBenefits
+      ..clear()
+      ..addAll(_currentEmployer.companyBenefits);
     setState(() => _employerProfileEditing = true);
   }
 
@@ -2517,7 +3381,6 @@ class _MyHomePageState extends State<MyHomePage> {
     final result = await _appRepository.loadJobs(
       backendUrl: _backendUrl,
       fallbackJobs: _fallbackJobs,
-      testingJob: _allCriteriaTestJob,
     );
 
     if (!mounted) {
@@ -2531,62 +3394,6 @@ class _MyHomePageState extends State<MyHomePage> {
       _loading = false;
     });
   }
-
-  JobListing get _allCriteriaTestJob => JobListing(
-    id: 'test-all-criteria-job',
-    title: 'TESTING JOB POST',
-    company: 'QA Aviation Systems',
-    location: 'Denver, CO',
-    type: 'Contract',
-    crewRole: 'Crew',
-    crewPosition: 'Co-Pilot',
-    faaRules: const ['Part 135'],
-    description:
-        'Validation posting that reflects the current create-listing workflow, including position selection, salary metric formatting, FAA scope, certificate groups, ratings, and minimum hours requirements.',
-    faaCertificates: [
-      ..._availableFaaCertificates,
-      ..._availableInstructorCertificates,
-      ..._availableRatingSelections,
-    ],
-    typeRatingsRequired: const ['Boeing 737', 'Embraer E-175', 'Airbus A320'],
-    flightExperience: <String>[
-      ..._availableEmployerFlightHours,
-      ..._availableInstructorHours,
-    ],
-    flightHours: const {
-      'Total Time': 3500,
-      'PIC Jet': 1500,
-      'SIC Jet': 500,
-      'PIC Turbine': 1200,
-      'SIC Turbine': 300,
-      'PIC': 2500,
-      'SIC': 500,
-      'Multi-engine': 800,
-    },
-    instructorHours: const {
-      'Total Instructor Hours': 600,
-      'Instrument (CFII)': 220,
-      'Multi-Engine (MEI)': 180,
-    },
-    preferredFlightHours: const ['SIC Jet'],
-    preferredInstructorHours: const ['Instrument (CFII)'],
-    specialtyExperience: List<String>.from(_availableSpecialtyExperience),
-    specialtyHours: const {
-      'Fire Fighting': 300,
-      'Aerobatic': 50,
-      'Floatplane': 100,
-      'Tailwheel': 75,
-      'Off Airport': 60,
-      'Banner Towing': 80,
-      'Low Altitude': 120,
-      'Aerial Survey': 150,
-    },
-    preferredSpecialtyHours: const ['Aerobatic', 'Banner Towing'],
-    aircraftFlown: const ['Cessna 172', 'Boeing 737', 'Airbus A320'],
-    salaryRange: r'$120000 - $185000 / Annual Salary',
-    benefits: const ['Health Insurance', '401k', 'Relocation', 'Sign-on Bonus'],
-    deadlineDate: DateTime.now().add(const Duration(days: 60)),
-  );
 
   List<JobListing> get _fallbackJobs => [
     JobListing(
@@ -2712,6 +3519,7 @@ class _MyHomePageState extends State<MyHomePage> {
   void dispose() {
     _searchController.dispose();
     _createTitleController.dispose();
+    _createTitleFocusNode.dispose();
     _createCompanyController.dispose();
     _createLocationController.dispose();
     _createTypeController.dispose();
@@ -2736,6 +3544,8 @@ class _MyHomePageState extends State<MyHomePage> {
     _employerStateController.dispose();
     _employerPostalCodeController.dispose();
     _employerCountryController.dispose();
+    _employerBannerUrlController.dispose();
+    _employerLogoUrlController.dispose();
     _employerWebsiteController.dispose();
     _employerContactNameController.dispose();
     _employerContactEmailController.dispose();
@@ -2752,6 +3562,586 @@ class _MyHomePageState extends State<MyHomePage> {
     return _allJobs
         .where((job) => job.employerId == _currentEmployer.id)
         .toList();
+  }
+
+  List<JobListingTemplate> get _currentEmployerTemplates => _jobTemplates
+      .where((template) => template.employerId == _currentEmployer.id)
+      .toList();
+
+  JobListingTemplate? get _selectedTemplate {
+    final templateId = _selectedTemplateId;
+    if (templateId == null || templateId.isEmpty) {
+      return null;
+    }
+
+    for (final template in _currentEmployerTemplates) {
+      if (template.id == templateId) {
+        return template;
+      }
+    }
+    return null;
+  }
+
+  JobListingTemplate? get _editingTemplate {
+    final templateId = _editingTemplateId;
+    if (templateId == null || templateId.isEmpty) {
+      return null;
+    }
+
+    for (final template in _currentEmployerTemplates) {
+      if (template.id == templateId) {
+        return template;
+      }
+    }
+    return null;
+  }
+
+  List<String> _sortedLowerTrimmed(Iterable<String> values) {
+    final normalized = values
+        .map((value) => value.trim().toLowerCase())
+        .where((value) => value.isNotEmpty)
+        .toSet()
+        .toList();
+    normalized.sort();
+    return normalized;
+  }
+
+  List<String> _sortedMapEntries(Map<String, int> values) {
+    final entries = values.entries
+        .map((entry) => '${entry.key.trim().toLowerCase()}:${entry.value}')
+        .toList();
+    entries.sort();
+    return entries;
+  }
+
+  String _jobSignature(JobListing job) {
+    final values = <String>[
+      job.employerId?.trim().toLowerCase() ?? '',
+      job.title.trim().toLowerCase(),
+      job.location.trim().toLowerCase(),
+      job.type.trim().toLowerCase(),
+      job.crewRole.trim().toLowerCase(),
+      job.crewPosition?.trim().toLowerCase() ?? '',
+      job.description.trim().toLowerCase(),
+      job.salaryRange?.trim().toLowerCase() ?? '',
+      job.deadlineDate?.toIso8601String() ?? '',
+      _sortedLowerTrimmed(job.faaRules).join('|'),
+      _sortedLowerTrimmed(job.faaCertificates).join('|'),
+      _sortedLowerTrimmed(job.typeRatingsRequired).join('|'),
+      _sortedMapEntries(job.flightHours).join('|'),
+      _sortedLowerTrimmed(job.preferredFlightHours).join('|'),
+      _sortedMapEntries(job.instructorHours).join('|'),
+      _sortedLowerTrimmed(job.preferredInstructorHours).join('|'),
+      _sortedMapEntries(job.specialtyHours).join('|'),
+      _sortedLowerTrimmed(job.preferredSpecialtyHours).join('|'),
+      _sortedLowerTrimmed(job.aircraftFlown).join('|'),
+    ];
+
+    return values.join('||');
+  }
+
+  JobListing _buildCreateDraftJob({required String id}) {
+    final company = _profileType == ProfileType.employer
+        ? _currentEmployer.companyName.trim()
+        : _createCompanyController.text.trim();
+    final location = _useCompanyLocationForJob
+        ? _buildCompanyLocationString()
+        : _createLocationController.text.trim();
+    final typeRatingsRequired = _createTypeRatingsController.text
+        .split(',')
+        .map((rating) => rating.trim())
+        .where((rating) => rating.isNotEmpty)
+        .toSet()
+        .toList();
+
+    return JobListing(
+      id: id,
+      title: _createTitleController.text.trim(),
+      company: company,
+      location: location,
+      type: _createTypeController.text.trim().isNotEmpty
+          ? _createTypeController.text.trim()
+          : 'Full-Time',
+      crewRole: _selectedCrewRole,
+      crewPosition: _selectedCrewRole == 'Crew' ? _selectedCrewPosition : null,
+      description: _createDescriptionController.text.trim(),
+      faaCertificates: List<String>.from(_selectedFaaCertificates),
+      typeRatingsRequired: typeRatingsRequired,
+      faaRules: _selectedFaaRules.isNotEmpty ? [_selectedFaaRules.first] : [],
+      flightExperience: [
+        ..._selectedFlightHours.keys,
+        ..._selectedInstructorHours.keys,
+      ],
+      flightHours: Map<String, int>.from(_selectedFlightHours),
+      preferredFlightHours: _preferredFlightHours.toList(),
+      instructorHours: Map<String, int>.from(_selectedInstructorHours),
+      preferredInstructorHours: _preferredInstructorHours.toList(),
+      specialtyExperience: _selectedSpecialtyHours.keys.toList(),
+      specialtyHours: Map<String, int>.from(_selectedSpecialtyHours),
+      preferredSpecialtyHours: _preferredSpecialtyHours.toList(),
+      aircraftFlown: _createAircraftController.text
+          .split(',')
+          .map((a) => a.trim())
+          .where((a) => a.isNotEmpty)
+          .toSet()
+          .toList(),
+      salaryRange: _buildCreateSalaryRange(),
+      deadlineDate: _createOpenListing ? null : _createDeadlineDate,
+      createdAt: DateTime.now(),
+      updatedAt: DateTime.now(),
+      employerId: _profileType == ProfileType.employer
+          ? _currentEmployer.id
+          : null,
+    );
+  }
+
+  void _applyListingToCreateForm(JobListing job) {
+    final companyLocation = _buildCompanyLocationString();
+
+    setState(() {
+      _createTitleController.text = job.title;
+      _createCompanyController.text = _currentEmployer.companyName;
+      _createLocationController.text = job.location;
+      _useCompanyLocationForJob =
+          companyLocation.isNotEmpty &&
+          companyLocation.toLowerCase() == job.location.trim().toLowerCase();
+      _createTypeController.text = job.type;
+      _createDescriptionController.text = job.description;
+      _createTypeRatingsController.text = job.typeRatingsRequired.join(', ');
+      _createAircraftController.text = job.aircraftFlown.join(', ');
+
+      _selectedCreatePositionOption = job.crewRole.toLowerCase() == 'crew'
+          ? (job.crewPosition == 'Co-Pilot'
+                ? 'Crew Member: Co-Pilot'
+                : 'Crew Member: Captain')
+          : 'Single Pilot';
+      _selectedCrewRole = job.crewRole.toLowerCase() == 'crew'
+          ? 'Crew'
+          : 'Single Pilot';
+      _selectedCrewPosition = job.crewPosition == 'Co-Pilot'
+          ? 'Co-Pilot'
+          : 'Captain';
+
+      _selectedFaaRules
+        ..clear()
+        ..addAll(job.faaRules.take(1));
+      _selectedFaaCertificates
+        ..clear()
+        ..addAll(job.faaCertificates);
+      _selectedFlightHours
+        ..clear()
+        ..addAll(job.flightHoursByType);
+      _preferredFlightHours
+        ..clear()
+        ..addAll(job.preferredFlightHours);
+      _selectedInstructorHours
+        ..clear()
+        ..addAll(job.instructorHoursByType);
+      _preferredInstructorHours
+        ..clear()
+        ..addAll(job.preferredInstructorHours);
+      _selectedSpecialtyHours
+        ..clear()
+        ..addAll(job.specialtyHoursByType);
+      _preferredSpecialtyHours
+        ..clear()
+        ..addAll(job.preferredSpecialtyHours);
+
+      _createOpenListing = job.deadlineDate == null;
+      _createDeadlineDate = job.deadlineDate;
+
+      final salary = job.salaryRange?.trim() ?? '';
+      _createStartingPayController.clear();
+      _createPayForExperienceController.clear();
+      _selectedCreatePayRateMetric = null;
+      if (salary.isNotEmpty) {
+        final metricMatch = RegExp(r'\s*/\s*(.+)$').firstMatch(salary);
+        var amountPortion = salary;
+        if (metricMatch != null) {
+          final metric = metricMatch.group(1)?.trim();
+          if (metric != null && _availablePayRateMetrics.contains(metric)) {
+            _selectedCreatePayRateMetric = metric;
+          }
+          amountPortion = salary.substring(0, metricMatch.start).trim();
+        }
+        final ranges = amountPortion.split('-');
+        final startDigits = ranges.first.replaceAll(RegExp(r'\D'), '');
+        _createStartingPayController.text = startDigits;
+        if (ranges.length > 1) {
+          _createPayForExperienceController.text = ranges[1].replaceAll(
+            RegExp(r'\D'),
+            '',
+          );
+        }
+      }
+
+      _createJobStep = 0;
+      _expandedCreateRequirementsSection = 'Certificates and Ratings';
+    });
+  }
+
+  void _openCreateFromTemplate(
+    JobListingTemplate template,
+    BuildContext tabContext, {
+    bool linkTemplate = true,
+  }) {
+    _applyListingToCreateForm(template.listing);
+    setState(() {
+      _selectedTemplateId = linkTemplate ? template.id : null;
+      _createOpenedFromTemplate = true;
+    });
+    DefaultTabController.of(tabContext).animateTo(2);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      _createTitleFocusNode.requestFocus();
+    });
+  }
+
+  void _openTemplateEditor(JobListingTemplate template) {
+    _applyListingToCreateForm(template.listing);
+    setState(() {
+      _selectedTemplateId = template.id;
+      _editingTemplateId = template.id;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      _createTitleFocusNode.requestFocus();
+    });
+  }
+
+  Future<void> _openTemplateSummary(
+    JobListingTemplate template,
+    BuildContext tabContext,
+  ) async {
+    final listing = template.listing;
+    final updatedAt = template.updatedAt ?? template.createdAt;
+    final updatedLabel = updatedAt == null
+        ? null
+        : _formatYmd(updatedAt.toLocal());
+    final compensation = listing.salaryRange?.trim() ?? '';
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(template.name),
+        content: SingleChildScrollView(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 560),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  '${listing.title} • ${listing.location}',
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text('Job Type: ${listing.type}'),
+                Text('Role: ${listing.crewRole} • ${listing.crewPosition}'),
+                if (compensation.isNotEmpty)
+                  Text('Compensation: $compensation'),
+                if (updatedLabel != null) Text('Last Updated: $updatedLabel'),
+                if (listing.faaRules.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  const Text(
+                    'FAA Rule',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: listing.faaRules
+                        .map((rule) => Chip(label: Text(rule)))
+                        .toList(),
+                  ),
+                ],
+                if (listing.faaCertificates.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  const Text(
+                    'Certificates',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: listing.faaCertificates
+                        .map((cert) => Chip(label: Text(cert)))
+                        .toList(),
+                  ),
+                ],
+                if (listing.description.trim().isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  const Text(
+                    'Description',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(listing.description.trim()),
+                ],
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Close'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.of(dialogContext).pop();
+              _openTemplateEditor(template);
+            },
+            child: const Text('Edit'),
+          ),
+          FilledButton(
+            onPressed: () {
+              Navigator.of(dialogContext).pop();
+              _openCreateFromTemplate(
+                template,
+                tabContext,
+                linkTemplate: false,
+              );
+            },
+            child: const Text('Use Template'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _closeTemplateEditor() {
+    setState(() {
+      _editingTemplateId = null;
+    });
+    _clearCreateForm();
+  }
+
+  void _cancelCreateListingFlow(BuildContext tabContext) {
+    final destinationTab = _createOpenedFromTemplate ? 3 : 1;
+    _clearCreateForm();
+    DefaultTabController.of(tabContext).animateTo(destinationTab);
+  }
+
+  Future<void> _updateSelectedTemplateFromCurrentForm() async {
+    final selected = _selectedTemplate;
+    if (selected == null) {
+      return;
+    }
+    if (!_validateCreateBasics() || !_validateCreateQualifications()) {
+      return;
+    }
+
+    final updatedTemplate = JobListingTemplate(
+      id: selected.id,
+      employerId: selected.employerId,
+      name: selected.name,
+      listing: _buildCreateDraftJob(id: selected.listing.id),
+      createdAt: selected.createdAt,
+      updatedAt: DateTime.now(),
+    );
+
+    setState(() {
+      _jobTemplates = _jobTemplates
+          .map(
+            (template) =>
+                template.id == updatedTemplate.id ? updatedTemplate : template,
+          )
+          .toList();
+    });
+    await _saveJobTemplates();
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Updated template "${selected.name}".')),
+    );
+  }
+
+  Future<String?> _promptTemplateName({
+    required String title,
+    required String initialName,
+    String confirmLabel = 'Save',
+  }) async {
+    final controller = TextEditingController(text: initialName);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(title),
+        content: TextField(
+          controller: controller,
+          decoration: const InputDecoration(labelText: 'Template Name *'),
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              if (controller.text.trim().isEmpty) {
+                return;
+              }
+              Navigator.of(dialogContext).pop(true);
+            },
+            child: Text(confirmLabel),
+          ),
+        ],
+      ),
+    );
+
+    final name = controller.text.trim();
+    controller.dispose();
+    if (!mounted || confirmed != true || name.isEmpty) {
+      return null;
+    }
+    return name;
+  }
+
+  Future<void> _renameTemplate(JobListingTemplate template) async {
+    final updatedName = await _promptTemplateName(
+      title: 'Edit Template',
+      initialName: template.name,
+    );
+    if (updatedName == null) {
+      return;
+    }
+
+    setState(() {
+      _jobTemplates = _jobTemplates
+          .map(
+            (item) => item.id == template.id
+                ? JobListingTemplate(
+                    id: item.id,
+                    employerId: item.employerId,
+                    name: updatedName,
+                    listing: item.listing,
+                    createdAt: item.createdAt,
+                    updatedAt: DateTime.now(),
+                  )
+                : item,
+          )
+          .toList();
+    });
+    await _saveJobTemplates();
+  }
+
+  Future<void> _saveJobAsTemplate(
+    JobListing job, {
+    bool promptForName = true,
+  }) async {
+    var templateName = '${job.title} Template';
+
+    if (promptForName) {
+      final selectedName = await _promptTemplateName(
+        title: 'Save Job as Template',
+        initialName: templateName,
+      );
+      if (selectedName == null) {
+        return;
+      }
+      templateName = selectedName;
+    }
+
+    final template = _buildTemplateFromJob(job: job, name: templateName);
+
+    setState(() {
+      _jobTemplates = [template, ..._jobTemplates];
+      _selectedTemplateId = template.id;
+    });
+    await _saveJobTemplates();
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('Saved template "$templateName".')));
+  }
+
+  JobListingTemplate _buildTemplateFromJob({
+    required JobListing job,
+    required String name,
+  }) {
+    final now = DateTime.now();
+    final templateId = now.microsecondsSinceEpoch.toString();
+    return JobListingTemplate(
+      id: templateId,
+      employerId: _currentEmployer.id,
+      name: name,
+      listing: JobListing(
+        id: 'template-$templateId',
+        title: job.title,
+        company: _currentEmployer.companyName,
+        location: job.location,
+        type: job.type,
+        crewRole: job.crewRole,
+        crewPosition: job.crewPosition,
+        faaRules: List<String>.from(job.faaRules),
+        description: job.description,
+        faaCertificates: List<String>.from(job.faaCertificates),
+        typeRatingsRequired: List<String>.from(job.typeRatingsRequired),
+        flightExperience: List<String>.from(job.flightExperience),
+        flightHours: Map<String, int>.from(job.flightHours),
+        preferredFlightHours: List<String>.from(job.preferredFlightHours),
+        instructorHours: Map<String, int>.from(job.instructorHours),
+        preferredInstructorHours: List<String>.from(
+          job.preferredInstructorHours,
+        ),
+        specialtyExperience: List<String>.from(job.specialtyExperience),
+        specialtyHours: Map<String, int>.from(job.specialtyHours),
+        preferredSpecialtyHours: List<String>.from(job.preferredSpecialtyHours),
+        aircraftFlown: List<String>.from(job.aircraftFlown),
+        salaryRange: job.salaryRange,
+        minimumHours: job.minimumHours,
+        benefits: List<String>.from(job.benefits),
+        deadlineDate: job.deadlineDate,
+        createdAt: now,
+        updatedAt: now,
+        employerId: _currentEmployer.id,
+      ),
+      createdAt: now,
+      updatedAt: now,
+    );
+  }
+
+  Future<void> _deleteTemplate(JobListingTemplate template) async {
+    setState(() {
+      _jobTemplates = _jobTemplates.where((t) => t.id != template.id).toList();
+      if (_selectedTemplateId == template.id) {
+        _selectedTemplateId = null;
+      }
+      if (_editingTemplateId == template.id) {
+        _editingTemplateId = null;
+      }
+    });
+    await _saveJobTemplates();
+  }
+
+  JobListing? _findDuplicateEmployerListing(JobListing candidate) {
+    if (candidate.employerId == null || candidate.employerId!.isEmpty) {
+      return null;
+    }
+
+    final candidateSignature = _jobSignature(candidate);
+    for (final existing in _allJobs) {
+      if (existing.employerId != candidate.employerId) {
+        continue;
+      }
+      if (_jobSignature(existing) == candidateSignature) {
+        return existing;
+      }
+    }
+    return null;
   }
 
   List<JobListing> get _filteredJobs {
@@ -2796,6 +4186,56 @@ class _MyHomePageState extends State<MyHomePage> {
     _saveFavorites();
   }
 
+  bool _jobMatchesEmployerProfile(JobListing job, EmployerProfile profile) {
+    final employerId = job.employerId?.trim();
+    if (employerId != null && employerId.isNotEmpty) {
+      return employerId == profile.id;
+    }
+
+    return job.company.trim().toLowerCase() ==
+        profile.companyName.trim().toLowerCase();
+  }
+
+  EmployerProfile? _findEmployerProfileForJob(JobListing job) {
+    for (final profile in _employerProfiles) {
+      if (_jobMatchesEmployerProfile(job, profile)) {
+        return profile;
+      }
+    }
+    return null;
+  }
+
+  int _countOpenRolesForJob(JobListing job) {
+    final profile = _findEmployerProfileForJob(job);
+    return _allJobs.where((listedJob) {
+      if (profile != null) {
+        return _jobMatchesEmployerProfile(listedJob, profile);
+      }
+
+      return listedJob.company.trim().toLowerCase() ==
+          job.company.trim().toLowerCase();
+    }).length;
+  }
+
+  void _seeAllListingsForCompany(JobListing job) {
+    final companyQuery = job.company.trim();
+    final targetTabIndex = _profileType == ProfileType.employer ? 1 : 0;
+
+    if (_profileType == ProfileType.jobSeeker) {
+      _searchController.text = companyQuery;
+    }
+
+    setState(() {
+      if (_profileType == ProfileType.jobSeeker) {
+        _query = companyQuery;
+      }
+      _page = 1;
+    });
+
+    DefaultTabController.maybeOf(context)?.animateTo(targetTabIndex);
+    Navigator.of(context).popUntil((route) => route.isFirst);
+  }
+
   void _openDetails(JobListing job) {
     Navigator.of(context).push(
       MaterialPageRoute(
@@ -2803,6 +4243,11 @@ class _MyHomePageState extends State<MyHomePage> {
           job: job,
           isFavorite: _favoriteIds.contains(job.id),
           onFavorite: () => _toggleFavorite(job),
+          onApply: () => _applyToJob(job),
+          onShare: () => _shareJobListing(job),
+          companyProfile: _findEmployerProfileForJob(job),
+          openRoleCount: _countOpenRolesForJob(job),
+          onSeeAllListings: () => _seeAllListingsForCompany(job),
           profile: _profileType == ProfileType.jobSeeker
               ? _jobSeekerProfile
               : null,
@@ -2814,10 +4259,27 @@ class _MyHomePageState extends State<MyHomePage> {
   void _applyToJob(JobListing job) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(
-          'Application sent for ${job.title} at ${job.company}.',
-        ),
+        content: Text('Application sent for ${job.title} at ${job.company}.'),
       ),
+    );
+  }
+
+  Future<void> _shareJobListing(JobListing job) async {
+    final details = StringBuffer()
+      ..writeln('Aviation Job Listing')
+      ..writeln('Title: ${job.title}')
+      ..writeln('Company: ${job.company}')
+      ..writeln('Location: ${job.location}')
+      ..writeln('Type: ${job.type}')
+      ..writeln('Description: ${job.description}');
+
+    await Clipboard.setData(ClipboardData(text: details.toString()));
+    if (!mounted) {
+      return;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Listing details copied to clipboard.')),
     );
   }
 
@@ -2924,30 +4386,29 @@ class _MyHomePageState extends State<MyHomePage> {
     String selectedCrewPosition = job.crewPosition == 'Co-Pilot'
         ? 'Co-Pilot'
         : 'Captain';
+    bool isOpenListing = job.deadlineDate == null;
+    DateTime? selectedDeadlineDate = job.deadlineDate;
 
-    String _extractNumericValue(String value) {
-      return value.replaceAll(RegExp(r'[^0-9.]'), '');
+    String extractNumericValue(String value) {
+      return value.replaceAll(RegExp(r'\D'), '');
     }
 
-    String? _buildEditedSalaryRange() {
-      final startingPay = startingPayController.text.trim();
-      if (startingPay.isEmpty) {
+    String? buildEditedSalaryRange() {
+      final startingPayValue = _parsePositiveInt(startingPayController.text);
+      if (startingPayValue == null) {
         return null;
       }
 
-      final topEndPay = topEndStartingPayController.text.trim();
+      final topEndPayValue = _parsePositiveInt(
+        topEndStartingPayController.text,
+      );
       final metric = selectedPayMetric;
-        final metricSuffix =
-          metric == null || metric.isEmpty ? '' : ' / $metric';
+      final metricSuffix = metric == null || metric.isEmpty ? '' : ' / $metric';
 
-      final startLabel = startingPay.startsWith(r'$')
-          ? startingPay
-          : '\$$startingPay';
+      final startLabel = '\$${startingPayValue.toString()}';
 
-      if (topEndPay.isNotEmpty) {
-        final topEndLabel = topEndPay.startsWith(r'$')
-            ? topEndPay
-            : '\$$topEndPay';
+      if (topEndPayValue != null) {
+        final topEndLabel = '\$${topEndPayValue.toString()}';
         return '$startLabel - $topEndLabel$metricSuffix';
       }
 
@@ -2970,7 +4431,8 @@ class _MyHomePageState extends State<MyHomePage> {
             'Weekly Rate': 'Weekly Salary',
             'Monthly Rate': 'Monthly Salary',
           };
-          final normalizedMetric = legacyMetricMap[parsedMetric] ?? parsedMetric;
+          final normalizedMetric =
+              legacyMetricMap[parsedMetric] ?? parsedMetric;
           if (_availablePayRateMetrics.contains(normalizedMetric)) {
             selectedPayMetric = normalizedMetric;
           }
@@ -2980,14 +4442,14 @@ class _MyHomePageState extends State<MyHomePage> {
 
       if (amountPortion.contains('-')) {
         final parts = amountPortion.split('-');
-        startingPayController.text = _extractNumericValue(parts.first.trim());
+        startingPayController.text = extractNumericValue(parts.first.trim());
         if (parts.length > 1) {
-          topEndStartingPayController.text = _extractNumericValue(
+          topEndStartingPayController.text = extractNumericValue(
             parts[1].trim(),
           );
         }
       } else {
-        startingPayController.text = _extractNumericValue(amountPortion);
+        startingPayController.text = extractNumericValue(amountPortion);
       }
     }
 
@@ -3095,7 +4557,8 @@ class _MyHomePageState extends State<MyHomePage> {
             trim: true,
           ) ||
           !_sameStringSet(draft.aircraftFlown, job.aircraftFlown, trim: true) ||
-          draft.salaryRange != job.salaryRange;
+          draft.salaryRange != job.salaryRange ||
+          draft.deadlineDate != job.deadlineDate;
     }
 
     JobListing? buildEditedDraft({bool showValidationFeedback = true}) {
@@ -3121,8 +4584,21 @@ class _MyHomePageState extends State<MyHomePage> {
       if (startingPayController.text.trim().isEmpty) {
         missingRequirements.add('Starting Pay');
       }
+      if (startingPayController.text.trim().isNotEmpty &&
+          _parsePositiveInt(startingPayController.text) == null) {
+        missingRequirements.add('Starting Pay must be a positive integer');
+      }
+      if (topEndStartingPayController.text.trim().isNotEmpty &&
+          _parsePositiveInt(topEndStartingPayController.text) == null) {
+        missingRequirements.add(
+          'Top End Starting Pay must be a positive integer',
+        );
+      }
       if (selectedPayMetric == null || selectedPayMetric!.isEmpty) {
         missingRequirements.add('Pay Metric');
+      }
+      if (!isOpenListing && selectedDeadlineDate == null) {
+        missingRequirements.add('Application Deadline');
       }
       if (selectedFaaRule == null || selectedFaaRule!.isEmpty) {
         missingRequirements.add('FAA Operational Scope');
@@ -3154,8 +4630,8 @@ class _MyHomePageState extends State<MyHomePage> {
         Map<String, TextEditingController> controllers,
       ) {
         for (final option in selected) {
-          final value = int.tryParse(controllers[option]?.text.trim() ?? '0') ??
-              0;
+          final value =
+              int.tryParse(controllers[option]?.text.trim() ?? '0') ?? 0;
           if (value <= 0) {
             return true;
           }
@@ -3169,7 +4645,10 @@ class _MyHomePageState extends State<MyHomePage> {
             selectedInstructorHours,
             instructorHourControllers,
           ) ||
-          hasMissingHoursValues(selectedSpecialtyHours, specialtyHourControllers);
+          hasMissingHoursValues(
+            selectedSpecialtyHours,
+            specialtyHourControllers,
+          );
 
       if (hasAnyHoursSelection && missingHoursValue) {
         missingRequirements.add(
@@ -3201,9 +4680,7 @@ class _MyHomePageState extends State<MyHomePage> {
         if (showValidationFeedback) {
           messenger.showSnackBar(
             SnackBar(
-              content: Text(
-                'Missing: ${missingRequirements.join(', ')}',
-              ),
+              content: Text('Missing: ${missingRequirements.join(', ')}'),
             ),
           );
         }
@@ -3274,10 +4751,12 @@ class _MyHomePageState extends State<MyHomePage> {
             .where(specialtyHours.containsKey)
             .toList(),
         aircraftFlown: parsedAircraft,
-        salaryRange: _buildEditedSalaryRange(),
+        salaryRange: buildEditedSalaryRange(),
         minimumHours: job.minimumHours,
         benefits: List<String>.from(job.benefits),
-        deadlineDate: job.deadlineDate,
+        deadlineDate: isOpenListing ? null : selectedDeadlineDate,
+        createdAt: job.createdAt,
+        updatedAt: DateTime.now(),
         employerId: job.employerId,
       );
     }
@@ -3311,10 +4790,8 @@ class _MyHomePageState extends State<MyHomePage> {
             decoration: const InputDecoration(labelText: 'Employment Type *'),
             items: _availableJobTypes
                 .map(
-                  (type) => DropdownMenuItem<String>(
-                    value: type,
-                    child: Text(type),
-                  ),
+                  (type) =>
+                      DropdownMenuItem<String>(value: type, child: Text(type)),
                 )
                 .toList(),
             onChanged: (value) {
@@ -3325,7 +4802,9 @@ class _MyHomePageState extends State<MyHomePage> {
           DropdownButtonFormField<String>(
             initialValue: selectedPositionOption,
             hint: const Text('Select Position'),
-            decoration: const InputDecoration(labelText: 'Position Selection *'),
+            decoration: const InputDecoration(
+              labelText: 'Position Selection *',
+            ),
             items: const [
               DropdownMenuItem(
                 value: 'Single Pilot',
@@ -3366,6 +4845,78 @@ class _MyHomePageState extends State<MyHomePage> {
             onChanged: (_) => setModalState(() {}),
             decoration: const InputDecoration(labelText: 'Description *'),
           ),
+          const SizedBox(height: 10),
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              border: Border.all(color: Colors.grey.shade300),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Application Timeline',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+                ),
+                const SizedBox(height: 8),
+                RadioGroup<bool>(
+                  groupValue: isOpenListing,
+                  onChanged: (value) {
+                    setModalState(() {
+                      isOpenListing = value ?? true;
+                      if (isOpenListing) {
+                        selectedDeadlineDate = null;
+                      }
+                    });
+                  },
+                  child: const Column(
+                    children: [
+                      RadioListTile<bool>(
+                        contentPadding: EdgeInsets.zero,
+                        title: Text('Open Listing (No Deadline)'),
+                        value: true,
+                      ),
+                      RadioListTile<bool>(
+                        contentPadding: EdgeInsets.zero,
+                        title: Text('Set Application Deadline'),
+                        value: false,
+                      ),
+                    ],
+                  ),
+                ),
+                if (!isOpenListing)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: OutlinedButton.icon(
+                      onPressed: () async {
+                        final now = DateTime.now();
+                        final pickedDate = await showDatePicker(
+                          context: context,
+                          initialDate:
+                              selectedDeadlineDate ??
+                              now.add(const Duration(days: 30)),
+                          firstDate: now,
+                          lastDate: now.add(const Duration(days: 730)),
+                        );
+                        if (pickedDate == null) {
+                          return;
+                        }
+                        setModalState(() {
+                          selectedDeadlineDate = pickedDate;
+                        });
+                      },
+                      icon: const Icon(Icons.event),
+                      label: Text(
+                        selectedDeadlineDate == null
+                            ? 'Choose deadline date'
+                            : 'Application Deadline: ${_formatYmd(selectedDeadlineDate!)}',
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
           const SizedBox(height: 12),
           _buildEditAccordionSection(
             title: 'Salary Range *',
@@ -3379,6 +4930,9 @@ class _MyHomePageState extends State<MyHomePage> {
                       child: TextField(
                         controller: startingPayController,
                         keyboardType: TextInputType.number,
+                        inputFormatters: [
+                          FilteringTextInputFormatter.digitsOnly,
+                        ],
                         onChanged: (_) => setModalState(() {}),
                         decoration: const InputDecoration(
                           labelText: 'Starting Pay *',
@@ -3392,6 +4946,9 @@ class _MyHomePageState extends State<MyHomePage> {
                       child: TextField(
                         controller: topEndStartingPayController,
                         keyboardType: TextInputType.number,
+                        inputFormatters: [
+                          FilteringTextInputFormatter.digitsOnly,
+                        ],
                         onChanged: (_) => setModalState(() {}),
                         decoration: const InputDecoration(
                           labelText: 'Top End Starting Pay (Optional)',
@@ -3437,10 +4994,8 @@ class _MyHomePageState extends State<MyHomePage> {
               ),
               items: [
                 ..._availableFaaRules.map(
-                  (rule) => DropdownMenuItem<String>(
-                    value: rule,
-                    child: Text(rule),
-                  ),
+                  (rule) =>
+                      DropdownMenuItem<String>(value: rule, child: Text(rule)),
                 ),
               ],
               onChanged: (value) {
@@ -3778,78 +5333,78 @@ class _MyHomePageState extends State<MyHomePage> {
       initiallyExpanded: true,
       child: Column(
         children: options.map((option) {
-              final isSelected = selectedOptions.contains(option);
-              return Padding(
-                padding: const EdgeInsets.symmetric(vertical: 4),
-                child: Column(
-                  children: [
-                    CheckboxListTile(
-                      dense: true,
-                      contentPadding: EdgeInsets.zero,
-                      title: Text(option),
-                      value: isSelected,
-                      onChanged: (checked) {
-                        setModalState(() {
-                          if (checked == true) {
-                            selectedOptions.add(option);
-                          } else {
-                            selectedOptions.remove(option);
-                            preferredOptions.remove(option);
-                          }
-                        });
-                      },
-                    ),
-                    if (isSelected)
-                      Row(
-                        children: [
-                          Expanded(
-                            child: TextField(
-                              controller: hourControllers[option],
-                              keyboardType: TextInputType.number,
-                              onChanged: (_) => setModalState(() {}),
-                              decoration: const InputDecoration(
-                                labelText: 'Hours',
-                                isDense: true,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: DropdownButtonFormField<String>(
-                              initialValue: preferredOptions.contains(option)
-                                  ? 'Preferred'
-                                  : 'Required',
-                              isDense: true,
-                              decoration: const InputDecoration(
-                                labelText: 'Requirement',
-                              ),
-                              items: const [
-                                DropdownMenuItem(
-                                  value: 'Required',
-                                  child: Text('Required'),
-                                ),
-                                DropdownMenuItem(
-                                  value: 'Preferred',
-                                  child: Text('Preferred'),
-                                ),
-                              ],
-                              onChanged: (value) {
-                                setModalState(() {
-                                  if (value == 'Preferred') {
-                                    preferredOptions.add(option);
-                                  } else {
-                                    preferredOptions.remove(option);
-                                  }
-                                });
-                              },
-                            ),
-                          ),
-                        ],
-                      ),
-                  ],
+          final isSelected = selectedOptions.contains(option);
+          return Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Column(
+              children: [
+                CheckboxListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(option),
+                  value: isSelected,
+                  onChanged: (checked) {
+                    setModalState(() {
+                      if (checked == true) {
+                        selectedOptions.add(option);
+                      } else {
+                        selectedOptions.remove(option);
+                        preferredOptions.remove(option);
+                      }
+                    });
+                  },
                 ),
-              );
-            }).toList(),
+                if (isSelected)
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: hourControllers[option],
+                          keyboardType: TextInputType.number,
+                          onChanged: (_) => setModalState(() {}),
+                          decoration: const InputDecoration(
+                            labelText: 'Hours',
+                            isDense: true,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: DropdownButtonFormField<String>(
+                          initialValue: preferredOptions.contains(option)
+                              ? 'Preferred'
+                              : 'Required',
+                          isDense: true,
+                          decoration: const InputDecoration(
+                            labelText: 'Requirement',
+                          ),
+                          items: const [
+                            DropdownMenuItem(
+                              value: 'Required',
+                              child: Text('Required'),
+                            ),
+                            DropdownMenuItem(
+                              value: 'Preferred',
+                              child: Text('Preferred'),
+                            ),
+                          ],
+                          onChanged: (value) {
+                            setModalState(() {
+                              if (value == 'Preferred') {
+                                preferredOptions.add(option);
+                              } else {
+                                preferredOptions.remove(option);
+                              }
+                            });
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+              ],
+            ),
+          );
+        }).toList(),
       ),
     );
   }
@@ -3877,14 +5432,25 @@ class _MyHomePageState extends State<MyHomePage> {
     return 'Company headquarters location not set';
   }
 
+  String _buildJobTimelineText(JobListing job) {
+    return _buildTimelineLabels(
+      createdAt: job.createdAt,
+      updatedAt: job.updatedAt,
+    ).join(' • ');
+  }
+
   void _clearCreateForm() {
     _createJobStep = 0;
     _useCompanyLocationForJob = true;
+    _createOpenListing = true;
+    _createDeadlineDate = null;
     _createTitleController.clear();
     _createCompanyController.text = _currentEmployer.companyName;
     _createLocationController.clear();
     _createTypeController.clear();
     _selectedCreatePositionOption = null;
+    _selectedTemplateId = null;
+    _createOpenedFromTemplate = false;
     _createStartingPayController.clear();
     _createPayForExperienceController.clear();
     _selectedCreatePayRateMetric = null;
@@ -3917,6 +5483,7 @@ class _MyHomePageState extends State<MyHomePage> {
     final type = _createTypeController.text.trim();
     final position = _selectedCreatePositionOption;
     final startingPay = _createStartingPayController.text.trim();
+    final topEndPay = _createPayForExperienceController.text.trim();
     final payMetric = _selectedCreatePayRateMetric;
     final description = _createDescriptionController.text.trim();
 
@@ -3927,7 +5494,16 @@ class _MyHomePageState extends State<MyHomePage> {
     if (position == null || position.isEmpty) missing.add('Position Selection');
     if (description.isEmpty) missing.add('Description');
     if (startingPay.isEmpty) missing.add('Starting Pay');
+    if (startingPay.isNotEmpty && _parsePositiveInt(startingPay) == null) {
+      missing.add('Starting Pay must be a positive integer');
+    }
+    if (topEndPay.isNotEmpty && _parsePositiveInt(topEndPay) == null) {
+      missing.add('Top End Starting Pay must be a positive integer');
+    }
     if (payMetric == null || payMetric.isEmpty) missing.add('Pay Metric');
+    if (!_createOpenListing && _createDeadlineDate == null) {
+      missing.add('Application Deadline');
+    }
 
     return missing;
   }
@@ -3988,7 +5564,8 @@ class _MyHomePageState extends State<MyHomePage> {
     final selectedFlightHourEntries = _selectedFlightHours.entries.toList();
     final selectedInstructorHourEntries = _selectedInstructorHours.entries
         .toList();
-    final selectedSpecialtyHourEntries = _selectedSpecialtyHours.entries.toList();
+    final selectedSpecialtyHourEntries = _selectedSpecialtyHours.entries
+        .toList();
 
     final selectedHoursCount =
         selectedFlightHourEntries.length +
@@ -4058,6 +5635,14 @@ class _MyHomePageState extends State<MyHomePage> {
         job.flightHoursByType.length +
         job.instructorHoursByType.length +
         job.specialtyHoursByType.length;
+    final timelineText = _buildTimelineLabels(
+      createdAt: job.createdAt,
+      updatedAt: job.updatedAt,
+      includeUnavailable: true,
+    ).join(' • ');
+    final deadlineText = job.deadlineDate != null
+        ? 'Application Deadline: ${_formatYmd(job.deadlineDate!.toLocal())}'
+        : null;
 
     await showDialog<void>(
       context: context,
@@ -4074,6 +5659,14 @@ class _MyHomePageState extends State<MyHomePage> {
             Text('Location: ${job.location}'),
             const SizedBox(height: 6),
             Text('Type: ${job.type}'),
+            if (deadlineText != null) ...[
+              const SizedBox(height: 6),
+              Text(deadlineText),
+            ],
+            if (timelineText.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Text(timelineText),
+            ],
             const SizedBox(height: 6),
             Text('Requirements configured: $requirementCount'),
           ],
@@ -4089,31 +5682,32 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   String? _buildCreateSalaryRange() {
-    final startingPay = _createStartingPayController.text.trim();
-    if (startingPay.isEmpty) {
+    final startingPayValue = _parsePositiveInt(
+      _createStartingPayController.text,
+    );
+    if (startingPayValue == null) {
       return null;
     }
 
-    final payForExperience = _createPayForExperienceController.text.trim();
+    final payForExperienceValue = _parsePositiveInt(
+      _createPayForExperienceController.text,
+    );
     final metric = _selectedCreatePayRateMetric;
-    final metricSuffix =
-      metric == null || metric.isEmpty ? '' : ' / $metric';
+    final metricSuffix = metric == null || metric.isEmpty ? '' : ' / $metric';
 
-    final startLabel = startingPay.startsWith(r'$')
-        ? startingPay
-      : '\$$startingPay';
+    final startLabel = '\$${startingPayValue.toString()}';
 
-    if (payForExperience.isNotEmpty) {
-      final endLabel = payForExperience.startsWith(r'$')
-          ? payForExperience
-          : '\$$payForExperience';
+    if (payForExperienceValue != null) {
+      final endLabel = '\$${payForExperienceValue.toString()}';
       return '$startLabel - $endLabel$metricSuffix';
     }
 
     return '$startLabel$metricSuffix';
   }
 
-  Future<void> _createJobListing() async {
+  Future<void> _createJobListing(BuildContext tabContext) async {
+    final tabController = DefaultTabController.maybeOf(tabContext);
+
     if (!_validateCreateBasics()) {
       return;
     }
@@ -4122,59 +5716,35 @@ class _MyHomePageState extends State<MyHomePage> {
       return;
     }
 
-    final title = _createTitleController.text.trim();
-    final company = _profileType == ProfileType.employer
-        ? _currentEmployer.companyName.trim()
-        : _createCompanyController.text.trim();
-    final location = _useCompanyLocationForJob
-        ? _buildCompanyLocationString()
-        : _createLocationController.text.trim();
-    final type = _createTypeController.text.trim();
-    final description = _createDescriptionController.text.trim();
-    final typeRatingsRequired = _createTypeRatingsController.text
-        .split(',')
-        .map((rating) => rating.trim())
-        .where((rating) => rating.isNotEmpty)
-        .toSet()
-        .toList();
-
-    final newJob = JobListing(
+    final draftJob = _buildCreateDraftJob(
       id: DateTime.now().microsecondsSinceEpoch.toString(),
-      title: title,
-      company: company,
-      location: location,
-      type: type.isNotEmpty ? type : 'Full-Time',
-      crewRole: _selectedCrewRole,
-      crewPosition: _selectedCrewRole == 'Crew' ? _selectedCrewPosition : null,
-        description: description,
-      faaCertificates: List.from(_selectedFaaCertificates),
-      typeRatingsRequired: typeRatingsRequired,
-      faaRules: _selectedFaaRules.isNotEmpty ? [_selectedFaaRules.first] : [],
-      flightExperience: [
-        ..._selectedFlightHours.keys,
-        ..._selectedInstructorHours.keys,
-      ],
-      flightHours: Map<String, int>.from(_selectedFlightHours),
-      preferredFlightHours: _preferredFlightHours.toList(),
-      instructorHours: Map<String, int>.from(_selectedInstructorHours),
-      preferredInstructorHours: _preferredInstructorHours.toList(),
-      specialtyExperience: _selectedSpecialtyHours.keys.toList(),
-      specialtyHours: Map<String, int>.from(_selectedSpecialtyHours),
-      preferredSpecialtyHours: _preferredSpecialtyHours.toList(),
-      aircraftFlown: _createAircraftController.text
-          .split(',')
-          .map((a) => a.trim())
-          .where((a) => a.isNotEmpty)
-          .toSet()
-          .toList(),
-        salaryRange: _buildCreateSalaryRange(),
-      employerId: _profileType == ProfileType.employer
-          ? _currentEmployer.id
-          : null,
     );
 
+    final duplicateJob = _findDuplicateEmployerListing(draftJob);
+    if (duplicateJob != null) {
+      if (!mounted) {
+        return;
+      }
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Duplicate listing blocked'),
+          content: Text(
+            'This listing matches your existing listing "${duplicateJob.title}". Update at least one required field or location before posting.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
     try {
-      final createdJob = await _appRepository.createJob(newJob);
+      final createdJob = await _appRepository.createJob(draftJob);
       if (!mounted) {
         return;
       }
@@ -4187,10 +5757,14 @@ class _MyHomePageState extends State<MyHomePage> {
 
       _clearCreateForm();
 
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Job listing "$title" created.')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Job listing "${draftJob.title}" created.')),
+      );
       await _showCreatedJobSummary(createdJob);
+      if (!mounted || _profileType != ProfileType.employer) {
+        return;
+      }
+      tabController?.animateTo(1);
     } catch (e) {
       if (!mounted) {
         return;
@@ -4205,13 +5779,41 @@ class _MyHomePageState extends State<MyHomePage> {
   Widget _buildResponsiveTabContent(Widget child) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final isWideLayout = constraints.maxWidth >= 900;
+        final mediaQuery = MediaQuery.of(context);
+        final leftInset = math.max(
+          mediaQuery.viewPadding.left,
+          math.max(
+            mediaQuery.padding.left,
+            mediaQuery.systemGestureInsets.left,
+          ),
+        );
+        final rightInset = math.max(
+          mediaQuery.viewPadding.right,
+          math.max(
+            mediaQuery.padding.right,
+            mediaQuery.systemGestureInsets.right,
+          ),
+        );
+        final availableWidth = math.max(
+          0.0,
+          constraints.maxWidth - leftInset - rightInset,
+        );
+        final edgePadding = availableWidth >= 900 ? 24.0 : 12.0;
+        final targetMaxWidth = availableWidth >= 900 ? 960.0 : availableWidth;
+        final contentMaxWidth = math.max(
+          0.0,
+          targetMaxWidth - (edgePadding * 2),
+        );
         return Center(
-          child: ConstrainedBox(
-            constraints: BoxConstraints(
-              maxWidth: isWideLayout ? 960 : double.infinity,
+          child: Padding(
+            padding: EdgeInsets.only(
+              left: leftInset + edgePadding,
+              right: rightInset + edgePadding,
             ),
-            child: child,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxWidth: contentMaxWidth),
+              child: child,
+            ),
           ),
         );
       },
@@ -4219,204 +5821,484 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Widget _buildJobsTab() {
+    final mediaQuery = MediaQuery.of(context);
     final jobs = _pagedJobs;
     final totalPages = (_filteredJobs.length / _pageSize).ceil().clamp(1, 999);
+    final bottomSystemInset = math.max(
+      mediaQuery.viewPadding.bottom,
+      math.max(
+        mediaQuery.padding.bottom,
+        mediaQuery.systemGestureInsets.bottom,
+      ),
+    );
+    final safeBottomInset = math.max(
+      mediaQuery.padding.bottom,
+      bottomSystemInset,
+    );
+    final listBottomSpacer = safeBottomInset + 56.0;
+    final listBottomPadding = safeBottomInset + 24.0;
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      child: Column(
-        children: [
-          if (_profileType == ProfileType.jobSeeker)
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _searchController,
-                    decoration: InputDecoration(
-                      labelText: 'Search jobs',
-                      hintText: 'Flutter, remote, analyst...',
-                      prefixIcon: const Icon(Icons.search),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      suffixIcon: _query.isNotEmpty
-                          ? IconButton(
-                              icon: const Icon(Icons.clear),
-                              onPressed: () {
-                                _searchController.clear();
-                                setState(() {
-                                  _query = '';
-                                  _page = 1;
-                                });
-                              },
-                            )
-                          : null,
-                    ),
-                    onChanged: (value) {
-                      setState(() {
-                        _query = value.trim();
-                        _page = 1;
-                      });
-                    },
-                  ),
-                ),
-                const SizedBox(width: 8),
-                ElevatedButton(
-                  onPressed: _fetchJobs,
-                  child: const Text('Refresh'),
-                ),
-              ],
-            ),
-          const SizedBox(height: 8),
-          if (_loading)
-            const Expanded(child: Center(child: CircularProgressIndicator()))
-          else if (_filteredJobs.isEmpty)
-            Expanded(
-              child: Center(
-                child: Text(
-                  _profileType == ProfileType.employer
-                      ? 'No job listings for ${_currentEmployer.companyName}.'
-                      : 'No results for "$_query"',
-                  style: Theme.of(context).textTheme.bodyLarge,
-                ),
-              ),
-            )
-          else
-            Expanded(
-              child: Column(
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Column(
+          children: [
+            if (_profileType == ProfileType.jobSeeker)
+              Row(
                 children: [
-                  if (_loadingError != null)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 8),
-                      child: Text(
-                        _loadingError!,
-                        style: const TextStyle(color: Colors.red),
-                      ),
-                    ),
                   Expanded(
-                    child: ListView.builder(
-                      itemCount: jobs.length,
-                      itemBuilder: (context, index) {
-                        final job = jobs[index];
-                        final isFav = _favoriteIds.contains(job.id);
-                        return Card(
-                          margin: const EdgeInsets.symmetric(vertical: 8),
-                          child: ListTile(
-                            title: Text(job.title),
-                            subtitle: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const SizedBox(height: 4),
-                                Text('${job.company} • ${job.location}'),
-                                Text('${job.type} • ${job.description}'),
-                              ],
-                            ),
-                            isThreeLine: true,
-                            leading: const Icon(Icons.work),
-                            trailing: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                if (_profileType == ProfileType.jobSeeker) ...[
-                                  Builder(
-                                    builder: (context) {
-                                      final match = _evaluateJobMatch(job);
-                                      Color badgeColor = Colors.red;
-                                      String badgeIcon = '✗';
-                                      if (match.matchPercentage >= 80) {
-                                        badgeColor = Colors.green;
-                                        badgeIcon = '✓';
-                                      } else if (match.matchPercentage >= 50) {
-                                        badgeColor = Colors.orange;
-                                        badgeIcon = '⚠';
-                                      }
-                                      final missingText = match
-                                          .missingRequirements
-                                          .take(2)
-                                          .join(', ');
-                                      return Tooltip(
-                                        message: match.matchPercentage >= 80
-                                            ? 'Strong match. You meet all required criteria.'
-                                            : 'Potential fit. Missing required: $missingText',
-                                        child: Container(
-                                          padding: const EdgeInsets.symmetric(
-                                            horizontal: 8,
-                                            vertical: 4,
-                                          ),
-                                          decoration: BoxDecoration(
-                                            color: badgeColor,
-                                            borderRadius: BorderRadius.circular(
-                                              12,
-                                            ),
-                                          ),
-                                          child: Text(
-                                            '$badgeIcon ${match.matchPercentage}%',
-                                            style: const TextStyle(
-                                              color: Colors.white,
-                                              fontSize: 12,
-                                              fontWeight: FontWeight.bold,
-                                            ),
-                                          ),
-                                        ),
-                                      );
-                                    },
-                                  ),
-                                  IconButton(
-                                    icon: Icon(
-                                      isFav ? Icons.star : Icons.star_border,
-                                      color: isFav ? Colors.amber : null,
-                                    ),
-                                    onPressed: () => _toggleFavorite(job),
-                                  ),
-                                  IconButton(
-                                    icon: const Icon(Icons.send),
-                                    tooltip: 'Apply',
-                                    onPressed: () => _applyToJob(job),
-                                  ),
-                                ],
-                                if (_canDeleteJob(job))
-                                  IconButton(
-                                    icon: const Icon(Icons.delete),
-                                    tooltip: 'Delete job',
-                                    onPressed: () => _removeJob(job),
-                                  ),
-                                if (_canEditJob(job))
-                                  IconButton(
-                                    icon: const Icon(Icons.edit),
-                                    tooltip: 'Edit job',
-                                    onPressed: () => _editJob(job),
-                                  ),
-                              ],
-                            ),
-                            onTap: () => _openDetails(job),
-                          ),
-                        );
+                    child: TextField(
+                      controller: _searchController,
+                      decoration: InputDecoration(
+                        labelText: 'Search jobs',
+                        hintText: 'Flutter, remote, analyst...',
+                        prefixIcon: const Icon(Icons.search),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        suffixIcon: _query.isNotEmpty
+                            ? IconButton(
+                                icon: const Icon(Icons.clear),
+                                onPressed: () {
+                                  _searchController.clear();
+                                  setState(() {
+                                    _query = '';
+                                    _page = 1;
+                                  });
+                                },
+                              )
+                            : null,
+                      ),
+                      onChanged: (value) {
+                        setState(() {
+                          _query = value.trim();
+                          _page = 1;
+                        });
                       },
                     ),
                   ),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text('Page $_page / $totalPages'),
-                      Row(
-                        children: [
-                          IconButton(
-                            onPressed: _page > 1 ? () => _changePage(-1) : null,
-                            icon: const Icon(Icons.chevron_left),
-                          ),
-                          IconButton(
-                            onPressed: _page < totalPages
-                                ? () => _changePage(1)
-                                : null,
-                            icon: const Icon(Icons.chevron_right),
-                          ),
-                        ],
-                      ),
-                    ],
+                  const SizedBox(width: 8),
+                  ElevatedButton(
+                    onPressed: _fetchJobs,
+                    child: const Text('Refresh'),
                   ),
                 ],
               ),
-            ),
-        ],
+            const SizedBox(height: 8),
+            if (_loading)
+              const Expanded(child: Center(child: CircularProgressIndicator()))
+            else if (_filteredJobs.isEmpty)
+              Expanded(
+                child: _profileType == ProfileType.employer
+                    ? ListView(
+                        padding: EdgeInsets.only(
+                          bottom: 16 + listBottomPadding,
+                        ),
+                        children: [
+                          Card(
+                            margin: const EdgeInsets.symmetric(vertical: 8),
+                            child: Padding(
+                              padding: const EdgeInsets.all(16),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Post your first job listing',
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.titleMedium,
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    'Your listed jobs will appear here once you publish a role. Create your first listing to start receiving applicants.',
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.bodyMedium,
+                                  ),
+                                  const SizedBox(height: 12),
+                                  Builder(
+                                    builder: (buttonContext) =>
+                                        FilledButton.icon(
+                                          onPressed: () {
+                                            DefaultTabController.of(
+                                              buttonContext,
+                                            ).animateTo(2);
+                                          },
+                                          icon: const Icon(
+                                            Icons.add_circle_outline,
+                                          ),
+                                          label: const Text(
+                                            'Add First Job Listing',
+                                          ),
+                                        ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      )
+                    : Center(
+                        child: Text(
+                          'No results for "$_query"',
+                          style: Theme.of(context).textTheme.bodyLarge,
+                        ),
+                      ),
+              )
+            else
+              Expanded(
+                child: Column(
+                  children: [
+                    if (_loadingError != null)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        child: Text(
+                          _loadingError!,
+                          style: const TextStyle(color: Colors.red),
+                        ),
+                      ),
+                    Expanded(
+                      child: ListView.builder(
+                        padding: EdgeInsets.only(
+                          bottom: 16 + listBottomPadding,
+                        ),
+                        itemCount: jobs.length + 2,
+                        itemBuilder: (context, index) {
+                          if (index == jobs.length) {
+                            return Padding(
+                              padding: const EdgeInsets.only(top: 4, bottom: 8),
+                              child: Row(
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Text('Page $_page / $totalPages'),
+                                  Row(
+                                    children: [
+                                      IconButton(
+                                        onPressed: _page > 1
+                                            ? () => _changePage(-1)
+                                            : null,
+                                        icon: const Icon(Icons.chevron_left),
+                                      ),
+                                      IconButton(
+                                        onPressed: _page < totalPages
+                                            ? () => _changePage(1)
+                                            : null,
+                                        icon: const Icon(Icons.chevron_right),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            );
+                          }
+                          if (index == jobs.length + 1) {
+                            return SizedBox(height: listBottomSpacer);
+                          }
+                          final job = jobs[index];
+                          final isFav = _favoriteIds.contains(job.id);
+                          final timelineText = _buildJobTimelineText(job);
+                          final deadlineText = job.deadlineDate != null
+                              ? _formatYmd(job.deadlineDate!.toLocal())
+                              : null;
+                          final isNarrowCard =
+                              MediaQuery.sizeOf(context).width < 430;
+                          final actionButtonSize = isNarrowCard ? 36.0 : 42.0;
+                          final actionButtonPadding = EdgeInsets.all(
+                            isNarrowCard ? 6 : 8,
+                          );
+                          return Card(
+                            margin: const EdgeInsets.symmetric(vertical: 8),
+                            child: InkWell(
+                              borderRadius: BorderRadius.circular(12),
+                              onTap: () => _openDetails(job),
+                              child: Padding(
+                                padding: const EdgeInsets.all(12),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    LayoutBuilder(
+                                      builder: (context, cardConstraints) {
+                                        final isCompactHeader =
+                                            cardConstraints.maxWidth < 640;
+                                        Widget? matchBadge;
+                                        if (_profileType ==
+                                            ProfileType.jobSeeker) {
+                                          final match = _evaluateJobMatch(job);
+                                          Color badgeColor = Colors.red;
+                                          String badgeIcon = '✗';
+                                          if (match.matchPercentage >= 80) {
+                                            badgeColor = Colors.green;
+                                            badgeIcon = '✓';
+                                          } else if (match.matchPercentage >=
+                                              50) {
+                                            badgeColor = Colors.orange;
+                                            badgeIcon = '⚠';
+                                          }
+                                          final missingText = match
+                                              .missingRequirements
+                                              .take(2)
+                                              .join(', ');
+                                          matchBadge = Tooltip(
+                                            message: match.matchPercentage >= 80
+                                                ? 'Strong match. You meet all required criteria.'
+                                                : 'Potential fit. Missing required: $missingText',
+                                            child: Container(
+                                              margin: EdgeInsets.only(
+                                                left: isCompactHeader ? 0 : 8,
+                                                top: isCompactHeader ? 8 : 0,
+                                              ),
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                    horizontal: 8,
+                                                    vertical: 4,
+                                                  ),
+                                              decoration: BoxDecoration(
+                                                color: badgeColor,
+                                                borderRadius:
+                                                    BorderRadius.circular(12),
+                                              ),
+                                              child: Text(
+                                                '$badgeIcon ${match.matchPercentage}%',
+                                                style: const TextStyle(
+                                                  color: Colors.white,
+                                                  fontSize: 12,
+                                                  fontWeight: FontWeight.bold,
+                                                ),
+                                              ),
+                                            ),
+                                          );
+                                        }
+
+                                        return Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Row(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                const Padding(
+                                                  padding: EdgeInsets.only(
+                                                    top: 2,
+                                                  ),
+                                                  child: Icon(Icons.work),
+                                                ),
+                                                const SizedBox(width: 12),
+                                                Expanded(
+                                                  child: Column(
+                                                    crossAxisAlignment:
+                                                        CrossAxisAlignment
+                                                            .start,
+                                                    children: [
+                                                      Text(
+                                                        job.title,
+                                                        style: const TextStyle(
+                                                          fontSize: 16,
+                                                          fontWeight:
+                                                              FontWeight.w600,
+                                                        ),
+                                                      ),
+                                                      const SizedBox(height: 4),
+                                                      Text(
+                                                        '${job.company} • ${job.location}',
+                                                      ),
+                                                      const SizedBox(height: 2),
+                                                      Text(job.type),
+                                                      if (deadlineText !=
+                                                          null) ...[
+                                                        const SizedBox(
+                                                          height: 8,
+                                                        ),
+                                                        Container(
+                                                          width:
+                                                              double.infinity,
+                                                          padding:
+                                                              const EdgeInsets.symmetric(
+                                                                horizontal: 10,
+                                                                vertical: 8,
+                                                              ),
+                                                          decoration: BoxDecoration(
+                                                            color: Colors
+                                                                .orange
+                                                                .shade50,
+                                                            border: Border.all(
+                                                              color: Colors
+                                                                  .orange
+                                                                  .shade200,
+                                                            ),
+                                                            borderRadius:
+                                                                BorderRadius.circular(
+                                                                  10,
+                                                                ),
+                                                          ),
+                                                          child: Column(
+                                                            crossAxisAlignment:
+                                                                CrossAxisAlignment
+                                                                    .start,
+                                                            children: [
+                                                              Text(
+                                                                'Application Deadline',
+                                                                style: TextStyle(
+                                                                  fontSize: 11,
+                                                                  fontWeight:
+                                                                      FontWeight
+                                                                          .w700,
+                                                                  color: Colors
+                                                                      .orange
+                                                                      .shade900,
+                                                                ),
+                                                              ),
+                                                              const SizedBox(
+                                                                height: 2,
+                                                              ),
+                                                              Text(
+                                                                deadlineText,
+                                                                style: TextStyle(
+                                                                  fontSize: 15,
+                                                                  fontWeight:
+                                                                      FontWeight
+                                                                          .w700,
+                                                                  color: Colors
+                                                                      .orange
+                                                                      .shade900,
+                                                                ),
+                                                              ),
+                                                            ],
+                                                          ),
+                                                        ),
+                                                      ],
+                                                      if (timelineText
+                                                          .isNotEmpty) ...[
+                                                        const SizedBox(
+                                                          height: 6,
+                                                        ),
+                                                        Text(
+                                                          timelineText,
+                                                          style: TextStyle(
+                                                            fontSize: 12,
+                                                            color: Colors
+                                                                .grey
+                                                                .shade600,
+                                                          ),
+                                                        ),
+                                                      ],
+                                                    ],
+                                                  ),
+                                                ),
+                                                if (!isCompactHeader &&
+                                                    matchBadge != null)
+                                                  matchBadge,
+                                              ],
+                                            ),
+                                            if (isCompactHeader &&
+                                                matchBadge != null)
+                                              Align(
+                                                alignment:
+                                                    Alignment.centerRight,
+                                                child: matchBadge,
+                                              ),
+                                          ],
+                                        );
+                                      },
+                                    ),
+                                    const SizedBox(height: 8),
+                                    Text(
+                                      job.description,
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        color: Colors.grey.shade800,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    Align(
+                                      alignment: Alignment.centerRight,
+                                      child: Wrap(
+                                        spacing: isNarrowCard ? 2 : 4,
+                                        children: [
+                                          if (_profileType ==
+                                              ProfileType.jobSeeker)
+                                            IconButton(
+                                              constraints:
+                                                  BoxConstraints.tightFor(
+                                                    width: actionButtonSize,
+                                                    height: actionButtonSize,
+                                                  ),
+                                              padding: actionButtonPadding,
+                                              visualDensity: isNarrowCard
+                                                  ? VisualDensity.compact
+                                                  : VisualDensity.standard,
+                                              icon: Icon(
+                                                isFav
+                                                    ? Icons.star
+                                                    : Icons.star_border,
+                                                color: isFav
+                                                    ? Colors.amber
+                                                    : null,
+                                              ),
+                                              onPressed: () =>
+                                                  _toggleFavorite(job),
+                                            ),
+                                          if (_profileType ==
+                                              ProfileType.jobSeeker)
+                                            IconButton(
+                                              constraints:
+                                                  BoxConstraints.tightFor(
+                                                    width: actionButtonSize,
+                                                    height: actionButtonSize,
+                                                  ),
+                                              padding: actionButtonPadding,
+                                              visualDensity: isNarrowCard
+                                                  ? VisualDensity.compact
+                                                  : VisualDensity.standard,
+                                              icon: const Icon(Icons.send),
+                                              tooltip: 'Apply',
+                                              onPressed: () => _applyToJob(job),
+                                            ),
+                                          if (_canEditJob(job))
+                                            OutlinedButton.icon(
+                                              onPressed: () => _editJob(job),
+                                              icon: const Icon(Icons.edit),
+                                              label: const Text('Edit'),
+                                            ),
+                                          if (_canDeleteJob(job))
+                                            OutlinedButton.icon(
+                                              onPressed: () => _removeJob(job),
+                                              icon: const Icon(
+                                                Icons.delete_outline,
+                                              ),
+                                              label: const Text('Delete'),
+                                            ),
+                                          if (_profileType ==
+                                              ProfileType.employer)
+                                            OutlinedButton.icon(
+                                              onPressed: () =>
+                                                  _saveJobAsTemplate(job),
+                                              icon: const Icon(
+                                                Icons.bookmark_add_outlined,
+                                              ),
+                                              label: const Text(
+                                                'Save as Template',
+                                              ),
+                                            ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -4442,12 +6324,68 @@ class _MyHomePageState extends State<MyHomePage> {
       itemCount: favoriteJobs.length,
       itemBuilder: (context, index) {
         final job = favoriteJobs[index];
+        final deadlineText = job.deadlineDate != null
+            ? _formatYmd(job.deadlineDate!.toLocal())
+            : null;
         return Card(
           margin: const EdgeInsets.symmetric(vertical: 8),
-          child: ListTile(
-            title: Text(job.title),
-            subtitle: Text('${job.company} • ${job.location}'),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(12),
             onTap: () => _openDetails(job),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    job.title,
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text('${job.company} • ${job.location}'),
+                  if (deadlineText != null) ...[
+                    const SizedBox(height: 8),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 8,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.orange.shade50,
+                        border: Border.all(color: Colors.orange.shade200),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Application Deadline',
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: Colors.orange.shade900,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            deadlineText,
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w700,
+                              color: Colors.orange.shade900,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
           ),
         );
       },
@@ -4640,213 +6578,664 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Widget _buildCompanyProfileTab() {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (!_employerProfileEditing)
-            Align(
-              alignment: Alignment.centerRight,
-              child: TextButton.icon(
-                onPressed: _startEditingEmployerProfile,
-                icon: const Icon(Icons.edit, size: 18),
-                label: const Text('Edit'),
-              ),
-            ),
-          const SizedBox(height: 16),
-          // Employer Switcher (if multiple employers exist)
-          if (_employerProfiles.length > 1) ...[
-            const Text(
-              'Switch Employer:',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              children: _employerProfiles.map((employer) {
-                final isActive = employer.id == _currentEmployer.id;
-                return ChoiceChip(
-                  label: Text(employer.companyName),
-                  selected: isActive,
-                  onSelected: (_) => _switchEmployer(employer),
-                );
-              }).toList(),
-            ),
-            const SizedBox(height: 24),
-          ],
-          // Current Company Info
-          const Text(
-            'Company Information',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _employerCtrl(
-              _employerCompanyNameController,
-              _currentEmployer.companyName,
-            ),
-            readOnly: !_employerProfileEditing,
-            decoration: const InputDecoration(labelText: 'Company Name'),
-          ),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _employerCtrl(
-              _employerAddressLine1Controller,
-              _currentEmployer.headquartersAddressLine1,
-            ),
-            readOnly: !_employerProfileEditing,
-            decoration: const InputDecoration(
-              labelText: 'Headquarters Address Line 1',
-            ),
-          ),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _employerCtrl(
-              _employerAddressLine2Controller,
-              _currentEmployer.headquartersAddressLine2,
-            ),
-            readOnly: !_employerProfileEditing,
-            decoration: const InputDecoration(
-              labelText: 'Headquarters Address Line 2 (Optional)',
-            ),
-          ),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _employerCtrl(
-                    _employerCityController,
-                    _currentEmployer.headquartersCity,
-                  ),
-                  readOnly: !_employerProfileEditing,
-                  decoration: const InputDecoration(labelText: 'City'),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(child: _buildEmployerStateField()),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _employerCtrl(
-                    _employerPostalCodeController,
-                    _currentEmployer.headquartersPostalCode,
-                  ),
-                  readOnly: !_employerProfileEditing,
-                  decoration: const InputDecoration(labelText: 'Postal Code'),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(child: _buildEmployerCountryField()),
-            ],
-          ),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _employerCtrl(
-              _employerWebsiteController,
-              _currentEmployer.website,
-            ),
-            readOnly: !_employerProfileEditing,
-            decoration: const InputDecoration(labelText: 'Company Website'),
-          ),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _employerCtrl(
-              _employerContactNameController,
-              _currentEmployer.contactName,
-            ),
-            readOnly: !_employerProfileEditing,
-            decoration: const InputDecoration(labelText: 'Hiring Contact Name'),
-          ),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _employerCtrl(
-              _employerContactEmailController,
-              _currentEmployer.contactEmail,
-            ),
-            readOnly: !_employerProfileEditing,
-            keyboardType: TextInputType.emailAddress,
-            decoration: const InputDecoration(
-              labelText: 'Hiring Contact Email',
-            ),
-          ),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _employerCtrl(
-              _employerContactPhoneController,
-              _currentEmployer.contactPhone,
-            ),
-            readOnly: !_employerProfileEditing,
-            keyboardType: TextInputType.phone,
-            decoration: const InputDecoration(
-              labelText: 'Hiring Contact Phone',
-            ),
-          ),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _employerCtrl(
-              _employerDescriptionController,
-              _currentEmployer.companyDescription,
-            ),
-            readOnly: !_employerProfileEditing,
-            maxLines: 4,
-            decoration: const InputDecoration(
-              labelText: 'Company Description',
-              hintText: 'Briefly describe your operation and hiring needs.',
-            ),
-          ),
-          if (_employerProfileEditing) ...[
-            const SizedBox(height: 24),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+    final employer = _currentEmployer;
+    final companyListingCount = _visibleJobs.length;
+    final headquartersLine2 = employer.headquartersAddressLine2.trim();
+    final websiteValue = employer.website.trim();
+    final descriptionValue = employer.companyDescription.trim();
+    final locationParts = [
+      employer.headquartersCity.trim(),
+      employer.headquartersState.trim(),
+      employer.headquartersCountry.trim(),
+    ].where((part) => part.isNotEmpty).toList();
+    final locationHeadline = locationParts.isEmpty
+        ? 'Headquarters location not set'
+        : locationParts.join(' • ');
+    final locationQueryParts = [
+      employer.headquartersAddressLine1.trim(),
+      headquartersLine2,
+      employer.headquartersCity.trim(),
+      employer.headquartersState.trim(),
+      employer.headquartersPostalCode.trim(),
+      employer.headquartersCountry.trim(),
+    ].where((part) => part.isNotEmpty).toList();
+    final locationQuery = locationQueryParts.join(', ');
+    final canOpenLocation = locationQuery.isNotEmpty;
+    final companyBenefits = employer.companyBenefits;
+    final bannerUrl = employer.companyBannerUrl.trim();
+    final logoUrl = employer.companyLogoUrl.trim();
+
+    return Column(
+      children: [
+        Expanded(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                OutlinedButton(
-                  onPressed: () =>
-                      setState(() => _employerProfileEditing = false),
-                  child: const Text('Cancel'),
+                const SizedBox(height: 4),
+                _buildCompanyBannerPreview(
+                  _employerProfileEditing
+                      ? _employerBannerUrlController.text
+                      : bannerUrl,
                 ),
-                ElevatedButton(
-                  onPressed: () {
-                    final updated = EmployerProfile(
-                      id: _currentEmployer.id,
-                      companyName: _employerCompanyNameController.text.trim(),
-                      headquartersAddressLine1: _employerAddressLine1Controller
-                          .text
-                          .trim(),
-                      headquartersAddressLine2: _employerAddressLine2Controller
-                          .text
-                          .trim(),
-                      headquartersCity: _employerCityController.text.trim(),
-                      headquartersState: _employerStateController.text.trim(),
-                      headquartersPostalCode: _employerPostalCodeController.text
-                          .trim(),
-                      headquartersCountry: _employerCountryController.text
-                          .trim(),
-                      website: _employerWebsiteController.text.trim(),
-                      contactName: _employerContactNameController.text.trim(),
-                      contactEmail: _employerContactEmailController.text.trim(),
-                      contactPhone: _employerContactPhoneController.text.trim(),
-                      companyDescription: _employerDescriptionController.text
-                          .trim(),
-                    );
-                    _updateEmployer(updated);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Company profile saved.')),
-                    );
-                  },
-                  child: const Text('Save Changes'),
+                const SizedBox(height: 8),
+                const SizedBox(height: 10),
+                // Employer Switcher (if multiple employers exist)
+                if (_employerProfiles.length > 1) ...[
+                  const Text(
+                    'Switch Employer:',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    children: _employerProfiles.map((employer) {
+                      final isActive = employer.id == _currentEmployer.id;
+                      return ChoiceChip(
+                        label: Text(employer.companyName),
+                        selected: isActive,
+                        onSelected: (_) => _switchEmployer(employer),
+                      );
+                    }).toList(),
+                  ),
+                  const SizedBox(height: 24),
+                ],
+                // Current Company Info
+                const Text(
+                  'Company Information',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                 ),
+                const SizedBox(height: 12),
+                if (_employerProfileEditing) ...[
+                  TextField(
+                    controller: _employerCtrl(
+                      _employerCompanyNameController,
+                      _currentEmployer.companyName,
+                    ),
+                    readOnly: !_employerProfileEditing,
+                    decoration: const InputDecoration(
+                      labelText: 'Company Name',
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: _employerCtrl(
+                      _employerAddressLine1Controller,
+                      _currentEmployer.headquartersAddressLine1,
+                    ),
+                    readOnly: !_employerProfileEditing,
+                    decoration: const InputDecoration(
+                      labelText: 'Headquarters Address Line 1',
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: _employerCtrl(
+                      _employerAddressLine2Controller,
+                      _currentEmployer.headquartersAddressLine2,
+                    ),
+                    readOnly: !_employerProfileEditing,
+                    decoration: const InputDecoration(
+                      labelText: 'Headquarters Address Line 2 (Optional)',
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _employerCtrl(
+                            _employerCityController,
+                            _currentEmployer.headquartersCity,
+                          ),
+                          readOnly: !_employerProfileEditing,
+                          decoration: const InputDecoration(labelText: 'City'),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(child: _buildEmployerStateField()),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _employerCtrl(
+                            _employerPostalCodeController,
+                            _currentEmployer.headquartersPostalCode,
+                          ),
+                          readOnly: !_employerProfileEditing,
+                          decoration: const InputDecoration(
+                            labelText: 'Postal Code',
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(child: _buildEmployerCountryField()),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      OutlinedButton.icon(
+                        onPressed: _uploadingEmployerBannerImage
+                            ? null
+                            : _pickEmployerBannerImageFile,
+                        icon: _uploadingEmployerBannerImage
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Icon(Icons.upload_file_outlined),
+                        label: Text(
+                          _uploadingEmployerBannerImage
+                              ? 'Uploading Banner...'
+                              : 'Upload Banner Image',
+                        ),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed:
+                            _uploadingEmployerBannerImage ||
+                                _employerBannerUrlController.text.trim().isEmpty
+                            ? null
+                            : _removeEmployerBannerImage,
+                        icon: const Icon(Icons.delete_outline),
+                        label: const Text('Remove Banner'),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      OutlinedButton.icon(
+                        onPressed: _uploadingEmployerLogoImage
+                            ? null
+                            : _pickEmployerLogoImageFile,
+                        icon: _uploadingEmployerLogoImage
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Icon(Icons.upload_file_outlined),
+                        label: Text(
+                          _uploadingEmployerLogoImage
+                              ? 'Uploading Logo...'
+                              : 'Upload Logo Image',
+                        ),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed:
+                            _uploadingEmployerLogoImage ||
+                                _employerLogoUrlController.text.trim().isEmpty
+                            ? null
+                            : _removeEmployerLogoImage,
+                        icon: const Icon(Icons.delete_outline),
+                        label: const Text('Remove Logo'),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: _employerCtrl(
+                      _employerWebsiteController,
+                      _currentEmployer.website,
+                    ),
+                    readOnly: !_employerProfileEditing,
+                    decoration: const InputDecoration(
+                      labelText: 'Company Website',
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: _employerCtrl(
+                      _employerContactNameController,
+                      _currentEmployer.contactName,
+                    ),
+                    readOnly: !_employerProfileEditing,
+                    decoration: const InputDecoration(
+                      labelText: 'Contact Name / Department',
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: _employerCtrl(
+                      _employerContactEmailController,
+                      _currentEmployer.contactEmail,
+                    ),
+                    readOnly: !_employerProfileEditing,
+                    keyboardType: TextInputType.emailAddress,
+                    decoration: const InputDecoration(
+                      labelText: 'Hiring Contact Email',
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: _employerCtrl(
+                      _employerContactPhoneController,
+                      _formatPhoneNumber(_currentEmployer.contactPhone),
+                    ),
+                    readOnly: !_employerProfileEditing,
+                    keyboardType: TextInputType.phone,
+                    inputFormatters: [
+                      FilteringTextInputFormatter.digitsOnly,
+                      _PhoneNumberTextInputFormatter(),
+                    ],
+                    decoration: const InputDecoration(
+                      labelText: 'Hiring Contact Phone',
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: _employerCtrl(
+                      _employerDescriptionController,
+                      _currentEmployer.companyDescription,
+                    ),
+                    readOnly: !_employerProfileEditing,
+                    maxLines: 4,
+                    decoration: const InputDecoration(
+                      labelText: 'Company Description',
+                      hintText:
+                          'Briefly describe your operation and hiring needs.',
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      border: Border.all(color: Colors.grey.shade300),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Company Benefits',
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        ..._companyBenefitOptions.map((benefit) {
+                          final isSelected = _selectedEmployerBenefits.contains(
+                            benefit,
+                          );
+                          return CheckboxListTile(
+                            dense: true,
+                            contentPadding: EdgeInsets.zero,
+                            title: Text(benefit),
+                            value: isSelected,
+                            onChanged: (checked) {
+                              setState(() {
+                                if (checked == true) {
+                                  _selectedEmployerBenefits.add(benefit);
+                                } else {
+                                  _selectedEmployerBenefits.remove(benefit);
+                                }
+                              });
+                            },
+                          );
+                        }),
+                      ],
+                    ),
+                  ),
+                ] else ...[
+                  Container(
+                    margin: const EdgeInsets.symmetric(vertical: 6),
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade50,
+                      border: Border.all(color: Colors.grey.shade300),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                _buildCompanyLogoPreview(logoUrl, size: 96),
+                              ],
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.all(8),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white,
+                                      borderRadius: BorderRadius.circular(10),
+                                      border: Border.all(
+                                        color: Colors.grey.shade300,
+                                      ),
+                                    ),
+                                    child: Icon(
+                                      Icons.business,
+                                      size: 18,
+                                      color: Colors.blueGrey.shade700,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          employer.companyName.trim().isNotEmpty
+                                              ? employer.companyName.trim()
+                                              : 'Company Name Not Set',
+                                          style: const TextStyle(
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          'Company profile overview',
+                                          style: TextStyle(
+                                            fontSize: 13,
+                                            color: Colors.grey.shade700,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 14),
+                        Container(
+                          width: double.infinity,
+                          margin: const EdgeInsets.only(bottom: 10),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            border: Border.all(color: Colors.grey.shade300),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Material(
+                            color: Colors.transparent,
+                            child: InkWell(
+                              borderRadius: BorderRadius.circular(10),
+                              onTap: canOpenLocation
+                                  ? () => _openLocationInMaps(locationQuery)
+                                  : null,
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 10,
+                                ),
+                                child: Row(
+                                  children: [
+                                    Expanded(
+                                      child: _buildInlineInfoItem(
+                                        Icons.location_on_outlined,
+                                        locationHeadline,
+                                      ),
+                                    ),
+                                    if (canOpenLocation) ...[
+                                      const SizedBox(width: 8),
+                                      Icon(
+                                        Icons.open_in_new,
+                                        size: 16,
+                                        color: Colors.blueGrey.shade500,
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                        _buildProfileSummaryRow(
+                          'Address Line 1',
+                          employer.headquartersAddressLine1,
+                        ),
+                        _buildProfileSummaryRow(
+                          'Address Line 2',
+                          _summaryValue(headquartersLine2),
+                        ),
+                        _buildProfileSummaryRow(
+                          'City',
+                          employer.headquartersCity,
+                        ),
+                        _buildProfileSummaryRow(
+                          'State / Province',
+                          employer.headquartersState,
+                        ),
+                        _buildProfileSummaryRow(
+                          'Postal Code',
+                          employer.headquartersPostalCode,
+                        ),
+                        _buildProfileSummaryRow(
+                          'Country',
+                          employer.headquartersCountry,
+                        ),
+                      ],
+                    ),
+                  ),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: OutlinedButton.icon(
+                      onPressed: () => DefaultTabController.of(context)
+                          .animateTo(1),
+                      icon: const Icon(Icons.list_alt_outlined),
+                      label: Text(
+                        'See All Listings ($companyListingCount)',
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  _buildSummarySectionCard(
+                    title: 'Hiring Contact',
+                    subtitle: 'How candidates can reach your team',
+                    icon: Icons.contact_mail,
+                    child: Column(
+                      children: [
+                        _buildProfileSummaryRow(
+                          'Contact Name / Department',
+                          employer.contactName,
+                        ),
+                        _buildProfileSummaryRow('Email', employer.contactEmail),
+                        _buildProfileSummaryRow(
+                          'Phone',
+                          _formatPhoneNumber(employer.contactPhone),
+                        ),
+                        _buildWebsiteSummaryRow(websiteValue),
+                      ],
+                    ),
+                  ),
+                  _buildSummarySectionCard(
+                    title: 'About The Company',
+                    subtitle: 'What candidates should know',
+                    icon: Icons.description,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          descriptionValue.isEmpty
+                              ? 'Not provided'
+                              : descriptionValue,
+                          style: TextStyle(
+                            fontStyle: descriptionValue.isEmpty
+                                ? FontStyle.italic
+                                : FontStyle.normal,
+                            color: descriptionValue.isEmpty
+                                ? Colors.grey.shade600
+                                : null,
+                            height: 1.35,
+                          ),
+                        ),
+                        const SizedBox(height: 14),
+                        const Text(
+                          'Company Benefits',
+                          style: TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                        const SizedBox(height: 8),
+                        if (companyBenefits.isEmpty)
+                          Text(
+                            'Not provided',
+                            style: TextStyle(
+                              fontStyle: FontStyle.italic,
+                              color: Colors.grey.shade600,
+                            ),
+                          )
+                        else
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: companyBenefits
+                                .map((benefit) => Chip(label: Text(benefit)))
+                                .toList(),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 16),
               ],
             ),
-          ],
-          const SizedBox(height: 16),
-        ],
-      ),
+          ),
+        ),
+        Container(
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surface,
+            border: Border(top: BorderSide(color: Colors.grey.shade300)),
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final isCompact = constraints.maxWidth < 760;
+              if (!_employerProfileEditing) {
+                return Center(
+                  child: OutlinedButton.icon(
+                    onPressed: _startEditingEmployerProfile,
+                    icon: const Icon(Icons.edit),
+                    label: const Text('Edit'),
+                  ),
+                );
+              }
+
+              final saveButton = OutlinedButton.icon(
+                onPressed: () async {
+                  final contactEmail = _employerContactEmailController.text
+                      .trim();
+                  final contactPhone = _formatPhoneNumber(
+                    _employerContactPhoneController.text.trim(),
+                  );
+
+                  if (contactEmail.isEmpty && contactPhone.isEmpty) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text(
+                          'Provide either a hiring contact email or phone number.',
+                        ),
+                      ),
+                    );
+                    return;
+                  }
+
+                  final previousEmployer = _currentEmployer;
+
+                  final updated = EmployerProfile(
+                    id: _currentEmployer.id,
+                    companyName: _employerCompanyNameController.text.trim(),
+                    headquartersAddressLine1: _employerAddressLine1Controller
+                        .text
+                        .trim(),
+                    headquartersAddressLine2: _employerAddressLine2Controller
+                        .text
+                        .trim(),
+                    headquartersCity: _employerCityController.text.trim(),
+                    headquartersState: _employerStateController.text.trim(),
+                    headquartersPostalCode: _employerPostalCodeController.text
+                        .trim(),
+                    headquartersCountry: _employerCountryController.text.trim(),
+                    companyBannerUrl: _normalizeExternalUrl(
+                      _employerBannerUrlController.text,
+                    ),
+                    companyLogoUrl: _normalizeExternalUrl(
+                      _employerLogoUrlController.text,
+                    ),
+                    website: _employerWebsiteController.text.trim(),
+                    contactName: _employerContactNameController.text.trim(),
+                    contactEmail: contactEmail,
+                    contactPhone: contactPhone,
+                    companyDescription: _employerDescriptionController.text
+                        .trim(),
+                    companyBenefits: _selectedEmployerBenefits.toList()..sort(),
+                  );
+                  _updateEmployer(updated);
+                  await _cleanupReplacedEmployerImages(
+                    previous: previousEmployer,
+                    updated: updated,
+                  );
+                  if (!mounted || !context.mounted) {
+                    return;
+                  }
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Company profile saved.')),
+                  );
+                },
+                icon: const Icon(Icons.save_outlined),
+                label: const Text('Save Changes'),
+              );
+
+              if (isCompact) {
+                return Wrap(
+                  alignment: WrapAlignment.center,
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed: () =>
+                          setState(() => _employerProfileEditing = false),
+                      icon: const Icon(Icons.cancel_outlined),
+                      label: const Text('Cancel'),
+                    ),
+                    saveButton,
+                  ],
+                );
+              }
+
+              return Row(
+                children: [
+                  const Spacer(),
+                  OutlinedButton.icon(
+                    onPressed: () =>
+                        setState(() => _employerProfileEditing = false),
+                    icon: const Icon(Icons.cancel_outlined),
+                    label: const Text('Cancel'),
+                  ),
+                  const SizedBox(width: 8),
+                  saveButton,
+                  const Spacer(),
+                ],
+              );
+            },
+          ),
+        ),
+      ],
     );
   }
 
@@ -4930,14 +7319,21 @@ class _MyHomePageState extends State<MyHomePage> {
                 child: Column(
                   children: [
                     _buildProfileSummaryRow(
-                      'Full Name',
-                      _jobSeekerProfile.fullName,
+                      'First Name',
+                      _jobSeekerProfile.firstName,
+                    ),
+                    _buildProfileSummaryRow(
+                      'Last Name',
+                      _jobSeekerProfile.lastName,
                     ),
                     _buildProfileSummaryRow(
                       'Email',
                       _resolvedJobSeekerEmail(_jobSeekerProfile),
                     ),
-                    _buildProfileSummaryRow('Phone', _jobSeekerProfile.phone),
+                    _buildProfileSummaryRow(
+                      'Phone',
+                      _formatPhoneNumber(_jobSeekerProfile.phone),
+                    ),
                     _buildProfileSummaryRow('City', _jobSeekerProfile.city),
                     _buildProfileSummaryRow(
                       'State / Province',
@@ -5432,49 +7828,492 @@ class _MyHomePageState extends State<MyHomePage> {
             ],
           ),
         ),
-        const SizedBox(height: 16),
-        Row(
-          children: [
-            OutlinedButton.icon(
-              onPressed: () {
-                setState(() {
-                  _createJobStep = 0;
-                });
-              },
-              icon: const Icon(Icons.arrow_back),
-              label: const Text('Back to Basics'),
-            ),
-            const Spacer(),
-            FilledButton.icon(
-              onPressed: _createJobListing,
-              icon: const Icon(Icons.check_circle_outline),
-              label: const Text('Create Job Listing'),
-            ),
-          ],
-        ),
       ],
     );
   }
 
   Widget _buildCreateTab() {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+    return Builder(
+      builder: (tabContext) => Column(
         children: [
-          const Text(
-            'Create a job listing',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          Expanded(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Create a job listing',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 12),
+                  _buildCreateStepHeader(),
+                  const SizedBox(height: 16),
+                  if (_createJobStep == 0)
+                    _buildCreateBasicsStep()
+                  else
+                    _buildCreateQualificationsStep(),
+                  const SizedBox(height: 8),
+                ],
+              ),
+            ),
           ),
-          const SizedBox(height: 12),
-          _buildCreateStepHeader(),
-          const SizedBox(height: 16),
-          if (_createJobStep == 0)
-            _buildCreateBasicsStep()
-          else
-            _buildCreateQualificationsStep(),
+          Container(
+            decoration: BoxDecoration(
+              color: Theme.of(tabContext).colorScheme.surface,
+              border: Border(top: BorderSide(color: Colors.grey.shade300)),
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final isCompact = constraints.maxWidth < 760;
+                if (_createJobStep == 0) {
+                  if (isCompact) {
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Wrap(
+                          alignment: WrapAlignment.center,
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            OutlinedButton.icon(
+                              onPressed: () {
+                                _cancelCreateListingFlow(tabContext);
+                              },
+                              icon: const Icon(Icons.cancel_outlined),
+                              label: const Text('Cancel'),
+                            ),
+                            if (_selectedTemplate != null)
+                              OutlinedButton.icon(
+                                onPressed: () =>
+                                    _renameTemplate(_selectedTemplate!),
+                                icon: const Icon(
+                                  Icons.drive_file_rename_outline,
+                                ),
+                                label: const Text('Rename Template'),
+                              ),
+                            if (_selectedTemplate != null)
+                              OutlinedButton.icon(
+                                onPressed:
+                                    _updateSelectedTemplateFromCurrentForm,
+                                icon: const Icon(Icons.sync),
+                                label: const Text('Update Selected Template'),
+                              ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        OutlinedButton.icon(
+                          onPressed: () {
+                            if (_validateCreateBasics()) {
+                              setState(() {
+                                _createJobStep = 1;
+                              });
+                            }
+                          },
+                          icon: const Icon(Icons.arrow_forward),
+                          label: const Text('Next: Qualifications'),
+                        ),
+                      ],
+                    );
+                  }
+
+                  return Row(
+                    children: [
+                      const Spacer(),
+                      OutlinedButton.icon(
+                        onPressed: () {
+                          _cancelCreateListingFlow(tabContext);
+                        },
+                        icon: const Icon(Icons.cancel_outlined),
+                        label: const Text('Cancel'),
+                      ),
+                      const Spacer(),
+                      OutlinedButton.icon(
+                        onPressed: () {
+                          if (_validateCreateBasics()) {
+                            setState(() {
+                              _createJobStep = 1;
+                            });
+                          }
+                        },
+                        icon: const Icon(Icons.arrow_forward),
+                        label: const Text('Next: Qualifications'),
+                      ),
+                    ],
+                  );
+                }
+
+                if (isCompact) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Wrap(
+                        alignment: WrapAlignment.center,
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          OutlinedButton.icon(
+                            onPressed: () {
+                              setState(() {
+                                _createJobStep = 0;
+                              });
+                            },
+                            icon: const Icon(Icons.arrow_back),
+                            label: const Text('Back to Basics'),
+                          ),
+                          OutlinedButton.icon(
+                            onPressed: () {
+                              _cancelCreateListingFlow(tabContext);
+                            },
+                            icon: const Icon(Icons.cancel_outlined),
+                            label: const Text('Cancel'),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      OutlinedButton.icon(
+                        onPressed: () => _createJobListing(tabContext),
+                        icon: const Icon(Icons.check_circle_outline),
+                        label: const Text('Create Job Listing'),
+                      ),
+                    ],
+                  );
+                }
+
+                return Row(
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed: () {
+                        setState(() {
+                          _createJobStep = 0;
+                        });
+                      },
+                      icon: const Icon(Icons.arrow_back),
+                      label: const Text('Back to Basics'),
+                    ),
+                    Expanded(
+                      child: Center(
+                        child: OutlinedButton.icon(
+                          onPressed: () {
+                            _cancelCreateListingFlow(tabContext);
+                          },
+                          icon: const Icon(Icons.cancel_outlined),
+                          label: const Text('Cancel'),
+                        ),
+                      ),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: () => _createJobListing(tabContext),
+                      icon: const Icon(Icons.check_circle_outline),
+                      label: const Text('Create Job Listing'),
+                    ),
+                  ],
+                );
+              },
+            ),
+          ),
         ],
       ),
+    );
+  }
+
+  Widget _buildTemplateEditorTab(JobListingTemplate template) {
+    return Column(
+      children: [
+        Expanded(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Edit ${template.name} Template',
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                _buildCreateStepHeader(),
+                const SizedBox(height: 16),
+                if (_createJobStep == 0)
+                  _buildCreateBasicsStep()
+                else
+                  _buildCreateQualificationsStep(),
+                const SizedBox(height: 8),
+              ],
+            ),
+          ),
+        ),
+        Container(
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surface,
+            border: Border(top: BorderSide(color: Colors.grey.shade300)),
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final isCompact = constraints.maxWidth < 760;
+              if (_createJobStep == 0) {
+                if (isCompact) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Wrap(
+                        alignment: WrapAlignment.center,
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          OutlinedButton.icon(
+                            onPressed: _closeTemplateEditor,
+                            icon: const Icon(Icons.cancel_outlined),
+                            label: const Text('Cancel'),
+                          ),
+                          OutlinedButton.icon(
+                            onPressed: _updateSelectedTemplateFromCurrentForm,
+                            icon: const Icon(Icons.sync),
+                            label: const Text('Save Changes'),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      OutlinedButton.icon(
+                        onPressed: () {
+                          if (_validateCreateBasics()) {
+                            setState(() {
+                              _createJobStep = 1;
+                            });
+                          }
+                        },
+                        icon: const Icon(Icons.arrow_forward),
+                        label: const Text('Next: Qualifications'),
+                      ),
+                    ],
+                  );
+                }
+
+                return Row(
+                  children: [
+                    const Spacer(),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        OutlinedButton.icon(
+                          onPressed: _closeTemplateEditor,
+                          icon: const Icon(Icons.cancel_outlined),
+                          label: const Text('Cancel'),
+                        ),
+                        const SizedBox(width: 8),
+                        OutlinedButton.icon(
+                          onPressed: _updateSelectedTemplateFromCurrentForm,
+                          icon: const Icon(Icons.sync),
+                          label: const Text('Save Changes'),
+                        ),
+                      ],
+                    ),
+                    const Spacer(),
+                    OutlinedButton.icon(
+                      onPressed: () {
+                        if (_validateCreateBasics()) {
+                          setState(() {
+                            _createJobStep = 1;
+                          });
+                        }
+                      },
+                      icon: const Icon(Icons.arrow_forward),
+                      label: const Text('Next: Qualifications'),
+                    ),
+                  ],
+                );
+              }
+
+              if (isCompact) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Wrap(
+                      alignment: WrapAlignment.center,
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        OutlinedButton.icon(
+                          onPressed: () {
+                            setState(() {
+                              _createJobStep = 0;
+                            });
+                          },
+                          icon: const Icon(Icons.arrow_back),
+                          label: const Text('Back to Basics'),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: _closeTemplateEditor,
+                          icon: const Icon(Icons.cancel_outlined),
+                          label: const Text('Cancel'),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: _updateSelectedTemplateFromCurrentForm,
+                          icon: const Icon(Icons.sync),
+                          label: const Text('Save Changes'),
+                        ),
+                      ],
+                    ),
+                  ],
+                );
+              }
+
+              return Row(
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: () {
+                      setState(() {
+                        _createJobStep = 0;
+                      });
+                    },
+                    icon: const Icon(Icons.arrow_back),
+                    label: const Text('Back to Basics'),
+                  ),
+                  Expanded(
+                    child: Center(
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          OutlinedButton.icon(
+                            onPressed: _closeTemplateEditor,
+                            icon: const Icon(Icons.cancel_outlined),
+                            label: const Text('Cancel'),
+                          ),
+                          const SizedBox(width: 8),
+                          OutlinedButton.icon(
+                            onPressed: _updateSelectedTemplateFromCurrentForm,
+                            icon: const Icon(Icons.sync),
+                            label: const Text('Save Changes'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildTemplatesTab() {
+    final editingTemplate = _editingTemplate;
+    if (editingTemplate != null) {
+      return _buildTemplateEditorTab(editingTemplate);
+    }
+
+    final templates = _currentEmployerTemplates;
+
+    if (templates.isEmpty) {
+      return ListView(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        children: [
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'No templates yet',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Build a listing once, then save it as a template to quickly create similar openings later.',
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      itemCount: templates.length,
+      itemBuilder: (context, index) {
+        final template = templates[index];
+        final templateUpdatedAt = template.updatedAt ?? template.createdAt;
+        final updatedLabel = templateUpdatedAt != null
+            ? _formatYmd(templateUpdatedAt.toLocal())
+            : null;
+        return Card(
+          margin: const EdgeInsets.symmetric(vertical: 8),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(12),
+            onTap: () => _openTemplateSummary(template, context),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    template.name,
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '${template.listing.title} • ${template.listing.location}',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  if (updatedLabel != null) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      'Last Updated: $updatedLabel',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Colors.grey.shade600,
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      Builder(
+                        builder: (tabContext) => OutlinedButton.icon(
+                          onPressed: () {
+                            _openCreateFromTemplate(
+                              template,
+                              tabContext,
+                              linkTemplate: false,
+                            );
+                          },
+                          icon: const Icon(Icons.edit_note_outlined),
+                          label: const Text('Use Template'),
+                        ),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: () => _renameTemplate(template),
+                        icon: const Icon(Icons.drive_file_rename_outline),
+                        label: const Text('Rename'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: () => _openTemplateEditor(template),
+                        icon: const Icon(Icons.edit),
+                        label: const Text('Edit'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: () => _deleteTemplate(template),
+                        icon: const Icon(Icons.delete_outline),
+                        label: const Text('Delete'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -5484,8 +8323,9 @@ class _MyHomePageState extends State<MyHomePage> {
     final tabs = isEmployer
         ? const [
             Tab(text: 'Employer Profile'),
-            Tab(text: 'Create Listing'),
             Tab(text: 'Listed Jobs'),
+            Tab(text: 'Create New Listing'),
+            Tab(text: 'Templates'),
           ]
         : const [
             Tab(text: 'Jobs'),
@@ -5496,7 +8336,9 @@ class _MyHomePageState extends State<MyHomePage> {
 
     return DefaultTabController(
       length: tabs.length,
+      initialIndex: isEmployer ? 1 : 0,
       child: Scaffold(
+        resizeToAvoidBottomInset: true,
         appBar: AppBar(
           backgroundColor: Theme.of(context).colorScheme.inversePrimary,
           title: Text(widget.title),
@@ -5549,8 +8391,9 @@ class _MyHomePageState extends State<MyHomePage> {
               children: isEmployer
                   ? [
                       _buildResponsiveTabContent(_buildCompanyProfileTab()),
-                      _buildResponsiveTabContent(_buildCreateTab()),
                       _buildResponsiveTabContent(_buildJobsTab()),
+                      _buildResponsiveTabContent(_buildCreateTab()),
+                      _buildResponsiveTabContent(_buildTemplatesTab()),
                     ]
                   : [
                       _buildResponsiveTabContent(_buildJobsTab()),
@@ -5561,6 +8404,9 @@ class _MyHomePageState extends State<MyHomePage> {
             ),
           ),
         ),
+        bottomSheet: kIsWeb && _showCookieConsentBanner
+            ? _buildCookieConsentBanner()
+            : null,
       ),
     );
   }
@@ -5570,262 +8416,445 @@ class JobDetailsPage extends StatelessWidget {
   final JobListing job;
   final bool isFavorite;
   final VoidCallback onFavorite;
+  final VoidCallback? onApply;
+  final VoidCallback? onShare;
+  final VoidCallback? onSeeAllListings;
   final JobSeekerProfile? profile;
+  final EmployerProfile? companyProfile;
+  final int openRoleCount;
 
   const JobDetailsPage({
     super.key,
     required this.job,
     required this.isFavorite,
     required this.onFavorite,
+    this.onApply,
+    this.onShare,
+    this.onSeeAllListings,
     this.profile,
+    this.companyProfile,
+    this.openRoleCount = 0,
   });
+
+  void _openCompanyInfo(BuildContext context) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => PublicCompanyInfoPage(
+          job: job,
+          employerProfile: companyProfile,
+          openRoleCount: openRoleCount,
+          onSeeAllListings: onSeeAllListings,
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
+    final mediaQuery = MediaQuery.of(context);
+    final safeLeftInset = math.max(
+      mediaQuery.viewPadding.left,
+      math.max(mediaQuery.padding.left, mediaQuery.systemGestureInsets.left),
+    );
+    final safeRightInset = math.max(
+      mediaQuery.viewPadding.right,
+      math.max(mediaQuery.padding.right, mediaQuery.systemGestureInsets.right),
+    );
     final standardFlightHourEntries = job.flightHoursByType.entries.toList();
     final instructorHourEntries = job.instructorHoursByType.entries.toList();
-    final crewLabel = job.id == 'test-all-criteria-job'
-        ? null
-        : (job.crewRole.toLowerCase() == 'crew'
-              ? (job.crewPosition != null && job.crewPosition!.trim().isNotEmpty
-                    ? 'Crew Member - ${job.crewPosition}'
-                    : 'Crew Member')
-              : 'Single Pilot');
+    final timelineLabels = _buildTimelineLabels(
+      createdAt: job.createdAt,
+      updatedAt: job.updatedAt,
+    );
+    final applicationDeadlineText = job.deadlineDate != null
+        ? _formatYmd(job.deadlineDate!.toLocal())
+        : null;
+    final showStickyActionBar = profile != null;
+    final detailsBottomPadding = 24.0;
+    final crewLabel = job.crewRole.toLowerCase() == 'crew'
+        ? (job.crewPosition != null && job.crewPosition!.trim().isNotEmpty
+              ? 'Crew Member - ${job.crewPosition}'
+              : 'Crew Member')
+        : 'Single Pilot';
 
     return Scaffold(
       appBar: AppBar(
         title: Text(job.title),
-        actions: [
-          IconButton(
-            icon: Icon(isFavorite ? Icons.star : Icons.star_border),
-            tooltip: isFavorite ? 'Remove favorite' : 'Add favorite',
-            onPressed: onFavorite,
-          ),
-        ],
+        actions: showStickyActionBar
+            ? null
+            : [
+                IconButton(
+                  icon: Icon(isFavorite ? Icons.star : Icons.star_border),
+                  tooltip: isFavorite ? 'Remove favorite' : 'Add favorite',
+                  onPressed: onFavorite,
+                ),
+              ],
       ),
-      body: Container(
-        color: Colors.grey.shade50,
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 960),
-              child: SingleChildScrollView(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        border: Border.all(color: Colors.grey.shade300),
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            job.title,
-                            style: Theme.of(context).textTheme.headlineSmall,
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            job.company,
-                            style: Theme.of(context).textTheme.titleMedium,
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            '${job.location} • ${job.type}',
-                            style: TextStyle(color: Colors.grey.shade700),
-                          ),
-                          const SizedBox(height: 12),
-                          Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            children: [
-                              if (job.salaryRange != null)
-                                Chip(label: Text('Salary: ${job.salaryRange}')),
-                              if (job.deadlineDate != null)
-                                Chip(
-                                  label: Text(
-                                    'Deadline: ${job.deadlineDate!.year}-${job.deadlineDate!.month.toString().padLeft(2, '0')}-${job.deadlineDate!.day.toString().padLeft(2, '0')}',
+      body: SafeArea(
+        top: false,
+        child: Container(
+          color: Colors.grey.shade50,
+          child: Column(
+            children: [
+              Expanded(
+                child: Padding(
+                  padding: EdgeInsets.fromLTRB(
+                    16 + safeLeftInset,
+                    16,
+                    16 + safeRightInset,
+                    16,
+                  ),
+                  child: Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 960),
+                      child: SingleChildScrollView(
+                        padding: EdgeInsets.only(bottom: detailsBottomPadding),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          border: Border.all(color: Colors.grey.shade300),
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              job.title,
+                              style: Theme.of(context).textTheme.headlineSmall,
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              job.company,
+                              style: Theme.of(context).textTheme.titleMedium,
+                            ),
+                            const SizedBox(height: 4),
+                            TextButton.icon(
+                              onPressed: () => _openCompanyInfo(context),
+                              icon: const Icon(
+                                Icons.business_outlined,
+                                size: 18,
+                              ),
+                              label: const Text('View Company Info'),
+                              style: TextButton.styleFrom(
+                                padding: EdgeInsets.zero,
+                                minimumSize: const Size(0, 32),
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                alignment: Alignment.centerLeft,
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              '${job.location} • ${job.type}',
+                              style: TextStyle(color: Colors.grey.shade700),
+                            ),
+                            if (applicationDeadlineText != null) ...[
+                              const SizedBox(height: 12),
+                              Container(
+                                width: double.infinity,
+                                padding: const EdgeInsets.all(14),
+                                decoration: BoxDecoration(
+                                  color: Colors.orange.shade50,
+                                  border: Border.all(
+                                    color: Colors.orange.shade200,
                                   ),
+                                  borderRadius: BorderRadius.circular(12),
                                 ),
-                              Chip(
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Icon(
+                                      Icons.event_available,
+                                      color: Colors.orange.shade800,
+                                    ),
+                                    const SizedBox(width: 10),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            'Application Deadline',
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w700,
+                                              color: Colors.orange.shade900,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            applicationDeadlineText,
+                                            style: Theme.of(context)
+                                                .textTheme
+                                                .titleLarge
+                                                ?.copyWith(
+                                                  fontWeight: FontWeight.w700,
+                                                  color: Colors.orange.shade900,
+                                                ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                            const SizedBox(height: 12),
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: [
+                                if (job.salaryRange != null)
+                                  Chip(
+                                    label: Text('Salary: ${job.salaryRange}'),
+                                  ),
+                                Chip(label: Text(crewLabel)),
+                              ],
+                            ),
+                            if (timelineLabels.isNotEmpty) ...[
+                              const SizedBox(height: 10),
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                children: timelineLabels
+                                    .map(
+                                      (label) => Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 10,
+                                          vertical: 6,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: Colors.grey.shade100,
+                                          borderRadius: BorderRadius.circular(
+                                            999,
+                                          ),
+                                        ),
+                                        child: Text(
+                                          label,
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            color: Colors.grey.shade700,
+                                          ),
+                                        ),
+                                      ),
+                                    )
+                                    .toList(),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      _buildDetailSection(
+                        context: context,
+                        title: 'Job Description',
+                        icon: Icons.description_outlined,
+                        child: Text(
+                          job.description,
+                          style: Theme.of(context).textTheme.bodyLarge,
+                        ),
+                      ),
+                      if (job.benefits.isNotEmpty)
+                        _buildDetailSection(
+                          context: context,
+                          title: 'Benefits',
+                          icon: Icons.card_giftcard,
+                          child: _buildChipWrap(
+                            job.benefits
+                                .map((benefit) => Chip(label: Text(benefit)))
+                                .toList(),
+                          ),
+                        ),
+                      if (job.faaCertificates.isNotEmpty)
+                        _buildDetailSection(
+                          context: context,
+                          title: 'Required FAA Certificates',
+                          icon: Icons.badge_outlined,
+                          child: _buildChipWrap(
+                            job.faaCertificates
+                                .map(
+                                  (cert) => Chip(
+                                    label: Text(
+                                      canonicalCertificateLabel(cert),
+                                    ),
+                                  ),
+                                )
+                                .toList(),
+                          ),
+                        ),
+                      if (job.typeRatingsRequired.isNotEmpty)
+                        _buildDetailSection(
+                          context: context,
+                          title: 'Required Type Ratings',
+                          icon: Icons.confirmation_number_outlined,
+                          child: _buildChipWrap(
+                            job.typeRatingsRequired
+                                .map((rating) => Chip(label: Text(rating)))
+                                .toList(),
+                          ),
+                        ),
+                      if (job.faaRules.isNotEmpty)
+                        _buildDetailSection(
+                          context: context,
+                          title: 'FAA Rules',
+                          icon: Icons.rule,
+                          child: _buildChipWrap(
+                            job.faaRules
+                                .map((rule) => Chip(label: Text(rule)))
+                                .toList(),
+                          ),
+                        ),
+                      if (standardFlightHourEntries.isNotEmpty)
+                        _buildDetailSection(
+                          context: context,
+                          title: 'Flight Hours',
+                          icon: Icons.schedule_outlined,
+                          child: _buildChipWrap(
+                            standardFlightHourEntries
+                                .map(
+                                  (entry) => _buildRequirementChip(
+                                    label: _formatHoursRequirementLabel(
+                                      entry.key,
+                                      entry.value,
+                                      job.preferredFlightHours.contains(
+                                        entry.key,
+                                      ),
+                                    ),
+                                    isPreferred: job.preferredFlightHours
+                                        .contains(entry.key),
+                                  ),
+                                )
+                                .toList(),
+                          ),
+                        ),
+                      if (instructorHourEntries.isNotEmpty)
+                        _buildDetailSection(
+                          context: context,
+                          title: 'Instructor Hours',
+                          icon: Icons.school_outlined,
+                          child: _buildChipWrap(
+                            instructorHourEntries
+                                .map(
+                                  (entry) => _buildRequirementChip(
+                                    label: _formatHoursRequirementLabel(
+                                      entry.key,
+                                      entry.value,
+                                      job.preferredInstructorHours.contains(
+                                        entry.key,
+                                      ),
+                                    ),
+                                    isPreferred: job.preferredInstructorHours
+                                        .contains(entry.key),
+                                  ),
+                                )
+                                .toList(),
+                          ),
+                        ),
+                      if (job.specialtyHoursByType.isNotEmpty)
+                        _buildDetailSection(
+                          context: context,
+                          title: 'Specialty Hours',
+                          icon: Icons.workspace_premium_outlined,
+                          child: _buildChipWrap(
+                            job.specialtyHoursByType.entries
+                                .map(
+                                  (entry) => _buildRequirementChip(
+                                    label: _formatHoursRequirementLabel(
+                                      entry.key,
+                                      entry.value,
+                                      job.preferredSpecialtyHours.contains(
+                                        entry.key,
+                                      ),
+                                    ),
+                                    isPreferred: job.preferredSpecialtyHours
+                                        .contains(entry.key),
+                                  ),
+                                )
+                                .toList(),
+                          ),
+                        ),
+                      if (job.aircraftFlown.isNotEmpty)
+                        _buildDetailSection(
+                          context: context,
+                          title: 'Required Aircraft Experience',
+                          icon: Icons.flight_outlined,
+                          child: _buildChipWrap(
+                            job.aircraftFlown
+                                .map((aircraft) => Chip(label: Text(aircraft)))
+                                .toList(),
+                          ),
+                        ),
+                      if (profile != null) ...[
+                        const SizedBox(height: 24),
+                        const Divider(),
+                        const SizedBox(height: 16),
+                        _buildDetailSection(
+                          context: context,
+                          title: 'Your Match',
+                          icon: Icons.analytics_outlined,
+                          child: _buildComparisonView(context),
+                        ),
+                      ],
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              if (showStickyActionBar)
+                Container(
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).scaffoldBackgroundColor,
+                    border: Border(top: BorderSide(color: Colors.grey.shade300)),
+                  ),
+                  child: SafeArea(
+                    top: false,
+                    child: Padding(
+                      padding: EdgeInsets.fromLTRB(
+                        16 + safeLeftInset,
+                        10,
+                        16 + safeRightInset,
+                        10,
+                      ),
+                      child: Center(
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 960),
+                          child: Wrap(
+                            spacing: 10,
+                            runSpacing: 10,
+                            children: [
+                              ElevatedButton.icon(
+                                onPressed: onApply,
+                                icon: const Icon(Icons.send_outlined),
+                                label: const Text('Apply'),
+                              ),
+                              OutlinedButton.icon(
+                                onPressed: onShare,
+                                icon: const Icon(Icons.share_outlined),
+                                label: const Text('Share Listing'),
+                              ),
+                              OutlinedButton.icon(
+                                onPressed: onFavorite,
+                                icon: Icon(
+                                  isFavorite ? Icons.star : Icons.star_border,
+                                ),
                                 label: Text(
-                                  crewLabel ?? 'Multiple crew options',
+                                  isFavorite ? 'Favorited' : 'Favorite',
                                 ),
                               ),
                             ],
                           ),
-                        ],
+                        ),
                       ),
                     ),
-                    const SizedBox(height: 12),
-                    _buildDetailSection(
-                      context: context,
-                      title: 'Job Description',
-                      icon: Icons.description_outlined,
-                      child: Text(
-                        job.description,
-                        style: Theme.of(context).textTheme.bodyLarge,
-                      ),
-                    ),
-                    if (job.benefits.isNotEmpty)
-                      _buildDetailSection(
-                        context: context,
-                        title: 'Benefits',
-                        icon: Icons.card_giftcard,
-                        child: _buildChipWrap(
-                          job.benefits
-                              .map((benefit) => Chip(label: Text(benefit)))
-                              .toList(),
-                        ),
-                      ),
-                    if (job.id == 'test-all-criteria-job')
-                      _buildDetailSection(
-                        context: context,
-                        title: 'Position',
-                        icon: Icons.person_outline,
-                        child: _buildChipWrap(const [
-                          Chip(label: Text('Single Pilot')),
-                          Chip(label: Text('Crew Member - Captain')),
-                          Chip(label: Text('Crew Member - Co-Pilot')),
-                        ]),
-                      ),
-                    if (job.faaCertificates.isNotEmpty)
-                      _buildDetailSection(
-                        context: context,
-                        title: 'Required FAA Certificates',
-                        icon: Icons.badge_outlined,
-                        child: _buildChipWrap(
-                          job.faaCertificates
-                              .map(
-                                (cert) => Chip(
-                                  label: Text(canonicalCertificateLabel(cert)),
-                                ),
-                              )
-                              .toList(),
-                        ),
-                      ),
-                    if (job.typeRatingsRequired.isNotEmpty)
-                      _buildDetailSection(
-                        context: context,
-                        title: 'Required Type Ratings',
-                        icon: Icons.confirmation_number_outlined,
-                        child: _buildChipWrap(
-                          job.typeRatingsRequired
-                              .map((rating) => Chip(label: Text(rating)))
-                              .toList(),
-                        ),
-                      ),
-                    if (job.faaRules.isNotEmpty)
-                      _buildDetailSection(
-                        context: context,
-                        title: 'FAA Rules',
-                        icon: Icons.rule,
-                        child: _buildChipWrap(
-                          job.faaRules
-                              .map((rule) => Chip(label: Text(rule)))
-                              .toList(),
-                        ),
-                      ),
-                    if (standardFlightHourEntries.isNotEmpty)
-                      _buildDetailSection(
-                        context: context,
-                        title: 'Flight Hours',
-                        icon: Icons.schedule_outlined,
-                        child: _buildChipWrap(
-                          standardFlightHourEntries
-                              .map(
-                                (entry) => _buildRequirementChip(
-                                  label: _formatHoursRequirementLabel(
-                                    entry.key,
-                                    entry.value,
-                                    job.preferredFlightHours.contains(
-                                      entry.key,
-                                    ),
-                                  ),
-                                  isPreferred: job.preferredFlightHours
-                                      .contains(entry.key),
-                                ),
-                              )
-                              .toList(),
-                        ),
-                      ),
-                    if (instructorHourEntries.isNotEmpty)
-                      _buildDetailSection(
-                        context: context,
-                        title: 'Instructor Hours',
-                        icon: Icons.school_outlined,
-                        child: _buildChipWrap(
-                          instructorHourEntries
-                              .map(
-                                (entry) => _buildRequirementChip(
-                                  label: _formatHoursRequirementLabel(
-                                    entry.key,
-                                    entry.value,
-                                    job.preferredInstructorHours.contains(
-                                      entry.key,
-                                    ),
-                                  ),
-                                  isPreferred: job.preferredInstructorHours
-                                      .contains(entry.key),
-                                ),
-                              )
-                              .toList(),
-                        ),
-                      ),
-                    if (job.specialtyHoursByType.isNotEmpty)
-                      _buildDetailSection(
-                        context: context,
-                        title: 'Specialty Hours',
-                        icon: Icons.workspace_premium_outlined,
-                        child: _buildChipWrap(
-                          job.specialtyHoursByType.entries
-                              .map(
-                                (entry) => _buildRequirementChip(
-                                  label: _formatHoursRequirementLabel(
-                                    entry.key,
-                                    entry.value,
-                                    job.preferredSpecialtyHours.contains(
-                                      entry.key,
-                                    ),
-                                  ),
-                                  isPreferred: job.preferredSpecialtyHours
-                                      .contains(entry.key),
-                                ),
-                              )
-                              .toList(),
-                        ),
-                      ),
-                    if (job.aircraftFlown.isNotEmpty)
-                      _buildDetailSection(
-                        context: context,
-                        title: 'Required Aircraft Experience',
-                        icon: Icons.flight_outlined,
-                        child: _buildChipWrap(
-                          job.aircraftFlown
-                              .map((aircraft) => Chip(label: Text(aircraft)))
-                              .toList(),
-                        ),
-                      ),
-                    if (profile != null) ...[
-                      const SizedBox(height: 24),
-                      const Divider(),
-                      const SizedBox(height: 16),
-                      _buildDetailSection(
-                        context: context,
-                        title: 'Your Match',
-                        icon: Icons.analytics_outlined,
-                        child: _buildComparisonView(context),
-                      ),
-                    ],
-                  ],
+                  ),
                 ),
-              ),
-            ),
+            ],
           ),
         ),
       ),
@@ -5953,19 +8982,13 @@ class JobDetailsPage extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        Wrap(
+          spacing: 10,
+          runSpacing: 8,
+          crossAxisAlignment: WrapCrossAlignment.center,
           children: [
-            Text(
-              '$matchPercentage% Match',
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
             Chip(
-              label: Text(
-                isFullMatch
-                    ? 'Meets all required criteria'
-                    : 'Partial match - review required items',
-              ),
+              label: Text('$matchPercentage% Match'),
               backgroundColor: isFullMatch
                   ? Colors.green[100]
                   : Colors.orange[100],
@@ -5990,6 +9013,7 @@ class JobDetailsPage extends StatelessWidget {
             return Padding(
               padding: const EdgeInsets.only(left: 8, top: 4),
               child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Icon(
                     hasIt ? Icons.check_circle : Icons.cancel,
@@ -5997,11 +9021,14 @@ class JobDetailsPage extends StatelessWidget {
                     color: hasIt ? Colors.green : Colors.red,
                   ),
                   const SizedBox(width: 8),
-                  Text(
-                    hasIt ? certLabel : '$certLabel (Not yet met)',
-                    style: TextStyle(
-                      color: hasIt ? Colors.green : Colors.red,
-                      decoration: hasIt ? null : TextDecoration.lineThrough,
+                  Expanded(
+                    child: Text(
+                      certLabel,
+                      softWrap: true,
+                      style: TextStyle(
+                        color: hasIt ? Colors.green : Colors.red,
+                        decoration: hasIt ? null : TextDecoration.lineThrough,
+                      ),
                     ),
                   ),
                 ],
@@ -6112,5 +9139,378 @@ class JobDetailsPage extends StatelessWidget {
         );
       }),
     ];
+  }
+}
+
+class PublicCompanyInfoPage extends StatelessWidget {
+  final JobListing job;
+  final EmployerProfile? employerProfile;
+  final int openRoleCount;
+  final VoidCallback? onSeeAllListings;
+
+  const PublicCompanyInfoPage({
+    super.key,
+    required this.job,
+    this.employerProfile,
+    this.openRoleCount = 0,
+    this.onSeeAllListings,
+  });
+
+  String get _companyName {
+    final profileName = employerProfile?.companyName.trim() ?? '';
+    if (profileName.isNotEmpty) {
+      return profileName;
+    }
+    final companyName = job.company.trim();
+    return companyName.isNotEmpty ? companyName : 'Company';
+  }
+
+  String? get _headquartersLabel {
+    if (employerProfile == null) {
+      return null;
+    }
+
+    final parts = [
+      employerProfile!.headquartersCity.trim(),
+      employerProfile!.headquartersState.trim(),
+      employerProfile!.headquartersCountry.trim(),
+    ].where((part) => part.isNotEmpty).toList();
+
+    if (parts.isEmpty) {
+      return null;
+    }
+
+    return parts.join(' • ');
+  }
+
+  List<String> get _headquartersAddressLines {
+    if (employerProfile == null) {
+      return const [];
+    }
+
+    return [
+      employerProfile!.headquartersAddressLine1.trim(),
+      employerProfile!.headquartersAddressLine2.trim(),
+      employerProfile!.headquartersCity.trim(),
+      employerProfile!.headquartersState.trim(),
+      employerProfile!.headquartersPostalCode.trim(),
+      employerProfile!.headquartersCountry.trim(),
+    ].where((part) => part.isNotEmpty).toList();
+  }
+
+  String get _websiteValue => employerProfile?.website.trim() ?? '';
+
+  String get _contactNameValue => employerProfile?.contactName.trim() ?? '';
+
+  String get _contactEmailValue => employerProfile?.contactEmail.trim() ?? '';
+
+  String get _contactPhoneValue =>
+      _formatPhoneNumber(employerProfile?.contactPhone.trim() ?? '');
+
+  String get _descriptionValue =>
+      employerProfile?.companyDescription.trim() ?? '';
+
+  List<String> get _companyBenefits =>
+      employerProfile?.companyBenefits ?? const [];
+
+  Future<void> _openWebsite(BuildContext context) async {
+    final rawWebsite = _websiteValue;
+    if (rawWebsite.isEmpty) {
+      return;
+    }
+
+    final normalized =
+        rawWebsite.startsWith('http://') || rawWebsite.startsWith('https://')
+        ? rawWebsite
+        : 'https://$rawWebsite';
+    final uri = Uri.tryParse(normalized);
+    if (uri == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not open the company website.')),
+      );
+      return;
+    }
+
+    final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!launched && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not open the company website.')),
+      );
+    }
+  }
+
+  Widget _buildInfoCard({
+    required BuildContext context,
+    required String title,
+    required IconData icon,
+    required Widget child,
+  }) {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(top: 12),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: Colors.grey.shade300),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, size: 20, color: Colors.blueGrey.shade700),
+              const SizedBox(width: 8),
+              Text(
+                title,
+                style: Theme.of(
+                  context,
+                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          child,
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final headquartersLabel = _headquartersLabel;
+    final headquartersAddressLines = _headquartersAddressLines;
+    final websiteValue = _websiteValue;
+    final contactNameValue = _contactNameValue;
+    final contactEmailValue = _contactEmailValue;
+    final contactPhoneValue = _contactPhoneValue;
+    final descriptionValue = _descriptionValue;
+    final companyBenefits = _companyBenefits;
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('Company Info')),
+      body: Container(
+        color: Colors.grey.shade50,
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 920),
+              child: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(18),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        border: Border.all(color: Colors.grey.shade300),
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Container(
+                                width: 52,
+                                height: 52,
+                                decoration: BoxDecoration(
+                                  color: Colors.blueGrey.shade50,
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                                child: Icon(
+                                  Icons.business,
+                                  color: Colors.blueGrey.shade700,
+                                ),
+                              ),
+                              const SizedBox(width: 14),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      _companyName,
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .headlineSmall
+                                          ?.copyWith(
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                    ),
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      'Public-facing company information for applicants',
+                                      style: TextStyle(
+                                        color: Colors.grey.shade700,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              if (openRoleCount > 0)
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 8,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: Colors.blueGrey.shade50,
+                                    borderRadius: BorderRadius.circular(999),
+                                  ),
+                                  child: Text(
+                                    '$openRoleCount open role${openRoleCount == 1 ? '' : 's'}',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w700,
+                                      color: Colors.blueGrey.shade800,
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
+                          const SizedBox(height: 14),
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: [
+                              if (headquartersLabel != null)
+                                Chip(
+                                  avatar: const Icon(
+                                    Icons.location_on_outlined,
+                                    size: 18,
+                                  ),
+                                  label: Text(
+                                    'Headquarters: $headquartersLabel',
+                                  ),
+                                ),
+                              Chip(
+                                avatar: const Icon(
+                                  Icons.work_outline,
+                                  size: 18,
+                                ),
+                                label: Text('Current opening: ${job.title}'),
+                              ),
+                            ],
+                          ),
+                          if (websiteValue.isNotEmpty ||
+                              onSeeAllListings != null) ...[
+                            const SizedBox(height: 12),
+                            Wrap(
+                              spacing: 10,
+                              runSpacing: 10,
+                              children: [
+                                if (websiteValue.isNotEmpty)
+                                  OutlinedButton.icon(
+                                    onPressed: () => _openWebsite(context),
+                                    icon: const Icon(Icons.open_in_new),
+                                    label: const Text('Visit Company Website'),
+                                    style: OutlinedButton.styleFrom(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 14,
+                                        vertical: 10,
+                                      ),
+                                    ),
+                                  ),
+                                if (onSeeAllListings != null)
+                                  OutlinedButton.icon(
+                                    onPressed: onSeeAllListings,
+                                    icon: const Icon(Icons.list_alt_outlined),
+                                    label: const Text('See All Listings'),
+                                    style: OutlinedButton.styleFrom(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 14,
+                                        vertical: 10,
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                    if (descriptionValue.isNotEmpty)
+                      _buildInfoCard(
+                        context: context,
+                        title: 'About Company',
+                        icon: Icons.info_outline,
+                        child: Text(
+                          descriptionValue,
+                          style: Theme.of(context).textTheme.bodyLarge,
+                        ),
+                      ),
+                    if (companyBenefits.isNotEmpty)
+                      _buildInfoCard(
+                        context: context,
+                        title: 'What They Highlight',
+                        icon: Icons.workspace_premium_outlined,
+                        child: Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: companyBenefits
+                              .map((benefit) => Chip(label: Text(benefit)))
+                              .toList(),
+                        ),
+                      ),
+                    _buildInfoCard(
+                      context: context,
+                      title: 'Headquarters Address',
+                      icon: Icons.pin_drop_outlined,
+                      child: headquartersAddressLines.isNotEmpty
+                          ? Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: headquartersAddressLines
+                                  .map(
+                                    (line) => Padding(
+                                      padding: const EdgeInsets.only(bottom: 2),
+                                      child: Text(
+                                        line,
+                                        style: Theme.of(
+                                          context,
+                                        ).textTheme.bodyMedium,
+                                      ),
+                                    ),
+                                  )
+                                  .toList(),
+                            )
+                          : Text(
+                              'No headquarters address published yet.',
+                              style: Theme.of(context).textTheme.bodyMedium,
+                            ),
+                    ),
+                    _buildInfoCard(
+                      context: context,
+                      title: 'Company Contact',
+                      icon: Icons.contact_phone_outlined,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Contact Name: ${contactNameValue.isNotEmpty ? contactNameValue : 'Not provided'}',
+                            style: Theme.of(context).textTheme.bodyMedium,
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            'Contact Email: ${contactEmailValue.isNotEmpty ? contactEmailValue : 'Not provided'}',
+                            style: Theme.of(context).textTheme.bodyMedium,
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            'Contact Phone: ${contactPhoneValue.isNotEmpty ? contactPhoneValue : 'Not provided'}',
+                            style: Theme.of(context).textTheme.bodyMedium,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }

@@ -8,10 +8,19 @@ class SupabaseBootstrap {
     'SUPABASE_PUBLISHABLE_KEY',
   );
 
+  static String get _normalizedUrl {
+    final trimmed = _url.trim();
+    if (trimmed.contains('.supabase.com')) {
+      return trimmed.replaceFirst('.supabase.com', '.supabase.co');
+    }
+    return trimmed;
+  }
+
   static String get _clientKey =>
       _anonKey.isNotEmpty ? _anonKey : _publishableKey;
 
-  static bool get isConfigured => _url.isNotEmpty && _clientKey.isNotEmpty;
+  static bool get isConfigured =>
+      _normalizedUrl.isNotEmpty && _clientKey.isNotEmpty;
 
   static Future<void> initializeIfConfigured() async {
     if (!isConfigured) {
@@ -19,6 +28,6 @@ class SupabaseBootstrap {
     }
 
     WidgetsFlutterBinding.ensureInitialized();
-    await Supabase.initialize(url: _url, anonKey: _clientKey);
+    await Supabase.initialize(url: _normalizedUrl, anonKey: _clientKey);
   }
 }

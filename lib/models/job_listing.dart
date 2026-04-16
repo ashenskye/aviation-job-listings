@@ -31,6 +31,8 @@ class JobListing {
   final int? minimumHours;
   final List<String> benefits;
   final DateTime? deadlineDate;
+  final DateTime? createdAt;
+  final DateTime? updatedAt;
   final String? employerId;
 
   const JobListing({
@@ -58,6 +60,8 @@ class JobListing {
     this.minimumHours,
     this.benefits = const [],
     this.deadlineDate,
+    this.createdAt,
+    this.updatedAt,
     this.employerId,
   });
 
@@ -84,14 +88,13 @@ class JobListing {
         ? parsedInstructorHours
         : {
             for (final entry in rawFlightHours.entries)
-              if (_instructorHourKeys.contains(entry.key)) entry.key: entry.value,
+              if (_instructorHourKeys.contains(entry.key))
+                entry.key: entry.value,
           };
 
     final preferredInstructorHours = parsedPreferredInstructorHours.isNotEmpty
         ? parsedPreferredInstructorHours
-        : rawPreferredFlightHours
-              .where(_instructorHourKeys.contains)
-              .toList();
+        : rawPreferredFlightHours.where(_instructorHourKeys.contains).toList();
 
     final flightHours = {
       for (final entry in rawFlightHours.entries)
@@ -169,6 +172,12 @@ class JobListing {
       deadlineDate: json['deadlineDate'] != null
           ? DateTime.tryParse(json['deadlineDate'].toString())
           : null,
+      createdAt: json['createdAt'] != null
+          ? DateTime.tryParse(json['createdAt'].toString())
+          : null,
+      updatedAt: json['updatedAt'] != null
+          ? DateTime.tryParse(json['updatedAt'].toString())
+          : null,
       employerId: json['employerId']?.toString(),
     );
   }
@@ -198,6 +207,8 @@ class JobListing {
     'minimumHours': minimumHours,
     'benefits': benefits,
     'deadlineDate': deadlineDate?.toIso8601String(),
+    'createdAt': createdAt?.toIso8601String(),
+    'updatedAt': updatedAt?.toIso8601String(),
     'employerId': employerId,
   };
 

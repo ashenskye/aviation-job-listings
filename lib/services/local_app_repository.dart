@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/employer_profiles_data.dart';
 import '../models/job_listing.dart';
+import '../models/job_listing_template.dart';
 import '../models/job_load_result.dart';
 import '../models/job_seeker_profile.dart';
 import '../repositories/app_repository.dart';
@@ -13,6 +14,7 @@ class LocalAppRepository implements AppRepository {
   static const String _favoriteJobIdsKey = 'favorite_job_ids';
   static const String _jobSeekerProfileKey = 'job_seeker_profile';
   static const String _employerProfilesKey = 'employer_profiles';
+  static const String _jobTemplatesKey = 'job_templates';
 
   @override
   Future<Set<String>> loadFavoriteIds() async {
@@ -74,10 +76,41 @@ class LocalAppRepository implements AppRepository {
   }
 
   @override
+  Future<List<JobListingTemplate>> loadJobTemplates() async {
+    final prefs = await SharedPreferences.getInstance();
+    final stored = prefs.getString(_jobTemplatesKey);
+
+    if (stored == null) {
+      return const [];
+    }
+
+    try {
+      final decoded = jsonDecode(stored) as List<dynamic>;
+      return decoded
+          .map(
+            (entry) => JobListingTemplate.fromJson(
+              Map<String, dynamic>.from(entry as Map),
+            ),
+          )
+          .toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  @override
+  Future<void> saveJobTemplates(List<JobListingTemplate> templates) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _jobTemplatesKey,
+      jsonEncode(templates.map((template) => template.toJson()).toList()),
+    );
+  }
+
+  @override
   Future<JobLoadResult> loadJobs({
     required String backendUrl,
     required List<JobListing> fallbackJobs,
-    required JobListing testingJob,
   }) async {
     try {
       final uri = Uri.parse(backendUrl);
@@ -102,10 +135,10 @@ class LocalAppRepository implements AppRepository {
           .map((entry) => JobListing.fromJson(entry as Map<String, dynamic>))
           .toList();
 
-      return JobLoadResult(jobs: _withSyncedTestingJob(jobs, testingJob));
+      return JobLoadResult(jobs: jobs);
     } catch (_) {
       return JobLoadResult(
-        jobs: _withSyncedTestingJob(fallbackJobs, testingJob),
+        jobs: fallbackJobs,
         warningMessage:
             'Could not fetch from server. Showing example data instead.',
       );
@@ -124,12 +157,4 @@ class LocalAppRepository implements AppRepository {
 
   @override
   Future<void> deleteJob(JobListing job) async {}
-
-  List<JobListing> _withSyncedTestingJob(
-    List<JobListing> jobs,
-    JobListing testingJob,
-  ) {
-    final nonTestJobs = jobs.where((job) => job.id != testingJob.id).toList();
-    return [testingJob, ...nonTestJobs];
-  }
 }

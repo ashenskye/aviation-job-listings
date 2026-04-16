@@ -17,10 +17,13 @@ void main() {
     await tester.tap(find.text('Employer').last);
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('Create Listing'));
+    await tester.tap(find.text('Create New Listing'));
     await tester.pumpAndSettle();
 
-    await tester.enterText(find.widgetWithText(TextField, 'Title *'), 'Test Job');
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Title *'),
+      'Test Job',
+    );
     await tester.enterText(
       find.byKey(const ValueKey('create-starting-pay')),
       '65000',
@@ -29,21 +32,27 @@ void main() {
       find.byKey(const ValueKey('create-description')),
       'Test role description',
     );
-    await tester.ensureVisible(find.byKey(const ValueKey('create-employment-type')));
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('create-employment-type')),
+    );
     await tester.tap(
       find.byKey(const ValueKey('create-employment-type')).hitTestable(),
     );
     await tester.pumpAndSettle();
     await tester.tap(find.text('Contract').last);
     await tester.pumpAndSettle();
-    await tester.ensureVisible(find.byKey(const ValueKey('create-position-selection')));
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('create-position-selection')),
+    );
     await tester.tap(
       find.byKey(const ValueKey('create-position-selection')).hitTestable(),
     );
     await tester.pumpAndSettle();
     await tester.tap(find.text('Single Pilot').last);
     await tester.pumpAndSettle();
-    await tester.ensureVisible(find.byKey(const ValueKey('create-pay-rate-metric')));
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('create-pay-rate-metric')),
+    );
     await tester.tap(
       find.byKey(const ValueKey('create-pay-rate-metric')).hitTestable(),
     );
@@ -71,10 +80,13 @@ void main() {
     await tester.tap(find.text('Employer').last);
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('Create Listing'));
+    await tester.tap(find.text('Create New Listing'));
     await tester.pumpAndSettle();
 
-    await tester.enterText(find.widgetWithText(TextField, 'Title *'), 'ATP Role');
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Title *'),
+      'ATP Role',
+    );
     await tester.enterText(
       find.byKey(const ValueKey('create-starting-pay')),
       '70000',
@@ -83,21 +95,27 @@ void main() {
       find.byKey(const ValueKey('create-description')),
       'ATP role description',
     );
-    await tester.ensureVisible(find.byKey(const ValueKey('create-employment-type')));
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('create-employment-type')),
+    );
     await tester.tap(
       find.byKey(const ValueKey('create-employment-type')).hitTestable(),
     );
     await tester.pumpAndSettle();
     await tester.tap(find.text('Contract').last);
     await tester.pumpAndSettle();
-    await tester.ensureVisible(find.byKey(const ValueKey('create-position-selection')));
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('create-position-selection')),
+    );
     await tester.tap(
       find.byKey(const ValueKey('create-position-selection')).hitTestable(),
     );
     await tester.pumpAndSettle();
     await tester.tap(find.text('Single Pilot').last);
     await tester.pumpAndSettle();
-    await tester.ensureVisible(find.byKey(const ValueKey('create-pay-rate-metric')));
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('create-pay-rate-metric')),
+    );
     await tester.tap(
       find.byKey(const ValueKey('create-pay-rate-metric')).hitTestable(),
     );
@@ -113,7 +131,12 @@ void main() {
     expect(find.text('Private Pilot (PPL)'), findsOneWidget);
     expect(find.text('Flight Instructor (CFI)'), findsOneWidget);
 
-    await tester.tap(find.text('Airline Transport Pilot (ATP)').first);
+    await tester.ensureVisible(
+      find.text('Airline Transport Pilot (ATP)').first,
+    );
+    await tester.tap(
+      find.text('Airline Transport Pilot (ATP)').hitTestable().first,
+    );
     await tester.pumpAndSettle();
 
     expect(find.text('Commercial Pilot (CPL)'), findsNothing);
