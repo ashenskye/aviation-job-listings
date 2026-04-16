@@ -689,6 +689,7 @@ class _MyHomePageState extends State<MyHomePage> {
   // ============================================================================
 
   static const String _localJobSeekerId = 'local_seeker';
+  static const int _maxReapplyWindowDays = 365;
 
   List<Application> _myApplications = const [];
   List<Application> _employerApplications = const [];
@@ -4359,7 +4360,7 @@ class _MyHomePageState extends State<MyHomePage> {
       );
       if (existing != null) {
         final appliedLocal = existing.appliedAt.toLocal();
-        final nowLocal = DateTime.now().toLocal();
+        final nowLocal = DateTime.now();
         final daysSince = nowLocal.difference(appliedLocal).inDays;
         if (daysSince < job.reapplyWindowDays) {
           final appliedDateStr = _formatYmd(appliedLocal);
@@ -9223,8 +9224,8 @@ class _MyHomePageState extends State<MyHomePage> {
           ),
           if (_createAutoRejectEnabled) ...[
             Slider(
-              value: _createAutoRejectThreshold.toDouble(),
-              min: 0,
+              value: _createAutoRejectThreshold.toDouble().clamp(1.0, 100.0),
+              min: 1,
               max: 100,
               divisions: 20,
               label: '$_createAutoRejectThreshold%',
@@ -9266,7 +9267,9 @@ class _MyHomePageState extends State<MyHomePage> {
                   controller: _createReapplyWindowDaysController,
                   onChanged: (value) {
                     final parsed = int.tryParse(value.trim());
-                    if (parsed != null && parsed > 0 && parsed <= 365) {
+                    if (parsed != null &&
+                        parsed > 0 &&
+                        parsed <= _maxReapplyWindowDays) {
                       setState(() {
                         _createReapplyWindowDays = parsed;
                       });
