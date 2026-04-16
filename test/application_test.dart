@@ -85,6 +85,10 @@ void main() {
         jobSeekerId: 'seeker42',
         jobId: 'job99',
         employerId: 'emp7',
+        applicantFlightHours: const {'PIC Jet': 1000, 'Cross Country': 250},
+        applicantFlightHoursTypes: const ['PIC Jet', 'Cross Country'],
+        applicantSpecialtyFlightHours: const ['Night Vision Goggles'],
+        applicantSpecialtyFlightHoursMap: const {'Night Vision Goggles': 80},
         status: 'reviewed',
         matchPercentage: 75,
         coverLetter: 'Hello, I am interested.',
@@ -104,9 +108,35 @@ void main() {
       expect(restored.coverLetter, original.coverLetter);
       expect(restored.appliedAt, original.appliedAt);
       expect(restored.updatedAt, original.updatedAt);
+      expect(restored.applicantFlightHours, original.applicantFlightHours);
+      expect(
+        restored.applicantFlightHoursTypes,
+        original.applicantFlightHoursTypes,
+      );
+      expect(
+        restored.applicantSpecialtyFlightHours,
+        original.applicantSpecialtyFlightHours,
+      );
+      expect(
+        restored.applicantSpecialtyFlightHoursMap,
+        original.applicantSpecialtyFlightHoursMap,
+      );
       expect(json['job_seeker_id'], original.jobSeekerId);
       expect(json['job_listing_id'], original.jobId);
       expect(json['employer_id'], original.employerId);
+      expect(json['applicant_flight_hours'], original.applicantFlightHours);
+      expect(
+        json['applicant_flight_hours_types'],
+        original.applicantFlightHoursTypes,
+      );
+      expect(
+        json['applicant_specialty_flight_hours'],
+        original.applicantSpecialtyFlightHours,
+      );
+      expect(
+        json['applicant_specialty_flight_hours_map'],
+        original.applicantSpecialtyFlightHoursMap,
+      );
       expect(json['cover_letter'], original.coverLetter);
       expect(json['applied_at'], original.appliedAt.toIso8601String());
       expect(json['updated_at'], original.updatedAt.toIso8601String());

@@ -13,6 +13,10 @@ class Application {
   final List<String> applicantFaaCertificates;
   final List<String> applicantTypeRatings;
   final List<String> applicantAircraftFlown;
+  final Map<String, int> applicantFlightHours;
+  final List<String> applicantFlightHoursTypes;
+  final List<String> applicantSpecialtyFlightHours;
+  final Map<String, int> applicantSpecialtyFlightHoursMap;
   final String status; // 'applied', 'reviewed', 'rejected', 'interested'
   final int matchPercentage;
   final String coverLetter;
@@ -39,6 +43,10 @@ class Application {
     List<String>? applicantFaaCertificates,
     List<String>? applicantTypeRatings,
     List<String>? applicantAircraftFlown,
+    Map<String, int>? applicantFlightHours,
+    List<String>? applicantFlightHoursTypes,
+    List<String>? applicantSpecialtyFlightHours,
+    Map<String, int>? applicantSpecialtyFlightHoursMap,
     required this.status,
     required this.matchPercentage,
     required this.coverLetter,
@@ -52,7 +60,13 @@ class Application {
        applicantCountry = applicantCountry ?? '',
        applicantFaaCertificates = applicantFaaCertificates ?? const [],
        applicantTypeRatings = applicantTypeRatings ?? const [],
-       applicantAircraftFlown = applicantAircraftFlown ?? const [];
+         applicantAircraftFlown = applicantAircraftFlown ?? const [],
+         applicantFlightHours = applicantFlightHours ?? const {},
+         applicantFlightHoursTypes = applicantFlightHoursTypes ?? const [],
+         applicantSpecialtyFlightHours = applicantSpecialtyFlightHours ?? const [],
+         applicantSpecialtyFlightHoursMap =
+           applicantSpecialtyFlightHoursMap ??
+           const {};
 
   bool get isPerfectMatch => matchPercentage >= 90;
   bool get isGoodMatch => matchPercentage >= 70 && matchPercentage < 90;
@@ -135,6 +149,28 @@ class Application {
               ?.map((item) => item.toString())
               .toList() ??
           const [],
+        applicantFlightHours: Map<String, int>.from(
+        (json['applicant_flight_hours'] as Map<String, dynamic>?) ??
+          (json['applicantFlightHours'] as Map<String, dynamic>?) ??
+          const {},
+        ),
+        applicantFlightHoursTypes:
+          ((json['applicant_flight_hours_types'] as List<dynamic>?) ??
+              (json['applicantFlightHoursTypes'] as List<dynamic>?))
+            ?.map((item) => item.toString())
+            .toList() ??
+          const [],
+        applicantSpecialtyFlightHours:
+          ((json['applicant_specialty_flight_hours'] as List<dynamic>?) ??
+              (json['applicantSpecialtyFlightHours'] as List<dynamic>?))
+            ?.map((item) => item.toString())
+            .toList() ??
+          const [],
+        applicantSpecialtyFlightHoursMap: Map<String, int>.from(
+        (json['applicant_specialty_flight_hours_map'] as Map<String, dynamic>?) ??
+          (json['applicantSpecialtyFlightHoursMap'] as Map<String, dynamic>?) ??
+          const {},
+        ),
       status: normalizeStatus(json['status']?.toString() ?? statusApplied),
       matchPercentage: (json['matchPercentage'] as num?)?.toInt() ?? 0,
       coverLetter:
@@ -169,6 +205,10 @@ class Application {
     'applicant_faa_certificates': applicantFaaCertificates,
     'applicant_type_ratings': applicantTypeRatings,
     'applicant_aircraft_flown': applicantAircraftFlown,
+    'applicant_flight_hours': applicantFlightHours,
+    'applicant_flight_hours_types': applicantFlightHoursTypes,
+    'applicant_specialty_flight_hours': applicantSpecialtyFlightHours,
+    'applicant_specialty_flight_hours_map': applicantSpecialtyFlightHoursMap,
     'status': normalizeStatus(status),
     'matchPercentage': matchPercentage,
     'cover_letter': coverLetter,
@@ -189,6 +229,10 @@ class Application {
     List<String>? applicantFaaCertificates,
     List<String>? applicantTypeRatings,
     List<String>? applicantAircraftFlown,
+    Map<String, int>? applicantFlightHours,
+    List<String>? applicantFlightHoursTypes,
+    List<String>? applicantSpecialtyFlightHours,
+    Map<String, int>? applicantSpecialtyFlightHoursMap,
   }) {
     return Application(
       id: id,
@@ -209,6 +253,14 @@ class Application {
       applicantTypeRatings: applicantTypeRatings ?? this.applicantTypeRatings,
       applicantAircraftFlown:
           applicantAircraftFlown ?? this.applicantAircraftFlown,
+        applicantFlightHours: applicantFlightHours ?? this.applicantFlightHours,
+        applicantFlightHoursTypes:
+          applicantFlightHoursTypes ?? this.applicantFlightHoursTypes,
+        applicantSpecialtyFlightHours:
+          applicantSpecialtyFlightHours ?? this.applicantSpecialtyFlightHours,
+        applicantSpecialtyFlightHoursMap:
+          applicantSpecialtyFlightHoursMap ??
+          this.applicantSpecialtyFlightHoursMap,
       status: normalizeStatus(status ?? this.status),
       matchPercentage: matchPercentage,
       coverLetter: coverLetter,

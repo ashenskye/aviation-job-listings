@@ -688,7 +688,7 @@ class _MyHomePageState extends State<MyHomePage> {
   // APPLICATION STATE: Job seeker applications
   // ============================================================================
 
-  static const String _localJobSeekerId = 'local_seeker';
+  static const String _legacyLocalJobSeekerId = 'local_seeker';
   static const int _maxReapplyWindowDays = 365;
 
   List<Application> _myApplications = const [];
@@ -706,6 +706,49 @@ class _MyHomePageState extends State<MyHomePage> {
 
   String _generateFeedbackId() =>
       'fb_${DateTime.now().millisecondsSinceEpoch}';
+
+  String _currentJobSeekerId() {
+    if (SupabaseBootstrap.isConfigured) {
+      final userId = Supabase.instance.client.auth.currentUser?.id.trim() ?? '';
+      if (userId.isNotEmpty) {
+        return 'seeker_$userId';
+      }
+    }
+    return _legacyLocalJobSeekerId;
+  }
+
+  List<String> _jobSeekerIdsForLoad() {
+    final currentId = _currentJobSeekerId();
+    if (currentId == _legacyLocalJobSeekerId) {
+      return [currentId];
+    }
+    return [currentId, _legacyLocalJobSeekerId];
+  }
+
+  Future<List<Application>> _loadApplicationsForCurrentSeeker() async {
+    final appsById = <String, Application>{};
+
+    for (final seekerId in _jobSeekerIdsForLoad()) {
+      final seekerApps = await _appRepository.getApplicationsBySeeker(seekerId);
+      for (final app in seekerApps) {
+        final existing = appsById[app.id];
+        if (existing == null || app.updatedAt.isAfter(existing.updatedAt)) {
+          appsById[app.id] = app;
+        }
+      }
+    }
+
+    return appsById.values.toList();
+  }
+
+  Future<Application?> _getLatestApplicationForCurrentSeeker(String jobId) async {
+    final apps = await _loadApplicationsForCurrentSeeker();
+    final matching = apps
+        .where((app) => app.jobId == jobId)
+        .toList()
+      ..sort((a, b) => b.appliedAt.compareTo(a.appliedAt));
+    return matching.isEmpty ? null : matching.first;
+  }
 
   ApplicationFeedback? _getFeedbackForApplication(String applicationId) {
     try {
@@ -4232,14 +4275,22 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   void _toggleFavorite(JobListing job) {
+    final wasFavorite = _favoriteIds.contains(job.id);
+
     setState(() {
-      if (_favoriteIds.contains(job.id)) {
+      if (wasFavorite) {
         _favoriteIds.remove(job.id);
       } else {
         _favoriteIds.add(job.id);
       }
     });
     _saveFavorites();
+
+    if (!wasFavorite && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${job.title} added to favorites.')),
+      );
+    }
   }
 
   bool _jobMatchesEmployerProfile(JobListing job, EmployerProfile profile) {
@@ -4317,9 +4368,7 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Future<void> _loadMyApplications() async {
-    final apps = await _appRepository.getApplicationsBySeeker(
-      _localJobSeekerId,
-    );
+    final apps = await _loadApplicationsForCurrentSeeker();
     if (!mounted) {
       return;
     }
@@ -4333,12 +4382,54 @@ class _MyHomePageState extends State<MyHomePage> {
     final apps = await _appRepository.loadApplicationsForEmployer(
       _currentEmployer.id,
     );
+    final normalizedApps = await _applyEmployerAutoRejectThresholds(apps);
     if (!mounted) {
       return;
     }
     setState(() {
-      _employerApplications = apps;
+      _employerApplications = normalizedApps;
     });
+  }
+
+  Future<List<Application>> _applyEmployerAutoRejectThresholds(
+    List<Application> apps,
+  ) async {
+    final jobsById = {for (final job in _allJobs) job.id: job};
+    final updatedApps = <Application>[];
+    var hasUpdates = false;
+
+    for (final app in apps) {
+      final job = jobsById[app.jobId];
+      final threshold = job?.autoRejectThreshold ?? 0;
+      final shouldAutoReject =
+          app.status == Application.statusApplied &&
+          threshold > 0 &&
+          app.matchPercentage < threshold;
+
+      if (!shouldAutoReject) {
+        updatedApps.add(app);
+        continue;
+      }
+
+      await _appRepository.updateApplicationStatus(
+        app.id,
+        Application.statusRejected,
+      );
+
+      updatedApps.add(
+        app.copyWith(
+          status: Application.statusRejected,
+          updatedAt: DateTime.now(),
+        ),
+      );
+      hasUpdates = true;
+    }
+
+    if (hasUpdates) {
+      await _loadMyApplications();
+    }
+
+    return updatedApps;
   }
 
   Future<void> _loadAllFeedback() async {
@@ -4354,10 +4445,7 @@ class _MyHomePageState extends State<MyHomePage> {
   Future<void> _applyToJob(JobListing job, {String? coverLetter}) async {
     if (_hasApplied(job.id)) {
       // Check reapply window
-      final existing = await _appRepository.getLatestApplicationForJob(
-        _localJobSeekerId,
-        job.id,
-      );
+      final existing = await _getLatestApplicationForCurrentSeeker(job.id);
       if (existing != null) {
         final appliedLocal = existing.appliedAt.toLocal();
         final nowLocal = DateTime.now();
@@ -4409,7 +4497,7 @@ class _MyHomePageState extends State<MyHomePage> {
 
       final application = Application(
         id: _generateApplicationId(),
-        jobSeekerId: _localJobSeekerId,
+        jobSeekerId: _currentJobSeekerId(),
         jobId: job.id,
         employerId: job.employerId ?? '',
         applicantName: applicantName,
@@ -4425,6 +4513,16 @@ class _MyHomePageState extends State<MyHomePage> {
         applicantTypeRatings: List<String>.from(_jobSeekerProfile.typeRatings),
         applicantAircraftFlown: List<String>.from(
           _jobSeekerProfile.aircraftFlown,
+        ),
+        applicantFlightHours: Map<String, int>.from(_jobSeekerProfile.flightHours),
+        applicantFlightHoursTypes: List<String>.from(
+          _jobSeekerProfile.flightHoursTypes,
+        ),
+        applicantSpecialtyFlightHours: List<String>.from(
+          _jobSeekerProfile.specialtyFlightHours,
+        ),
+        applicantSpecialtyFlightHoursMap: Map<String, int>.from(
+          _jobSeekerProfile.specialtyFlightHoursMap,
         ),
         status: initialStatus,
         matchPercentage: match.matchPercentage,
@@ -4538,6 +4636,234 @@ class _MyHomePageState extends State<MyHomePage> {
       app.applicantCountry.trim(),
     ].where((part) => part.isNotEmpty).toList();
     return parts.isEmpty ? 'Not provided' : parts.join(' • ');
+  }
+
+  String _normalizeRequirementToken(String value) {
+    return value.trim().toLowerCase();
+  }
+
+  List<String> _metRequirementsForApplicant(Application app, JobListing job) {
+    final met = <String>[];
+
+    final applicantCertificates = <String>{
+      for (final cert in app.applicantFaaCertificates)
+        ...expandedCertificateQualifications(cert),
+    };
+    for (final cert in job.faaCertificates) {
+      final normalized = normalizeCertificateName(cert);
+      if (applicantCertificates.contains(normalized)) {
+        met.add('Cert: ${canonicalCertificateLabel(cert)}');
+      }
+    }
+
+    final applicantTypeRatings = {
+      for (final rating in app.applicantTypeRatings)
+        _normalizeRequirementToken(rating),
+    };
+    for (final rating in job.typeRatingsRequired) {
+      if (applicantTypeRatings.contains(_normalizeRequirementToken(rating))) {
+        met.add('Type Rating: ${rating.trim()}');
+      }
+    }
+
+    final applicantAircraft = {
+      for (final aircraft in app.applicantAircraftFlown)
+        _normalizeRequirementToken(aircraft),
+    };
+    for (final aircraft in job.aircraftFlown) {
+      if (applicantAircraft.contains(_normalizeRequirementToken(aircraft))) {
+        met.add('Aircraft: ${aircraft.trim()}');
+      }
+    }
+
+    final minimumHours = job.minimumHours;
+    if (minimumHours != null && minimumHours > 0) {
+      if (app.applicantTotalFlightHours >= minimumHours) {
+        met.add('Total Hours: ${app.applicantTotalFlightHours} / $minimumHours');
+      }
+    }
+
+    for (final requirement in job.flightHoursByType.entries) {
+      final isPreferred = job.preferredFlightHours.contains(requirement.key);
+      if (isPreferred) {
+        continue;
+      }
+
+      final profileHours = app.applicantFlightHours[requirement.key] ?? 0;
+      final hasRequirement =
+          app.applicantFlightHoursTypes.contains(requirement.key) &&
+          profileHours >= requirement.value;
+
+      if (hasRequirement) {
+        met.add(
+          _formatHoursRequirementLabel(
+            requirement.key,
+            requirement.value,
+            false,
+          ),
+        );
+      }
+    }
+
+    for (final requirement in job.instructorHoursByType.entries) {
+      final isPreferred = job.preferredInstructorHours.contains(requirement.key);
+      if (isPreferred) {
+        continue;
+      }
+
+      final profileHours = app.applicantFlightHours[requirement.key] ?? 0;
+      final hasRequirement =
+          app.applicantFlightHoursTypes.contains(requirement.key) &&
+          profileHours >= requirement.value;
+
+      if (hasRequirement) {
+        met.add(
+          _formatHoursRequirementLabel(
+            requirement.key,
+            requirement.value,
+            false,
+          ),
+        );
+      }
+    }
+
+    for (final requirement in job.specialtyHoursByType.entries) {
+      final isPreferred = job.preferredSpecialtyHours.contains(requirement.key);
+      if (isPreferred) {
+        continue;
+      }
+
+      final profileHours =
+          app.applicantSpecialtyFlightHoursMap[requirement.key] ?? 0;
+      final hasRequirement =
+          app.applicantSpecialtyFlightHours.contains(requirement.key) &&
+          profileHours >= requirement.value;
+
+      if (hasRequirement) {
+        met.add(
+          _formatHoursRequirementLabel(
+            requirement.key,
+            requirement.value,
+            false,
+          ),
+        );
+      }
+    }
+
+    return met;
+  }
+
+  List<String> _lackingRequirementsForApplicant(Application app, JobListing job) {
+    final lacking = <String>[];
+
+    final applicantCertificates = <String>{
+      for (final cert in app.applicantFaaCertificates)
+        ...expandedCertificateQualifications(cert),
+    };
+    for (final cert in job.faaCertificates) {
+      final normalized = normalizeCertificateName(cert);
+      if (!applicantCertificates.contains(normalized)) {
+        lacking.add('Cert: ${canonicalCertificateLabel(cert)}');
+      }
+    }
+
+    final applicantTypeRatings = {
+      for (final rating in app.applicantTypeRatings)
+        _normalizeRequirementToken(rating),
+    };
+    for (final rating in job.typeRatingsRequired) {
+      if (!applicantTypeRatings.contains(_normalizeRequirementToken(rating))) {
+        lacking.add('Type Rating: ${rating.trim()}');
+      }
+    }
+
+    final applicantAircraft = {
+      for (final aircraft in app.applicantAircraftFlown)
+        _normalizeRequirementToken(aircraft),
+    };
+    for (final aircraft in job.aircraftFlown) {
+      if (!applicantAircraft.contains(_normalizeRequirementToken(aircraft))) {
+        lacking.add('Aircraft: ${aircraft.trim()}');
+      }
+    }
+
+    final minimumHours = job.minimumHours;
+    if (minimumHours != null && minimumHours > 0) {
+      if (app.applicantTotalFlightHours < minimumHours) {
+        lacking.add(
+          'Total Hours: ${app.applicantTotalFlightHours} / $minimumHours',
+        );
+      }
+    }
+
+    for (final requirement in job.flightHoursByType.entries) {
+      final isPreferred = job.preferredFlightHours.contains(requirement.key);
+      if (isPreferred) {
+        continue;
+      }
+
+      final profileHours = app.applicantFlightHours[requirement.key] ?? 0;
+      final hasRequirement =
+          app.applicantFlightHoursTypes.contains(requirement.key) &&
+          profileHours >= requirement.value;
+
+      if (!hasRequirement) {
+        lacking.add(
+          _formatHoursRequirementMissing(
+            'Flight Hours',
+            requirement.key,
+            requirement.value,
+          ),
+        );
+      }
+    }
+
+    for (final requirement in job.instructorHoursByType.entries) {
+      final isPreferred = job.preferredInstructorHours.contains(requirement.key);
+      if (isPreferred) {
+        continue;
+      }
+
+      final profileHours = app.applicantFlightHours[requirement.key] ?? 0;
+      final hasRequirement =
+          app.applicantFlightHoursTypes.contains(requirement.key) &&
+          profileHours >= requirement.value;
+
+      if (!hasRequirement) {
+        lacking.add(
+          _formatHoursRequirementMissing(
+            'Instructor Hours',
+            requirement.key,
+            requirement.value,
+          ),
+        );
+      }
+    }
+
+    for (final requirement in job.specialtyHoursByType.entries) {
+      final isPreferred = job.preferredSpecialtyHours.contains(requirement.key);
+      if (isPreferred) {
+        continue;
+      }
+
+      final profileHours =
+          app.applicantSpecialtyFlightHoursMap[requirement.key] ?? 0;
+      final hasRequirement =
+          app.applicantSpecialtyFlightHours.contains(requirement.key) &&
+          profileHours >= requirement.value;
+
+      if (!hasRequirement) {
+        lacking.add(
+          _formatHoursRequirementMissing(
+            'Specialty Hours',
+            requirement.key,
+            requirement.value,
+          ),
+        );
+      }
+    }
+
+    return lacking;
   }
 
   Future<void> _sendApplicationFeedback(
@@ -7444,6 +7770,8 @@ class _MyHomePageState extends State<MyHomePage> {
             app.status == 'rejected' &&
             hasFeedback &&
             appFeedback.isAutoGenerated;
+        final metRequirements = _metRequirementsForApplicant(app, job);
+        final lackingRequirements = _lackingRequirementsForApplicant(app, job);
 
         return Card(
           margin: const EdgeInsets.symmetric(vertical: 8),
@@ -7547,6 +7875,74 @@ class _MyHomePageState extends State<MyHomePage> {
                       Text(
                         'Total Flight Hours: ${app.applicantTotalFlightHours}',
                       ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Requirements Met',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          color: Colors.green.shade800,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      if (metRequirements.isEmpty)
+                        Text(
+                          'No required items currently marked as met.',
+                          style: TextStyle(
+                            color: Colors.green.shade900,
+                            fontSize: 12,
+                          ),
+                        )
+                      else
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 6,
+                          children: metRequirements
+                              .take(8)
+                              .map(
+                                (item) => Chip(
+                                  label: Text(item),
+                                  backgroundColor: Colors.green.shade50,
+                                  side: BorderSide(
+                                    color: Colors.green.shade200,
+                                  ),
+                                ),
+                              )
+                              .toList(),
+                        ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Requirements Lacking',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          color: Colors.red.shade800,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      if (lackingRequirements.isEmpty)
+                        Text(
+                          'No required gaps detected in the snapshot.',
+                          style: TextStyle(
+                            color: Colors.green.shade900,
+                            fontSize: 12,
+                          ),
+                        )
+                      else
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 6,
+                          children: lackingRequirements
+                              .take(8)
+                              .map(
+                                (item) => Chip(
+                                  label: Text(item),
+                                  backgroundColor: Colors.red.shade50,
+                                  side: BorderSide(
+                                    color: Colors.red.shade200,
+                                  ),
+                                ),
+                              )
+                              .toList(),
+                        ),
                       if (app.applicantFaaCertificates.isNotEmpty) ...[
                         const SizedBox(height: 8),
                         Wrap(
@@ -9938,7 +10334,6 @@ class JobDetailsPage extends StatelessWidget {
     final applicationDeadlineText = job.deadlineDate != null
         ? _formatYmd(job.deadlineDate!.toLocal())
         : null;
-    final showStickyActionBar = profile != null;
     final detailsBottomPadding = 24.0;
     final crewLabel = job.crewRole.toLowerCase() == 'crew'
         ? (job.crewPosition != null && job.crewPosition!.trim().isNotEmpty
@@ -9949,15 +10344,6 @@ class JobDetailsPage extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         title: Text(job.title),
-        actions: showStickyActionBar
-            ? null
-            : [
-                IconButton(
-                  icon: Icon(isFavorite ? Icons.star : Icons.star_border),
-                  tooltip: isFavorite ? 'Remove favorite' : 'Add favorite',
-                  onPressed: onFavorite,
-                ),
-              ],
       ),
       body: SafeArea(
         top: false,
@@ -10275,7 +10661,7 @@ class JobDetailsPage extends StatelessWidget {
                   ),
                 ),
               ),
-              if (showStickyActionBar)
+              if (profile != null)
                 Container(
                   decoration: BoxDecoration(
                     color: Theme.of(context).scaffoldBackgroundColor,
