@@ -4354,8 +4354,7 @@ class _MyHomePageState extends State<MyHomePage> {
     final bodyText = match.missingRequirements.isEmpty
         ? 'Add an optional cover letter.'
         : 'Missing: ${match.missingRequirements.take(3).join(', ')}'
-            '${match.missingRequirements.length > 3 ? '…' : ''}.';
-
+            '${match.missingRequirements.length > 3 ? '...' : ''}.';
     final submitted = await showDialog<String?>(
       context: context,
       builder: (dialogContext) => AlertDialog(
