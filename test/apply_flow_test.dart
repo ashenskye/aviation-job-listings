@@ -109,8 +109,17 @@ void main() {
 
       expect(find.text('E2E Apply Role'), findsOneWidget);
 
+      // For an empty profile, the match is <70% (stretch), so tapping Apply
+      // opens the "Apply Anyway" quick-apply dialog.
       await tester.tap(find.byTooltip('Apply').hitTestable().first);
-      await tester.pump();
+      await tester.pumpAndSettle();
+
+      // The quick apply dialog should now be visible.
+      expect(find.text('Apply Anyway'), findsWidgets);
+
+      // Submit the dialog.
+      await tester.tap(find.text('Submit Application').hitTestable());
+      await tester.pumpAndSettle();
 
       expect(find.byType(SnackBar), findsOneWidget);
     },

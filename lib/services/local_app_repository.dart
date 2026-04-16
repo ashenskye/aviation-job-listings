@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../models/application.dart';
 import '../models/employer_profiles_data.dart';
 import '../models/job_listing.dart';
 import '../models/job_listing_template.dart';
@@ -15,6 +16,7 @@ class LocalAppRepository implements AppRepository {
   static const String _jobSeekerProfileKey = 'job_seeker_profile';
   static const String _employerProfilesKey = 'employer_profiles';
   static const String _jobTemplatesKey = 'job_templates';
+  static const String _applicationsKey = 'job_applications';
 
   @override
   Future<Set<String>> loadFavoriteIds() async {
@@ -157,4 +159,59 @@ class LocalAppRepository implements AppRepository {
 
   @override
   Future<void> deleteJob(JobListing job) async {}
+
+  @override
+  Future<void> saveApplication(Application app) async {
+    final prefs = await SharedPreferences.getInstance();
+    final stored = prefs.getString(_applicationsKey);
+    final List<Map<String, dynamic>> applications;
+
+    if (stored == null) {
+      applications = [];
+    } else {
+      try {
+        final decoded = jsonDecode(stored) as List<dynamic>;
+        applications = decoded
+            .map((e) => Map<String, dynamic>.from(e as Map))
+            .toList();
+      } catch (_) {
+        applications = [];
+      }
+    }
+
+    final index = applications.indexWhere((e) => e['id'] == app.id);
+    if (index >= 0) {
+      applications[index] = app.toJson();
+    } else {
+      applications.add(app.toJson());
+    }
+
+    await prefs.setString(_applicationsKey, jsonEncode(applications));
+  }
+
+  @override
+  Future<List<Application>> getApplicationsBySeeker(String seekerId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final stored = prefs.getString(_applicationsKey);
+
+    if (stored == null) {
+      return const [];
+    }
+
+    try {
+      final decoded = jsonDecode(stored) as List<dynamic>;
+      return decoded
+          .map((e) => Application.fromJson(Map<String, dynamic>.from(e as Map)))
+          .where((app) => app.jobSeekerId == seekerId)
+          .toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  @override
+  Future<bool> hasApplied(String seekerId, String jobId) async {
+    final apps = await getApplicationsBySeeker(seekerId);
+    return apps.any((app) => app.jobId == jobId);
+  }
 }

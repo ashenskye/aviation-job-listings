@@ -1,3 +1,4 @@
+import '../models/application.dart';
 import '../models/employer_profile.dart';
 import '../models/employer_profiles_data.dart';
 import '../models/job_listing.dart';
@@ -316,6 +317,21 @@ class SupabaseAppRepository implements AppRepository {
         'Job listing could not be deleted. It may already be gone or belong to a different company.',
       );
     }
+  }
+
+  @override
+  Future<void> saveApplication(Application app) async {
+    await localFallback.saveApplication(app);
+  }
+
+  @override
+  Future<List<Application>> getApplicationsBySeeker(String seekerId) async {
+    return localFallback.getApplicationsBySeeker(seekerId);
+  }
+
+  @override
+  Future<bool> hasApplied(String seekerId, String jobId) async {
+    return localFallback.hasApplied(seekerId, jobId);
   }
 
   Map<String, dynamic> _toJobListingRow(JobListing job) {
