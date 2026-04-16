@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:aviation_job_listings/main.dart';
+import 'package:aviation_job_listings/models/job_listing.dart';
 
 import 'helpers/fake_app_repository.dart';
 
@@ -122,6 +123,63 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byType(SnackBar), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'job details apply flow adds item to My Applications with Submitted status',
+    (WidgetTester tester) async {
+      final repository = FakeAppRepository();
+      await repository.createJob(
+        const JobListing(
+          id: 'job-details-apply',
+          title: 'Details Apply Role',
+          company: 'SkyBridge Air',
+          location: 'Denver, CO',
+          type: 'Full-Time',
+          crewRole: 'Single Pilot',
+          faaRules: ['Part 91'],
+          description: 'Open role used to verify job details apply flow.',
+          faaCertificates: ['Airline Transport Pilot (ATP)'],
+          flightExperience: ['Total Time'],
+          flightHours: {'Total Time': 1500},
+          aircraftFlown: ['Pilatus PC-12'],
+          employerId: 'emp-skybridge',
+        ),
+      );
+
+      await tester.pumpWidget(MyApp(repository: repository));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Details Apply Role'), findsOneWidget);
+
+      await tester.tap(find.text('Details Apply Role').first);
+      await tester.pumpAndSettle();
+
+      expect(find.text('Share Listing'), findsOneWidget);
+      expect(find.text('Apply Anyway'), findsOneWidget);
+
+      await tester.tap(find.text('Apply Anyway').hitTestable());
+      await tester.pumpAndSettle();
+
+      expect(find.text('Apply Anyway'), findsWidgets);
+      await tester.tap(find.text('Submit Application').hitTestable());
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text('Applied! Employer will see your profile.'),
+        findsOneWidget,
+      );
+
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('My Applications'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Details Apply Role'), findsOneWidget);
+      expect(find.text('SkyBridge Air • Denver, CO'), findsOneWidget);
+      expect(find.text('Submitted'), findsOneWidget);
     },
   );
 }

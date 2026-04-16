@@ -688,6 +688,9 @@ class _MyHomePageState extends State<MyHomePage> {
   static const String _localJobSeekerId = 'local_seeker';
 
   List<Application> _myApplications = const [];
+  List<Application> _employerApplications = const [];
+  String _selectedEmployerApplicationFilter = 'all';
+  String _selectedEmployerApplicationSort = 'newest';
   Map<String, bool> _applicationsByJobId = {};
 
   bool _hasApplied(String jobId) => _applicationsByJobId[jobId] ?? false;
@@ -784,6 +787,7 @@ class _MyHomePageState extends State<MyHomePage> {
     _loadEmployerProfiles();
     _loadJobTemplates();
     _loadMyApplications();
+    _loadEmployerApplications();
     _loadCookieConsentPreference();
     _fetchJobs();
   }
@@ -3287,6 +3291,7 @@ class _MyHomePageState extends State<MyHomePage> {
       // Pre-fill the create-form company field from the loaded profile.
       _createCompanyController.text = _currentEmployer.companyName;
     });
+    _loadEmployerApplications();
   }
 
   Future<void> _saveEmployerProfiles() async {
@@ -3333,6 +3338,7 @@ class _MyHomePageState extends State<MyHomePage> {
       // Keep the create-form company field in sync when switching employer.
       _createCompanyController.text = normalizedEmployer.companyName;
     });
+    _loadEmployerApplications();
     _saveEmployerProfiles();
   }
 
@@ -4289,6 +4295,18 @@ class _MyHomePageState extends State<MyHomePage> {
     });
   }
 
+  Future<void> _loadEmployerApplications() async {
+    final apps = await _appRepository.loadApplicationsForEmployer(
+      _currentEmployer.id,
+    );
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _employerApplications = apps;
+    });
+  }
+
   Future<void> _applyToJob(JobListing job, {String? coverLetter}) async {
     if (_hasApplied(job.id)) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -4299,11 +4317,34 @@ class _MyHomePageState extends State<MyHomePage> {
 
     try {
       final match = _evaluateJobMatch(job);
+      final applicantName = JobSeekerProfile.combineName(
+        _jobSeekerProfile.firstName,
+        _jobSeekerProfile.lastName,
+      ).isNotEmpty
+          ? JobSeekerProfile.combineName(
+              _jobSeekerProfile.firstName,
+              _jobSeekerProfile.lastName,
+            )
+          : _jobSeekerProfile.fullName.trim();
       final application = Application(
         id: _generateApplicationId(),
         jobSeekerId: _localJobSeekerId,
         jobId: job.id,
         employerId: job.employerId ?? '',
+        applicantName: applicantName,
+        applicantEmail: _jobSeekerProfile.email.trim(),
+        applicantPhone: _jobSeekerProfile.phone.trim(),
+        applicantCity: _jobSeekerProfile.city.trim(),
+        applicantStateOrProvince: _jobSeekerProfile.stateOrProvince.trim(),
+        applicantCountry: _jobSeekerProfile.country.trim(),
+        applicantTotalFlightHours: _jobSeekerProfile.totalFlightHours,
+        applicantFaaCertificates: List<String>.from(
+          _jobSeekerProfile.faaCertificates,
+        ),
+        applicantTypeRatings: List<String>.from(_jobSeekerProfile.typeRatings),
+        applicantAircraftFlown: List<String>.from(
+          _jobSeekerProfile.aircraftFlown,
+        ),
         status: 'applied',
         matchPercentage: match.matchPercentage,
         coverLetter: coverLetter ?? '',
@@ -4320,6 +4361,7 @@ class _MyHomePageState extends State<MyHomePage> {
         _myApplications = [..._myApplications, application];
         _applicationsByJobId = {..._applicationsByJobId, job.id: true};
       });
+      _loadEmployerApplications();
 
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Applied! Employer will see your profile.')),
@@ -4341,6 +4383,156 @@ class _MyHomePageState extends State<MyHomePage> {
     } else {
       _showQuickApplyDialog(job, match);
     }
+  }
+
+  Future<void> _updateApplicationStatus(
+    Application application,
+    String nextStatus,
+  ) async {
+    try {
+      await _appRepository.updateApplicationStatus(application.id, nextStatus);
+      if (!mounted) {
+        return;
+      }
+
+      final updated = application.copyWith(
+        status: nextStatus,
+        updatedAt: DateTime.now(),
+      );
+
+      setState(() {
+        _employerApplications = _employerApplications
+            .map((app) => app.id == updated.id ? updated : app)
+            .toList();
+      });
+      _loadMyApplications();
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Application status updated.')),
+      );
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not update application: $e')),
+      );
+    }
+  }
+
+  String _applicantLocation(Application app) {
+    final parts = [
+      app.applicantCity.trim(),
+      app.applicantStateOrProvince.trim(),
+      app.applicantCountry.trim(),
+    ].where((part) => part.isNotEmpty).toList();
+    return parts.isEmpty ? 'Not provided' : parts.join(' • ');
+  }
+
+  Widget _buildApplicantDetailsList({
+    required String title,
+    required List<String> values,
+    required String emptyText,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
+        const SizedBox(height: 6),
+        if (values.isEmpty)
+          Text(
+            emptyText,
+            style: TextStyle(
+              color: Colors.grey.shade700,
+              fontStyle: FontStyle.italic,
+            ),
+          )
+        else
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: values.map((value) => Chip(label: Text(value))).toList(),
+          ),
+      ],
+    );
+  }
+
+  Future<void> _openApplicantDetails(Application app, JobListing job) async {
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Applicant Details'),
+        content: SingleChildScrollView(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 560),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  app.applicantName.trim().isNotEmpty
+                      ? app.applicantName
+                      : app.jobSeekerId,
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text('Applied for: ${job.title}'),
+                const SizedBox(height: 4),
+                Text('Match: ${app.matchPercentage}%'),
+                const SizedBox(height: 4),
+                Text('Location: ${_applicantLocation(app)}'),
+                const SizedBox(height: 10),
+                Text(
+                  'Email: ${app.applicantEmail.trim().isNotEmpty ? app.applicantEmail : 'Not provided'}',
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Phone: ${app.applicantPhone.trim().isNotEmpty ? app.applicantPhone : 'Not provided'}',
+                ),
+                const SizedBox(height: 4),
+                Text('Total Flight Hours: ${app.applicantTotalFlightHours}'),
+                const SizedBox(height: 12),
+                _buildApplicantDetailsList(
+                  title: 'FAA Certificates',
+                  values: app.applicantFaaCertificates,
+                  emptyText: 'No certificates provided.',
+                ),
+                const SizedBox(height: 12),
+                _buildApplicantDetailsList(
+                  title: 'Type Ratings',
+                  values: app.applicantTypeRatings,
+                  emptyText: 'No type ratings provided.',
+                ),
+                const SizedBox(height: 12),
+                _buildApplicantDetailsList(
+                  title: 'Aircraft Experience',
+                  values: app.applicantAircraftFlown,
+                  emptyText: 'No aircraft experience provided.',
+                ),
+                if (app.coverLetter.trim().isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  const Text(
+                    'Cover Letter',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(app.coverLetter.trim()),
+                ],
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _showQuickApplyDialog(
@@ -6497,7 +6689,7 @@ class _MyHomePageState extends State<MyHomePage> {
         }
 
         final statusLabel = switch (app.status) {
-          'viewed' => 'Viewed by employer',
+          'reviewed' => 'Reviewed by employer',
           'interested' => '⭐ Employer interested',
           'rejected' => 'Not moving forward',
           _ => 'Submitted',
@@ -6561,6 +6753,335 @@ class _MyHomePageState extends State<MyHomePage> {
                     fontSize: 12,
                     color: Colors.grey.shade600,
                   ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildEmployerApplicationsTab() {
+    final allApplications = _employerApplications;
+    final filterOptions = const [
+      ('all', 'All'),
+      ('applied', 'Submitted'),
+      ('reviewed', 'Reviewed'),
+      ('interested', 'Interested'),
+      ('rejected', 'Not Moving Forward'),
+    ];
+    final sortOptions = const [
+      ('newest', 'Newest'),
+      ('highest_match', 'Highest Match'),
+      ('status', 'Status'),
+    ];
+    final countsByStatus = {
+      'applied': allApplications.where((app) => app.status == 'applied').length,
+      'reviewed': allApplications
+          .where((app) => app.status == 'reviewed')
+          .length,
+      'interested': allApplications
+          .where((app) => app.status == 'interested')
+          .length,
+      'rejected': allApplications.where((app) => app.status == 'rejected').length,
+    };
+    final filteredApplications = _selectedEmployerApplicationFilter == 'all'
+        ? allApplications
+        : allApplications
+              .where((app) => app.status == _selectedEmployerApplicationFilter)
+              .toList();
+
+    final sorted = [...filteredApplications]
+      ..sort((a, b) {
+        if (_selectedEmployerApplicationSort == 'highest_match') {
+          final matchCompare = b.matchPercentage.compareTo(a.matchPercentage);
+          if (matchCompare != 0) {
+            return matchCompare;
+          }
+          return b.appliedAt.compareTo(a.appliedAt);
+        }
+
+        if (_selectedEmployerApplicationSort == 'status') {
+          int statusRank(String status) {
+            switch (status) {
+              case 'applied':
+                return 0;
+              case 'reviewed':
+                return 1;
+              case 'interested':
+                return 2;
+              case 'rejected':
+                return 3;
+              default:
+                return 4;
+            }
+          }
+
+          final statusCompare =
+              statusRank(a.status).compareTo(statusRank(b.status));
+          if (statusCompare != 0) {
+            return statusCompare;
+          }
+          return b.appliedAt.compareTo(a.appliedAt);
+        }
+
+        return b.appliedAt.compareTo(a.appliedAt);
+      });
+
+    if (allApplications.isEmpty) {
+      return const Center(
+        child: Text('No submitted applications yet for this employer.'),
+      );
+    }
+
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      itemCount: sorted.isEmpty ? 2 : sorted.length + 1,
+      itemBuilder: (context, index) {
+        if (index == 0) {
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: filterOptions.map((option) {
+                    final key = option.$1;
+                    final label = option.$2;
+                    final count = key == 'all'
+                        ? allApplications.length
+                        : (countsByStatus[key] ?? 0);
+                    return ChoiceChip(
+                      label: Text('$label ($count)'),
+                      selected: _selectedEmployerApplicationFilter == key,
+                      onSelected: (_) {
+                        setState(() {
+                          _selectedEmployerApplicationFilter = key;
+                        });
+                      },
+                    );
+                  }).toList(),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    Text(
+                      'Sort:',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        color: Colors.grey.shade700,
+                      ),
+                    ),
+                    ...sortOptions.map((option) {
+                      final key = option.$1;
+                      final label = option.$2;
+                      return ChoiceChip(
+                        label: Text(label),
+                        selected: _selectedEmployerApplicationSort == key,
+                        onSelected: (_) {
+                          setState(() {
+                            _selectedEmployerApplicationSort = key;
+                          });
+                        },
+                      );
+                    }),
+                  ],
+                ),
+              ],
+            ),
+          );
+        }
+
+        if (sorted.isEmpty) {
+          return Card(
+            margin: const EdgeInsets.symmetric(vertical: 8),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text(
+                'No applications in this status yet.',
+                style: TextStyle(color: Colors.grey.shade700),
+              ),
+            ),
+          );
+        }
+
+        final app = sorted[index - 1];
+        final job = _allJobs.firstWhere(
+          (j) => j.id == app.jobId,
+          orElse: () => JobListing(
+            id: app.jobId,
+            title: 'Unknown Job',
+            company: _currentEmployer.companyName,
+            location: '',
+            type: '',
+            crewRole: '',
+            faaRules: const [],
+            description: '',
+            faaCertificates: const [],
+            flightExperience: const [],
+            aircraftFlown: const [],
+          ),
+        );
+
+        final statusLabel = switch (app.status) {
+          'reviewed' => 'Reviewed',
+          'interested' => 'Interested',
+          'rejected' => 'Not moving forward',
+          _ => 'Submitted',
+        };
+
+        final statusColor = switch (app.status) {
+          'reviewed' => Colors.blueGrey.shade100,
+          'interested' => Colors.green.shade100,
+          'rejected' => Colors.red.shade100,
+          _ => Colors.orange.shade100,
+        };
+
+        return Card(
+          margin: const EdgeInsets.symmetric(vertical: 8),
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  job.title,
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  app.applicantName.trim().isNotEmpty
+                      ? app.applicantName
+                      : 'Applicant ID: ${app.jobSeekerId}',
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  app.applicantEmail.trim().isNotEmpty
+                      ? app.applicantEmail
+                      : 'Email not provided',
+                  style: TextStyle(color: Colors.grey.shade700),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  _applicantLocation(app),
+                  style: TextStyle(color: Colors.grey.shade700),
+                ),
+                const SizedBox(height: 8),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.blueGrey.shade50,
+                    border: Border.all(color: Colors.blueGrey.shade100),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Profile Snapshot',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          color: Colors.blueGrey.shade800,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text('Match Score: ${app.matchPercentage}%'),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Total Flight Hours: ${app.applicantTotalFlightHours}',
+                      ),
+                      if (app.applicantFaaCertificates.isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 6,
+                          children: app.applicantFaaCertificates
+                              .take(4)
+                              .map((cert) => Chip(label: Text(cert)))
+                              .toList(),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: statusColor,
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(statusLabel),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade100,
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        'Applied ${_formatYmd(app.appliedAt.toLocal())}',
+                      ),
+                    ),
+                  ],
+                ),
+                if (app.coverLetter.trim().isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    'Cover Letter: ${app.coverLetter.trim()}',
+                    style: TextStyle(color: Colors.grey.shade800),
+                  ),
+                ],
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed: () => _openApplicantDetails(app, job),
+                      icon: const Icon(Icons.person_outline),
+                      label: const Text('View Applicant Details'),
+                    ),
+                    OutlinedButton(
+                      onPressed: app.status == 'reviewed'
+                          ? null
+                          : () => _updateApplicationStatus(app, 'reviewed'),
+                      child: const Text('Mark Reviewed'),
+                    ),
+                    OutlinedButton(
+                      onPressed: app.status == 'interested'
+                          ? null
+                          : () => _updateApplicationStatus(app, 'interested'),
+                      child: const Text('Interested'),
+                    ),
+                    OutlinedButton(
+                      onPressed: app.status == 'rejected'
+                          ? null
+                          : () => _updateApplicationStatus(app, 'rejected'),
+                      child: const Text('Not Moving Forward'),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -7303,12 +7824,14 @@ class _MyHomePageState extends State<MyHomePage> {
                   ),
                   Align(
                     alignment: Alignment.centerLeft,
-                    child: OutlinedButton.icon(
-                      onPressed: () => DefaultTabController.of(context)
-                          .animateTo(1),
-                      icon: const Icon(Icons.list_alt_outlined),
-                      label: Text(
-                        'See All Listings ($companyListingCount)',
+                    child: Builder(
+                      builder: (tabContext) => OutlinedButton.icon(
+                        onPressed: () =>
+                            DefaultTabController.of(tabContext).animateTo(1),
+                        icon: const Icon(Icons.list_alt_outlined),
+                        label: Text(
+                          'See All Listings ($companyListingCount)',
+                        ),
                       ),
                     ),
                   ),
@@ -8593,6 +9116,7 @@ class _MyHomePageState extends State<MyHomePage> {
             Tab(text: 'Listed Jobs'),
             Tab(text: 'Create New Listing'),
             Tab(text: 'Templates'),
+            Tab(text: 'Applicants'),
           ]
         : const [
             Tab(text: 'Jobs'),
@@ -8662,6 +9186,9 @@ class _MyHomePageState extends State<MyHomePage> {
                       _buildResponsiveTabContent(_buildJobsTab()),
                       _buildResponsiveTabContent(_buildCreateTab()),
                       _buildResponsiveTabContent(_buildTemplatesTab()),
+                      _buildResponsiveTabContent(
+                        _buildEmployerApplicationsTab(),
+                      ),
                     ]
                   : [
                       _buildResponsiveTabContent(_buildJobsTab()),

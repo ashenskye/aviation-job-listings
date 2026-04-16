@@ -164,7 +164,7 @@ class LocalAppRepository implements AppRepository {
   Future<void> saveApplication(Application app) async {
     final prefs = await SharedPreferences.getInstance();
     final stored = prefs.getString(_applicationsKey);
-    final List<Map<String, dynamic>> applications;
+    List<Map<String, dynamic>> applications;
 
     if (stored == null) {
       applications = [];
@@ -207,6 +207,61 @@ class LocalAppRepository implements AppRepository {
     } catch (_) {
       return const [];
     }
+  }
+
+  @override
+  Future<List<Application>> loadApplicationsForEmployer(String employerId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final stored = prefs.getString(_applicationsKey);
+
+    if (stored == null) {
+      return const [];
+    }
+
+    try {
+      final decoded = jsonDecode(stored) as List<dynamic>;
+      return decoded
+          .map((e) => Application.fromJson(Map<String, dynamic>.from(e as Map)))
+          .where((app) => app.employerId == employerId)
+          .toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  @override
+  Future<void> updateApplicationStatus(String applicationId, String status) async {
+    final prefs = await SharedPreferences.getInstance();
+    final stored = prefs.getString(_applicationsKey);
+    List<Map<String, dynamic>> applications;
+
+    if (stored == null) {
+      applications = [];
+    } else {
+      try {
+        final decoded = jsonDecode(stored) as List<dynamic>;
+        applications = decoded
+            .map((e) => Map<String, dynamic>.from(e as Map))
+            .toList();
+      } catch (_) {
+        applications = [];
+      }
+    }
+
+    final index = applications.indexWhere((e) => e['id'] == applicationId);
+    if (index < 0) {
+      return;
+    }
+
+    final current = Application.fromJson(applications[index]);
+    applications[index] = current
+        .copyWith(
+          status: status,
+          updatedAt: DateTime.now(),
+        )
+        .toJson();
+
+    await prefs.setString(_applicationsKey, jsonEncode(applications));
   }
 
   @override

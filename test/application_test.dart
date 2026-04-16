@@ -85,7 +85,7 @@ void main() {
         jobSeekerId: 'seeker42',
         jobId: 'job99',
         employerId: 'emp7',
-        status: 'viewed',
+        status: 'reviewed',
         matchPercentage: 75,
         coverLetter: 'Hello, I am interested.',
         appliedAt: now,
@@ -104,6 +104,12 @@ void main() {
       expect(restored.coverLetter, original.coverLetter);
       expect(restored.appliedAt, original.appliedAt);
       expect(restored.updatedAt, original.updatedAt);
+      expect(json['job_seeker_id'], original.jobSeekerId);
+      expect(json['job_listing_id'], original.jobId);
+      expect(json['employer_id'], original.employerId);
+      expect(json['cover_letter'], original.coverLetter);
+      expect(json['applied_at'], original.appliedAt.toIso8601String());
+      expect(json['updated_at'], original.updatedAt.toIso8601String());
     });
 
     test('fromJson handles missing/null fields gracefully', () {
@@ -130,15 +136,36 @@ void main() {
       );
 
       final updated = original.copyWith(
-        status: 'viewed',
+        status: 'reviewed',
         updatedAt: DateTime(2026, 4, 17),
       );
 
-      expect(updated.status, 'viewed');
+      expect(updated.status, 'reviewed');
       expect(updated.updatedAt, DateTime(2026, 4, 17));
       // unchanged fields
       expect(updated.id, original.id);
       expect(updated.matchPercentage, original.matchPercentage);
+    });
+
+    test('fromJson supports snake_case keys and normalizes viewed to reviewed', () {
+      final app = Application.fromJson({
+        'id': 'snake-1',
+        'job_seeker_id': 'seeker-x',
+        'job_listing_id': 'job-x',
+        'employer_id': 'employer-x',
+        'status': 'viewed',
+        'cover_letter': 'Cover note',
+        'applied_at': now.toIso8601String(),
+        'updated_at': now.toIso8601String(),
+      });
+
+      expect(app.jobSeekerId, 'seeker-x');
+      expect(app.jobListingId, 'job-x');
+      expect(app.employerId, 'employer-x');
+      expect(app.status, 'reviewed');
+      expect(app.coverLetter, 'Cover note');
+      expect(app.appliedAt, now);
+      expect(app.updatedAt, now);
     });
   });
 }

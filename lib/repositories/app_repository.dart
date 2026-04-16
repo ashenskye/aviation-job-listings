@@ -30,5 +30,7 @@ abstract class AppRepository {
   // Application methods
   Future<void> saveApplication(Application app);
   Future<List<Application>> getApplicationsBySeeker(String seekerId);
+  Future<List<Application>> loadApplicationsForEmployer(String employerId);
+  Future<void> updateApplicationStatus(String applicationId, String status);
   Future<bool> hasApplied(String seekerId, String jobId);
 }

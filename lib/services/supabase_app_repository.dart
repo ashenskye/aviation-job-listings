@@ -330,6 +330,16 @@ class SupabaseAppRepository implements AppRepository {
   }
 
   @override
+  Future<List<Application>> loadApplicationsForEmployer(String employerId) async {
+    return localFallback.loadApplicationsForEmployer(employerId);
+  }
+
+  @override
+  Future<void> updateApplicationStatus(String applicationId, String status) async {
+    await localFallback.updateApplicationStatus(applicationId, status);
+  }
+
+  @override
   Future<bool> hasApplied(String seekerId, String jobId) async {
     return localFallback.hasApplied(seekerId, jobId);
   }
