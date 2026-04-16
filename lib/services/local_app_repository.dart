@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/application.dart';
+import '../models/application_feedback.dart';
 import '../models/employer_profiles_data.dart';
 import '../models/job_listing.dart';
 import '../models/job_listing_template.dart';
@@ -17,6 +18,7 @@ class LocalAppRepository implements AppRepository {
   static const String _employerProfilesKey = 'employer_profiles';
   static const String _jobTemplatesKey = 'job_templates';
   static const String _applicationsKey = 'job_applications';
+  static const String _feedbackKey = 'application_feedback';
 
   @override
   Future<Set<String>> loadFavoriteIds() async {
@@ -268,5 +270,84 @@ class LocalAppRepository implements AppRepository {
   Future<bool> hasApplied(String seekerId, String jobId) async {
     final apps = await getApplicationsBySeeker(seekerId);
     return apps.any((app) => app.jobId == jobId);
+  }
+
+  @override
+  Future<Application?> getLatestApplicationForJob(
+    String seekerId,
+    String jobId,
+  ) async {
+    final apps = await getApplicationsBySeeker(seekerId);
+    final matching = apps
+        .where((app) => app.jobId == jobId)
+        .toList()
+      ..sort((a, b) => b.appliedAt.compareTo(a.appliedAt));
+    return matching.isEmpty ? null : matching.first;
+  }
+
+  @override
+  Future<void> saveFeedback(ApplicationFeedback feedback) async {
+    final prefs = await SharedPreferences.getInstance();
+    final stored = prefs.getString(_feedbackKey);
+    List<Map<String, dynamic>> feedbackList;
+
+    if (stored == null) {
+      feedbackList = [];
+    } else {
+      try {
+        final decoded = jsonDecode(stored) as List<dynamic>;
+        feedbackList = decoded
+            .map((e) => Map<String, dynamic>.from(e as Map))
+            .toList();
+      } catch (_) {
+        feedbackList = [];
+      }
+    }
+
+    final index = feedbackList.indexWhere(
+      (e) => e['application_id'] == feedback.applicationId,
+    );
+    if (index >= 0) {
+      feedbackList[index] = feedback.toJson();
+    } else {
+      feedbackList.add(feedback.toJson());
+    }
+
+    await prefs.setString(_feedbackKey, jsonEncode(feedbackList));
+  }
+
+  @override
+  Future<List<ApplicationFeedback>> getAllFeedback() async {
+    final prefs = await SharedPreferences.getInstance();
+    final stored = prefs.getString(_feedbackKey);
+
+    if (stored == null) {
+      return const [];
+    }
+
+    try {
+      final decoded = jsonDecode(stored) as List<dynamic>;
+      return decoded
+          .map(
+            (e) => ApplicationFeedback.fromJson(
+              Map<String, dynamic>.from(e as Map),
+            ),
+          )
+          .toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  @override
+  Future<ApplicationFeedback?> getFeedbackForApplication(
+    String applicationId,
+  ) async {
+    final all = await getAllFeedback();
+    try {
+      return all.firstWhere((f) => f.applicationId == applicationId);
+    } catch (_) {
+      return null;
+    }
   }
 }

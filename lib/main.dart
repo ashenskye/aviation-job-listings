@@ -10,6 +10,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'models/application.dart';
+import 'models/application_feedback.dart';
 import 'models/aviation_certificate_utils.dart';
 import 'models/employer_profile.dart';
 import 'models/employer_profiles_data.dart';
@@ -637,6 +638,8 @@ class _MyHomePageState extends State<MyHomePage> {
       TextEditingController();
   final TextEditingController _createAircraftController =
       TextEditingController();
+  final TextEditingController _createReapplyWindowDaysController =
+      TextEditingController(text: '30');
   final TextEditingController _profileFullNameController =
       TextEditingController();
   final TextEditingController _profileEmailController = TextEditingController();
@@ -686,17 +689,31 @@ class _MyHomePageState extends State<MyHomePage> {
   // ============================================================================
 
   static const String _localJobSeekerId = 'local_seeker';
+  static const int _maxReapplyWindowDays = 365;
 
   List<Application> _myApplications = const [];
   List<Application> _employerApplications = const [];
+  List<ApplicationFeedback> _allFeedback = const [];
   String _selectedEmployerApplicationFilter = 'all';
   String _selectedEmployerApplicationSort = 'newest';
+  String _selectedMatchFilter = 'all';
   Map<String, bool> _applicationsByJobId = {};
 
   bool _hasApplied(String jobId) => _applicationsByJobId[jobId] ?? false;
 
   String _generateApplicationId() =>
       DateTime.now().millisecondsSinceEpoch.toString();
+
+  String _generateFeedbackId() =>
+      'fb_${DateTime.now().millisecondsSinceEpoch}';
+
+  ApplicationFeedback? _getFeedbackForApplication(String applicationId) {
+    try {
+      return _allFeedback.firstWhere((f) => f.applicationId == applicationId);
+    } catch (_) {
+      return null;
+    }
+  }
 
   // ============================================================================
   // JOB CREATION FORM STATE: User selections for creating new job listings
@@ -723,6 +740,11 @@ class _MyHomePageState extends State<MyHomePage> {
   String? _editingTemplateId;
   bool _createOpenedFromTemplate = false;
   String? _expandedCreateRequirementsSection = 'Certificates and Ratings';
+
+  // Application Preferences
+  bool _createAutoRejectEnabled = false;
+  int _createAutoRejectThreshold = 65;
+  int _createReapplyWindowDays = 30;
 
   // ============================================================================
   // JOB SEEKER PROFILE STATE: User profile data for matching
@@ -788,6 +810,7 @@ class _MyHomePageState extends State<MyHomePage> {
     _loadJobTemplates();
     _loadMyApplications();
     _loadEmployerApplications();
+    _loadAllFeedback();
     _loadCookieConsentPreference();
     _fetchJobs();
   }
@@ -3550,6 +3573,7 @@ class _MyHomePageState extends State<MyHomePage> {
     _createDescriptionController.dispose();
     _createTypeRatingsController.dispose();
     _createAircraftController.dispose();
+    _createReapplyWindowDaysController.dispose();
     _profileFullNameController.dispose();
     _profileEmailController.dispose();
     _profilePhoneController.dispose();
@@ -3714,6 +3738,9 @@ class _MyHomePageState extends State<MyHomePage> {
       employerId: _profileType == ProfileType.employer
           ? _currentEmployer.id
           : null,
+      autoRejectThreshold:
+          _createAutoRejectEnabled ? _createAutoRejectThreshold : 0,
+      reapplyWindowDays: _createReapplyWindowDays,
     );
   }
 
@@ -3771,6 +3798,13 @@ class _MyHomePageState extends State<MyHomePage> {
 
       _createOpenListing = job.deadlineDate == null;
       _createDeadlineDate = job.deadlineDate;
+
+      _createAutoRejectEnabled = job.autoRejectThreshold > 0;
+      _createAutoRejectThreshold =
+          job.autoRejectThreshold > 0 ? job.autoRejectThreshold : 65;
+      _createReapplyWindowDays = job.reapplyWindowDays;
+      _createReapplyWindowDaysController.text =
+          job.reapplyWindowDays.toString();
 
       final salary = job.salaryRange?.trim() ?? '';
       _createStartingPayController.clear();
@@ -4307,12 +4341,52 @@ class _MyHomePageState extends State<MyHomePage> {
     });
   }
 
+  Future<void> _loadAllFeedback() async {
+    final feedback = await _appRepository.getAllFeedback();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _allFeedback = feedback;
+    });
+  }
+
   Future<void> _applyToJob(JobListing job, {String? coverLetter}) async {
     if (_hasApplied(job.id)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('You already applied to this job.')),
+      // Check reapply window
+      final existing = await _appRepository.getLatestApplicationForJob(
+        _localJobSeekerId,
+        job.id,
       );
-      return;
+      if (existing != null) {
+        final appliedLocal = existing.appliedAt.toLocal();
+        final nowLocal = DateTime.now();
+        final daysSince = nowLocal.difference(appliedLocal).inDays;
+        if (daysSince < job.reapplyWindowDays) {
+          final appliedDateStr = _formatYmd(appliedLocal);
+          final canReapplyDate = appliedLocal.add(
+            Duration(days: job.reapplyWindowDays),
+          );
+          final canReapplyStr = _formatYmd(canReapplyDate);
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'You applied to this job on $appliedDateStr. '
+                'You can apply again after $canReapplyStr.',
+              ),
+            ),
+          );
+          return;
+        }
+        // Window has passed — allow re-application (fall through)
+      } else {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('You already applied to this job.')),
+        );
+        return;
+      }
     }
 
     try {
@@ -4326,6 +4400,13 @@ class _MyHomePageState extends State<MyHomePage> {
               _jobSeekerProfile.lastName,
             )
           : _jobSeekerProfile.fullName.trim();
+
+      // Determine initial status (auto-reject if below threshold)
+      final autoRejected =
+          job.autoRejectThreshold > 0 &&
+          match.matchPercentage < job.autoRejectThreshold;
+      final initialStatus = autoRejected ? 'rejected' : 'applied';
+
       final application = Application(
         id: _generateApplicationId(),
         jobSeekerId: _localJobSeekerId,
@@ -4345,7 +4426,7 @@ class _MyHomePageState extends State<MyHomePage> {
         applicantAircraftFlown: List<String>.from(
           _jobSeekerProfile.aircraftFlown,
         ),
-        status: 'applied',
+        status: initialStatus,
         matchPercentage: match.matchPercentage,
         coverLetter: coverLetter ?? '',
         appliedAt: DateTime.now(),
@@ -4353,6 +4434,23 @@ class _MyHomePageState extends State<MyHomePage> {
       );
 
       await _appRepository.saveApplication(application);
+
+      // Create auto-reject feedback if applicable
+      if (autoRejected) {
+        final autoFeedback = ApplicationFeedback(
+          id: _generateFeedbackId(),
+          applicationId: application.id,
+          message:
+              'Your application was reviewed and does not meet our minimum '
+              'match threshold of ${job.autoRejectThreshold}%.',
+          feedbackType: ApplicationFeedback.feedbackTypeNotFit,
+          sentByEmployer: true,
+          sentAt: DateTime.now(),
+          isAutoGenerated: true,
+        );
+        await _appRepository.saveFeedback(autoFeedback);
+      }
+
       if (!mounted) {
         return;
       }
@@ -4362,10 +4460,23 @@ class _MyHomePageState extends State<MyHomePage> {
         _applicationsByJobId = {..._applicationsByJobId, job.id: true};
       });
       _loadEmployerApplications();
+      _loadAllFeedback();
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Applied! Employer will see your profile.')),
-      );
+      if (autoRejected) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Application submitted, but marked as not meeting requirements.',
+            ),
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Applied! Employer will see your profile.'),
+          ),
+        );
+      }
     } catch (e) {
       if (!mounted) {
         return;
@@ -4429,6 +4540,72 @@ class _MyHomePageState extends State<MyHomePage> {
     return parts.isEmpty ? 'Not provided' : parts.join(' • ');
   }
 
+  Future<void> _sendApplicationFeedback(
+    String applicationId,
+    String feedbackType,
+    String message,
+  ) async {
+    try {
+      final feedback = ApplicationFeedback(
+        id: _generateFeedbackId(),
+        applicationId: applicationId,
+        message: message,
+        feedbackType: feedbackType,
+        sentByEmployer: true,
+        sentAt: DateTime.now(),
+      );
+
+      await _appRepository.saveFeedback(feedback);
+
+      // Update application status
+      Application? application;
+      try {
+        application = _employerApplications.firstWhere(
+          (app) => app.id == applicationId,
+        );
+      } catch (_) {
+        try {
+          application = _myApplications.firstWhere(
+            (app) => app.id == applicationId,
+          );
+        } catch (_) {
+          application = null;
+        }
+      }
+      if (application == null) {
+        throw StateError('Application not found: $applicationId');
+      }
+      final nextStatus = feedbackType == ApplicationFeedback.feedbackTypeInterested
+          ? Application.statusInterested
+          : Application.statusRejected;
+      await _appRepository.updateApplicationStatus(applicationId, nextStatus);
+
+      if (!mounted) return;
+
+      final updated = application.copyWith(
+        status: nextStatus,
+        updatedAt: DateTime.now(),
+      );
+      setState(() {
+        _employerApplications = _employerApplications
+            .map((app) => app.id == updated.id ? updated : app)
+            .toList();
+      });
+      await _loadMyApplications();
+      await _loadAllFeedback();
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Feedback sent to applicant.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error sending feedback: $e')),
+      );
+    }
+  }
+
   Widget _buildApplicantDetailsList({
     required String title,
     required List<String> values,
@@ -4458,81 +4635,218 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Future<void> _openApplicantDetails(Application app, JobListing job) async {
+    final existingFeedback = _getFeedbackForApplication(app.id);
+    final customMessageController = TextEditingController();
+    String? selectedFeedbackType;
+
     await showDialog<void>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Applicant Details'),
-        content: SingleChildScrollView(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 560),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  app.applicantName.trim().isNotEmpty
-                      ? app.applicantName
-                      : app.jobSeekerId,
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w700,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Applicant Details'),
+          content: SingleChildScrollView(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 560),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    app.applicantName.trim().isNotEmpty
+                        ? app.applicantName
+                        : app.jobSeekerId,
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 4),
-                Text('Applied for: ${job.title}'),
-                const SizedBox(height: 4),
-                Text('Match: ${app.matchPercentage}%'),
-                const SizedBox(height: 4),
-                Text('Location: ${_applicantLocation(app)}'),
-                const SizedBox(height: 10),
-                Text(
-                  'Email: ${app.applicantEmail.trim().isNotEmpty ? app.applicantEmail : 'Not provided'}',
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  'Phone: ${app.applicantPhone.trim().isNotEmpty ? app.applicantPhone : 'Not provided'}',
-                ),
-                const SizedBox(height: 4),
-                Text('Total Flight Hours: ${app.applicantTotalFlightHours}'),
-                const SizedBox(height: 12),
-                _buildApplicantDetailsList(
-                  title: 'FAA Certificates',
-                  values: app.applicantFaaCertificates,
-                  emptyText: 'No certificates provided.',
-                ),
-                const SizedBox(height: 12),
-                _buildApplicantDetailsList(
-                  title: 'Type Ratings',
-                  values: app.applicantTypeRatings,
-                  emptyText: 'No type ratings provided.',
-                ),
-                const SizedBox(height: 12),
-                _buildApplicantDetailsList(
-                  title: 'Aircraft Experience',
-                  values: app.applicantAircraftFlown,
-                  emptyText: 'No aircraft experience provided.',
-                ),
-                if (app.coverLetter.trim().isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text('Applied for: ${job.title}'),
+                  const SizedBox(height: 4),
+                  Text('Match: ${app.matchPercentage}%'),
+                  const SizedBox(height: 4),
+                  Text('Location: ${_applicantLocation(app)}'),
+                  const SizedBox(height: 10),
+                  Text(
+                    'Email: ${app.applicantEmail.trim().isNotEmpty ? app.applicantEmail : 'Not provided'}',
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Phone: ${app.applicantPhone.trim().isNotEmpty ? app.applicantPhone : 'Not provided'}',
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Total Flight Hours: ${app.applicantTotalFlightHours}',
+                  ),
                   const SizedBox(height: 12),
-                  const Text(
-                    'Cover Letter',
-                    style: TextStyle(fontWeight: FontWeight.w600),
+                  _buildApplicantDetailsList(
+                    title: 'FAA Certificates',
+                    values: app.applicantFaaCertificates,
+                    emptyText: 'No certificates provided.',
                   ),
-                  const SizedBox(height: 6),
-                  Text(app.coverLetter.trim()),
+                  const SizedBox(height: 12),
+                  _buildApplicantDetailsList(
+                    title: 'Type Ratings',
+                    values: app.applicantTypeRatings,
+                    emptyText: 'No type ratings provided.',
+                  ),
+                  const SizedBox(height: 12),
+                  _buildApplicantDetailsList(
+                    title: 'Aircraft Experience',
+                    values: app.applicantAircraftFlown,
+                    emptyText: 'No aircraft experience provided.',
+                  ),
+                  if (app.coverLetter.trim().isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    const Text(
+                      'Cover Letter',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(app.coverLetter.trim()),
+                  ],
+                  const SizedBox(height: 16),
+                  const Divider(),
+                  const SizedBox(height: 8),
+                  // Previous feedback display
+                  if (existingFeedback != null) ...[
+                    const Text(
+                      'Previous Feedback Sent',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 6),
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Colors.blueGrey.shade50,
+                        border: Border.all(color: Colors.blueGrey.shade200),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            existingFeedback.message,
+                            style: const TextStyle(fontStyle: FontStyle.italic),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Sent ${_formatYmd(existingFeedback.sentAt.toLocal())}',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey.shade600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                  // Feedback form
+                  const Text(
+                    'Send Feedback',
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      ChoiceChip(
+                        label: const Text('Interested'),
+                        selected: selectedFeedbackType ==
+                            ApplicationFeedback.feedbackTypeInterested,
+                        selectedColor: Colors.green.shade100,
+                        onSelected: (_) {
+                          setDialogState(() {
+                            selectedFeedbackType =
+                                ApplicationFeedback.feedbackTypeInterested;
+                          });
+                        },
+                      ),
+                      ChoiceChip(
+                        label: const Text('Not a Fit'),
+                        selected: selectedFeedbackType ==
+                            ApplicationFeedback.feedbackTypeNotFit,
+                        selectedColor: Colors.red.shade100,
+                        onSelected: (_) {
+                          setDialogState(() {
+                            selectedFeedbackType =
+                                ApplicationFeedback.feedbackTypeNotFit;
+                          });
+                        },
+                      ),
+                      ChoiceChip(
+                        label: const Text('Custom'),
+                        selected: selectedFeedbackType ==
+                            ApplicationFeedback.feedbackTypeCustom,
+                        selectedColor: Colors.blue.shade100,
+                        onSelected: (_) {
+                          setDialogState(() {
+                            selectedFeedbackType =
+                                ApplicationFeedback.feedbackTypeCustom;
+                          });
+                        },
+                      ),
+                    ],
+                  ),
+                  if (selectedFeedbackType ==
+                      ApplicationFeedback.feedbackTypeCustom) ...[
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: customMessageController,
+                      decoration: const InputDecoration(
+                        labelText: 'Custom message',
+                        border: OutlineInputBorder(),
+                        hintText: 'Enter your feedback message...',
+                      ),
+                      maxLines: 3,
+                    ),
+                  ],
                 ],
-              ],
+              ),
             ),
           ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Close'),
+            ),
+            if (selectedFeedbackType != null)
+              FilledButton(
+                onPressed: () async {
+                  final type = selectedFeedbackType!;
+                  final message = type ==
+                          ApplicationFeedback.feedbackTypeInterested
+                      ? 'We are interested in your application and would like to move forward.'
+                      : type == ApplicationFeedback.feedbackTypeNotFit
+                      ? 'Thank you for your interest. Unfortunately, you are not a fit for this role at this time.'
+                      : customMessageController.text.trim();
+
+                  if (type == ApplicationFeedback.feedbackTypeCustom &&
+                      message.isEmpty) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Please enter a custom message.'),
+                      ),
+                    );
+                    return;
+                  }
+
+                  Navigator.of(dialogContext).pop();
+                  await _sendApplicationFeedback(app.id, type, message);
+                },
+                child: const Text('Send Feedback'),
+              ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(),
-            child: const Text('Close'),
-          ),
-        ],
       ),
     );
+
+    customMessageController.dispose();
   }
 
   Future<void> _showQuickApplyDialog(
@@ -5796,6 +6110,10 @@ class _MyHomePageState extends State<MyHomePage> {
     _preferredSpecialtyHours.clear();
     _createAircraftController.clear();
     _expandedCreateRequirementsSection = 'Certificates and Ratings';
+    _createAutoRejectEnabled = false;
+    _createAutoRejectThreshold = 65;
+    _createReapplyWindowDays = 30;
+    _createReapplyWindowDaysController.text = '30';
   }
 
   List<String> _missingCreateBasicsRequirements() {
@@ -6695,6 +7013,27 @@ class _MyHomePageState extends State<MyHomePage> {
           _ => 'Submitted',
         };
 
+        final feedback = _getFeedbackForApplication(app.id);
+        final hasFeedback = feedback != null;
+
+        final feedbackIcon = switch (feedback?.feedbackType) {
+          ApplicationFeedback.feedbackTypeInterested => '✅',
+          ApplicationFeedback.feedbackTypeNotFit => '❌',
+          _ => 'ℹ️',
+        };
+
+        final feedbackColor = switch (feedback?.feedbackType) {
+          ApplicationFeedback.feedbackTypeInterested => Colors.green.shade50,
+          ApplicationFeedback.feedbackTypeNotFit => Colors.red.shade50,
+          _ => Colors.blue.shade50,
+        };
+
+        final feedbackBorderColor = switch (feedback?.feedbackType) {
+          ApplicationFeedback.feedbackTypeInterested => Colors.green.shade200,
+          ApplicationFeedback.feedbackTypeNotFit => Colors.red.shade200,
+          _ => Colors.blue.shade200,
+        };
+
         return Card(
           margin: const EdgeInsets.symmetric(vertical: 8),
           child: Padding(
@@ -6702,12 +7041,33 @@ class _MyHomePageState extends State<MyHomePage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  job.title,
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                  ),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        job.title,
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    if (hasFeedback)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.orange.shade100,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Text(
+                          '[!] Feedback',
+                          style: TextStyle(fontSize: 11),
+                        ),
+                      ),
+                  ],
                 ),
                 const SizedBox(height: 4),
                 Text('${job.company} • ${job.location}'),
@@ -6754,6 +7114,41 @@ class _MyHomePageState extends State<MyHomePage> {
                     color: Colors.grey.shade600,
                   ),
                 ),
+                // Feedback section
+                if (hasFeedback) ...[
+                  const SizedBox(height: 10),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: feedbackColor,
+                      border: Border.all(color: feedbackBorderColor),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '$feedbackIcon Employer Feedback',
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 13,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(feedback.message),
+                        const SizedBox(height: 4),
+                        Text(
+                          _formatYmd(feedback.sentAt.toLocal()),
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Colors.grey.shade600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
@@ -6771,6 +7166,12 @@ class _MyHomePageState extends State<MyHomePage> {
       ('interested', 'Interested'),
       ('rejected', 'Not Moving Forward'),
     ];
+    final matchFilterOptions = const [
+      ('all', 'All'),
+      ('perfect', '🟢 90%+'),
+      ('good', '🟡 70–89%'),
+      ('stretch', '🔴 <70%'),
+    ];
     final sortOptions = const [
       ('newest', 'Newest'),
       ('highest_match', 'Highest Match'),
@@ -6786,11 +7187,32 @@ class _MyHomePageState extends State<MyHomePage> {
           .length,
       'rejected': allApplications.where((app) => app.status == 'rejected').length,
     };
-    final filteredApplications = _selectedEmployerApplicationFilter == 'all'
+    final perfectCount =
+        allApplications.where((app) => app.isPerfectMatch).length;
+    final goodCount = allApplications.where((app) => app.isGoodMatch).length;
+    final stretchCount =
+        allApplications.where((app) => app.isStretchMatch).length;
+
+    // Apply status filter
+    final statusFiltered = _selectedEmployerApplicationFilter == 'all'
         ? allApplications
         : allApplications
               .where((app) => app.status == _selectedEmployerApplicationFilter)
               .toList();
+
+    // Apply match % filter
+    final filteredApplications = switch (_selectedMatchFilter) {
+      'perfect' => statusFiltered
+          .where((app) => app.isPerfectMatch)
+          .toList(),
+      'good' => statusFiltered
+          .where((app) => app.isGoodMatch)
+          .toList(),
+      'stretch' => statusFiltered
+          .where((app) => app.isStretchMatch)
+          .toList(),
+      _ => statusFiltered,
+    };
 
     final sorted = [...filteredApplications]
       ..sort((a, b) {
@@ -6845,6 +7267,36 @@ class _MyHomePageState extends State<MyHomePage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                // Quick stats
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(10),
+                  margin: const EdgeInsets.only(bottom: 10),
+                  decoration: BoxDecoration(
+                    color: Colors.blueGrey.shade50,
+                    border: Border.all(color: Colors.blueGrey.shade100),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Wrap(
+                    spacing: 16,
+                    runSpacing: 4,
+                    children: [
+                      Text(
+                        '🟢 $perfectCount perfect',
+                        style: const TextStyle(fontSize: 13),
+                      ),
+                      Text(
+                        '🟡 $goodCount good',
+                        style: const TextStyle(fontSize: 13),
+                      ),
+                      Text(
+                        '🔴 $stretchCount stretch',
+                        style: const TextStyle(fontSize: 13),
+                      ),
+                    ],
+                  ),
+                ),
+                // Status filter
                 Wrap(
                   spacing: 8,
                   runSpacing: 8,
@@ -6866,6 +7318,36 @@ class _MyHomePageState extends State<MyHomePage> {
                   }).toList(),
                 ),
                 const SizedBox(height: 8),
+                // Match % filter
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    Text(
+                      'Match:',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        color: Colors.grey.shade700,
+                      ),
+                    ),
+                    ...matchFilterOptions.map((option) {
+                      final key = option.$1;
+                      final label = option.$2;
+                      return ChoiceChip(
+                        label: Text(label),
+                        selected: _selectedMatchFilter == key,
+                        onSelected: (_) {
+                          setState(() {
+                            _selectedMatchFilter = key;
+                          });
+                        },
+                      );
+                    }),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                // Sort
                 Wrap(
                   spacing: 8,
                   runSpacing: 8,
@@ -6904,7 +7386,7 @@ class _MyHomePageState extends State<MyHomePage> {
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: Text(
-                'No applications in this status yet.',
+                'No applications match the selected filters.',
                 style: TextStyle(color: Colors.grey.shade700),
               ),
             ),
@@ -6943,6 +7425,26 @@ class _MyHomePageState extends State<MyHomePage> {
           _ => Colors.orange.shade100,
         };
 
+        final Color matchBadgeColor;
+        final String matchBadgeLabel;
+        if (app.isPerfectMatch) {
+          matchBadgeColor = Colors.green.shade100;
+          matchBadgeLabel = '🟢 ${app.matchPercentage}%';
+        } else if (app.isGoodMatch) {
+          matchBadgeColor = Colors.yellow.shade100;
+          matchBadgeLabel = '🟡 ${app.matchPercentage}%';
+        } else {
+          matchBadgeColor = Colors.red.shade100;
+          matchBadgeLabel = '🔴 ${app.matchPercentage}%';
+        }
+
+        final appFeedback = _getFeedbackForApplication(app.id);
+        final hasFeedback = appFeedback != null;
+        final isAutoRejected =
+            app.status == 'rejected' &&
+            hasFeedback &&
+            appFeedback.isAutoGenerated;
+
         return Card(
           margin: const EdgeInsets.symmetric(vertical: 8),
           child: Padding(
@@ -6950,12 +7452,56 @@ class _MyHomePageState extends State<MyHomePage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  job.title,
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                  ),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        job.title,
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    if (hasFeedback && !isAutoRejected)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.orange.shade100,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: const Text(
+                          '[!]',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    if (isAutoRejected) ...[
+                      const SizedBox(width: 4),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.red.shade100,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: const Text(
+                          '[✓] Auto-rejected',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
                 const SizedBox(height: 4),
                 Text(
@@ -7026,6 +7572,17 @@ class _MyHomePageState extends State<MyHomePage> {
                         vertical: 4,
                       ),
                       decoration: BoxDecoration(
+                        color: matchBadgeColor,
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(matchBadgeLabel),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
                         color: statusColor,
                         borderRadius: BorderRadius.circular(20),
                       ),
@@ -7061,7 +7618,7 @@ class _MyHomePageState extends State<MyHomePage> {
                     OutlinedButton.icon(
                       onPressed: () => _openApplicantDetails(app, job),
                       icon: const Icon(Icons.person_outline),
-                      label: const Text('View Applicant Details'),
+                      label: const Text('View & Send Feedback'),
                     ),
                     OutlinedButton(
                       onPressed: app.status == 'reviewed'
@@ -8618,7 +9175,119 @@ class _MyHomePageState extends State<MyHomePage> {
             ],
           ),
         ),
+        const SizedBox(height: 12),
+        _buildApplicationPreferencesSection(),
       ],
+    );
+  }
+
+  Widget _buildApplicationPreferencesSection() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        border: Border.all(color: Colors.grey.shade300),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Application Preferences',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 16),
+          // Auto-reject threshold
+          const Text(
+            'Auto-Reject Threshold',
+            style: TextStyle(fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              Checkbox(
+                value: _createAutoRejectEnabled,
+                onChanged: (value) {
+                  setState(() {
+                    _createAutoRejectEnabled = value ?? false;
+                  });
+                },
+              ),
+              const Text('Enable auto-reject at '),
+              if (_createAutoRejectEnabled)
+                Text(
+                  '$_createAutoRejectThreshold%',
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                )
+              else
+                const Text('(disabled)'),
+            ],
+          ),
+          if (_createAutoRejectEnabled) ...[
+            Slider(
+              value: _createAutoRejectThreshold.toDouble().clamp(1.0, 100.0),
+              min: 1,
+              max: 100,
+              divisions: 20,
+              label: '$_createAutoRejectThreshold%',
+              onChanged: (value) {
+                setState(() {
+                  _createAutoRejectThreshold = value.round();
+                });
+              },
+            ),
+            Text(
+              'Auto-reject applications below $_createAutoRejectThreshold% match',
+              style: TextStyle(
+                fontSize: 12,
+                color: Colors.grey.shade600,
+              ),
+            ),
+          ],
+          const SizedBox(height: 16),
+          // Reapply window
+          const Text(
+            'Reapply Prevention Window',
+            style: TextStyle(fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              SizedBox(
+                width: 80,
+                child: TextField(
+                  textDirection: TextDirection.ltr,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    border: OutlineInputBorder(),
+                    contentPadding: EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 8,
+                    ),
+                  ),
+                  controller: _createReapplyWindowDaysController,
+                  onChanged: (value) {
+                    final parsed = int.tryParse(value.trim());
+                    if (parsed != null &&
+                        parsed > 0 &&
+                        parsed <= _maxReapplyWindowDays) {
+                      setState(() {
+                        _createReapplyWindowDays = parsed;
+                      });
+                    }
+                  },
+                ),
+              ),
+              const SizedBox(width: 8),
+              const Text('days'),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Job seekers can apply again after this period',
+            style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+          ),
+        ],
+      ),
     );
   }
 
