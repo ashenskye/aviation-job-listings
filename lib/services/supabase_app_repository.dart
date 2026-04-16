@@ -1,4 +1,5 @@
 import '../models/application.dart';
+import '../models/application_feedback.dart';
 import '../models/employer_profile.dart';
 import '../models/employer_profiles_data.dart';
 import '../models/job_listing.dart';
@@ -342,6 +343,31 @@ class SupabaseAppRepository implements AppRepository {
   @override
   Future<bool> hasApplied(String seekerId, String jobId) async {
     return localFallback.hasApplied(seekerId, jobId);
+  }
+
+  @override
+  Future<Application?> getLatestApplicationForJob(
+    String seekerId,
+    String jobId,
+  ) async {
+    return localFallback.getLatestApplicationForJob(seekerId, jobId);
+  }
+
+  @override
+  Future<void> saveFeedback(ApplicationFeedback feedback) async {
+    await localFallback.saveFeedback(feedback);
+  }
+
+  @override
+  Future<List<ApplicationFeedback>> getAllFeedback() async {
+    return localFallback.getAllFeedback();
+  }
+
+  @override
+  Future<ApplicationFeedback?> getFeedbackForApplication(
+    String applicationId,
+  ) async {
+    return localFallback.getFeedbackForApplication(applicationId);
   }
 
   Map<String, dynamic> _toJobListingRow(JobListing job) {

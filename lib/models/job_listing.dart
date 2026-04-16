@@ -34,6 +34,8 @@ class JobListing {
   final DateTime? createdAt;
   final DateTime? updatedAt;
   final String? employerId;
+  final int autoRejectThreshold; // 0 = disabled; >0 = auto-reject below this %
+  final int reapplyWindowDays; // days a seeker must wait before re-applying
 
   const JobListing({
     required this.id,
@@ -63,6 +65,8 @@ class JobListing {
     this.createdAt,
     this.updatedAt,
     this.employerId,
+    this.autoRejectThreshold = 0,
+    this.reapplyWindowDays = 30,
   });
 
   factory JobListing.fromJson(Map<String, dynamic> json) {
@@ -179,6 +183,10 @@ class JobListing {
           ? DateTime.tryParse(json['updatedAt'].toString())
           : null,
       employerId: json['employerId']?.toString(),
+      autoRejectThreshold:
+          (json['autoRejectThreshold'] as num?)?.toInt() ?? 0,
+      reapplyWindowDays:
+          (json['reapplyWindowDays'] as num?)?.toInt() ?? 30,
     );
   }
 
@@ -210,6 +218,8 @@ class JobListing {
     'createdAt': createdAt?.toIso8601String(),
     'updatedAt': updatedAt?.toIso8601String(),
     'employerId': employerId,
+    'autoRejectThreshold': autoRejectThreshold,
+    'reapplyWindowDays': reapplyWindowDays,
   };
 
   Map<String, int> get flightHoursByType {

@@ -1,4 +1,5 @@
 import 'package:aviation_job_listings/models/application.dart';
+import 'package:aviation_job_listings/models/application_feedback.dart';
 import 'package:aviation_job_listings/models/employer_profiles_data.dart';
 import 'package:aviation_job_listings/models/job_listing.dart';
 import 'package:aviation_job_listings/models/job_listing_template.dart';
@@ -13,6 +14,7 @@ class FakeAppRepository implements AppRepository {
   final List<JobListing> _jobs = <JobListing>[];
   final List<JobListingTemplate> _templates = <JobListingTemplate>[];
   final List<Application> _applications = <Application>[];
+  final List<ApplicationFeedback> _feedback = <ApplicationFeedback>[];
 
   @override
   Future<Set<String>> loadFavoriteIds() async => _favoriteIds;
@@ -119,5 +121,45 @@ class FakeAppRepository implements AppRepository {
     return _applications.any(
       (app) => app.jobSeekerId == seekerId && app.jobId == jobId,
     );
+  }
+
+  @override
+  Future<Application?> getLatestApplicationForJob(
+    String seekerId,
+    String jobId,
+  ) async {
+    final matching = _applications
+        .where((app) => app.jobSeekerId == seekerId && app.jobId == jobId)
+        .toList()
+      ..sort((a, b) => b.appliedAt.compareTo(a.appliedAt));
+    return matching.isEmpty ? null : matching.first;
+  }
+
+  @override
+  Future<void> saveFeedback(ApplicationFeedback feedback) async {
+    final index = _feedback.indexWhere(
+      (f) => f.applicationId == feedback.applicationId,
+    );
+    if (index >= 0) {
+      _feedback[index] = feedback;
+    } else {
+      _feedback.add(feedback);
+    }
+  }
+
+  @override
+  Future<List<ApplicationFeedback>> getAllFeedback() async {
+    return List<ApplicationFeedback>.from(_feedback);
+  }
+
+  @override
+  Future<ApplicationFeedback?> getFeedbackForApplication(
+    String applicationId,
+  ) async {
+    try {
+      return _feedback.firstWhere((f) => f.applicationId == applicationId);
+    } catch (_) {
+      return null;
+    }
   }
 }

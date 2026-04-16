@@ -1,4 +1,5 @@
 import '../models/application.dart';
+import '../models/application_feedback.dart';
 import '../models/employer_profiles_data.dart';
 import '../models/job_listing.dart';
 import '../models/job_listing_template.dart';
@@ -33,4 +34,13 @@ abstract class AppRepository {
   Future<List<Application>> loadApplicationsForEmployer(String employerId);
   Future<void> updateApplicationStatus(String applicationId, String status);
   Future<bool> hasApplied(String seekerId, String jobId);
+  Future<Application?> getLatestApplicationForJob(
+    String seekerId,
+    String jobId,
+  );
+
+  // Application feedback methods
+  Future<void> saveFeedback(ApplicationFeedback feedback);
+  Future<List<ApplicationFeedback>> getAllFeedback();
+  Future<ApplicationFeedback?> getFeedbackForApplication(String applicationId);
 }

@@ -1,0 +1,249 @@
+import 'package:aviation_job_listings/models/application_feedback.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+import 'helpers/fake_app_repository.dart';
+
+void main() {
+  group('ApplicationFeedback model', () {
+    final now = DateTime(2026, 4, 16, 12);
+
+    test('constants are defined correctly', () {
+      expect(ApplicationFeedback.feedbackTypeInterested, 'interested');
+      expect(ApplicationFeedback.feedbackTypeNotFit, 'not_fit');
+      expect(ApplicationFeedback.feedbackTypeCustom, 'custom');
+    });
+
+    test('toJson / fromJson round-trip', () {
+      final original = ApplicationFeedback(
+        id: 'fb-1',
+        applicationId: 'app-99',
+        message: 'Great candidate!',
+        feedbackType: ApplicationFeedback.feedbackTypeInterested,
+        sentByEmployer: true,
+        sentAt: now,
+      );
+
+      final json = original.toJson();
+      final restored = ApplicationFeedback.fromJson(json);
+
+      expect(restored.id, original.id);
+      expect(restored.applicationId, original.applicationId);
+      expect(restored.message, original.message);
+      expect(restored.feedbackType, original.feedbackType);
+      expect(restored.sentByEmployer, original.sentByEmployer);
+      expect(restored.sentAt, original.sentAt);
+    });
+
+    test('toJson uses snake_case keys', () {
+      final feedback = ApplicationFeedback(
+        id: 'fb-2',
+        applicationId: 'app-7',
+        message: 'Not a fit.',
+        feedbackType: ApplicationFeedback.feedbackTypeNotFit,
+        sentByEmployer: true,
+        sentAt: now,
+      );
+
+      final json = feedback.toJson();
+      expect(json['application_id'], 'app-7');
+      expect(json['feedback_type'], 'not_fit');
+      expect(json['sent_by_employer'], true);
+      expect(json['sent_at'], now.toIso8601String());
+    });
+
+    test('fromJson handles snake_case keys', () {
+      final feedback = ApplicationFeedback.fromJson({
+        'id': 'fb-3',
+        'application_id': 'app-10',
+        'message': 'Custom note.',
+        'feedback_type': 'custom',
+        'sent_by_employer': false,
+        'sent_at': now.toIso8601String(),
+      });
+
+      expect(feedback.id, 'fb-3');
+      expect(feedback.applicationId, 'app-10');
+      expect(feedback.message, 'Custom note.');
+      expect(feedback.feedbackType, 'custom');
+      expect(feedback.sentByEmployer, false);
+      expect(feedback.sentAt, now);
+    });
+
+    test('fromJson handles camelCase keys', () {
+      final feedback = ApplicationFeedback.fromJson({
+        'id': 'fb-4',
+        'applicationId': 'app-20',
+        'message': 'Interested.',
+        'feedbackType': 'interested',
+        'sentByEmployer': true,
+        'sentAt': now.toIso8601String(),
+      });
+
+      expect(feedback.applicationId, 'app-20');
+      expect(feedback.feedbackType, 'interested');
+    });
+
+    test('fromJson handles missing fields with defaults', () {
+      final feedback = ApplicationFeedback.fromJson({});
+      expect(feedback.id, '');
+      expect(feedback.applicationId, '');
+      expect(feedback.message, '');
+      expect(feedback.feedbackType, ApplicationFeedback.feedbackTypeCustom);
+      expect(feedback.sentByEmployer, true);
+    });
+
+    test('copyWith returns updated feedback', () {
+      final original = ApplicationFeedback(
+        id: 'fb-5',
+        applicationId: 'app-30',
+        message: 'Old message.',
+        feedbackType: ApplicationFeedback.feedbackTypeNotFit,
+        sentByEmployer: true,
+        sentAt: now,
+      );
+
+      final updated = original.copyWith(
+        message: 'Updated message.',
+        feedbackType: ApplicationFeedback.feedbackTypeInterested,
+      );
+
+      expect(updated.message, 'Updated message.');
+      expect(updated.feedbackType, ApplicationFeedback.feedbackTypeInterested);
+      // Unchanged fields
+      expect(updated.id, original.id);
+      expect(updated.applicationId, original.applicationId);
+      expect(updated.sentByEmployer, original.sentByEmployer);
+      expect(updated.sentAt, original.sentAt);
+    });
+  });
+
+  group('ApplicationFeedback repository (FakeAppRepository)', () {
+    late FakeAppRepository repo;
+    final now = DateTime(2026, 4, 16, 12);
+
+    setUp(() {
+      repo = FakeAppRepository();
+    });
+
+    test('saveFeedback stores feedback and getAllFeedback returns it', () async {
+      final feedback = ApplicationFeedback(
+        id: 'fb-r1',
+        applicationId: 'app-r1',
+        message: 'Interested!',
+        feedbackType: ApplicationFeedback.feedbackTypeInterested,
+        sentByEmployer: true,
+        sentAt: now,
+      );
+
+      await repo.saveFeedback(feedback);
+      final all = await repo.getAllFeedback();
+
+      expect(all.length, 1);
+      expect(all.first.id, 'fb-r1');
+    });
+
+    test('saveFeedback upserts by applicationId', () async {
+      final feedback1 = ApplicationFeedback(
+        id: 'fb-r2a',
+        applicationId: 'app-r2',
+        message: 'First.',
+        feedbackType: ApplicationFeedback.feedbackTypeNotFit,
+        sentByEmployer: true,
+        sentAt: now,
+      );
+      final feedback2 = ApplicationFeedback(
+        id: 'fb-r2b',
+        applicationId: 'app-r2',
+        message: 'Updated.',
+        feedbackType: ApplicationFeedback.feedbackTypeInterested,
+        sentByEmployer: true,
+        sentAt: now,
+      );
+
+      await repo.saveFeedback(feedback1);
+      await repo.saveFeedback(feedback2);
+      final all = await repo.getAllFeedback();
+
+      // Only one entry per applicationId
+      expect(all.where((f) => f.applicationId == 'app-r2').length, 1);
+      expect(all.first.message, 'Updated.');
+    });
+
+    test('getFeedbackForApplication returns correct feedback', () async {
+      final feedback = ApplicationFeedback(
+        id: 'fb-r3',
+        applicationId: 'app-r3',
+        message: 'Good match.',
+        feedbackType: ApplicationFeedback.feedbackTypeInterested,
+        sentByEmployer: true,
+        sentAt: now,
+      );
+
+      await repo.saveFeedback(feedback);
+      final result = await repo.getFeedbackForApplication('app-r3');
+
+      expect(result, isNotNull);
+      expect(result!.id, 'fb-r3');
+    });
+
+    test('getFeedbackForApplication returns null when not found', () async {
+      final result = await repo.getFeedbackForApplication('nonexistent');
+      expect(result, isNull);
+    });
+  });
+
+  group('Auto-reject threshold logic', () {
+    test('matchPercentage below threshold triggers auto-reject', () {
+      const threshold = 65;
+      const matchPercentage = 50;
+      final shouldAutoReject =
+          threshold > 0 && matchPercentage < threshold;
+      expect(shouldAutoReject, isTrue);
+    });
+
+    test('matchPercentage at threshold does not trigger auto-reject', () {
+      const threshold = 65;
+      const matchPercentage = 65;
+      final shouldAutoReject =
+          threshold > 0 && matchPercentage < threshold;
+      expect(shouldAutoReject, isFalse);
+    });
+
+    test('threshold of 0 (disabled) never auto-rejects', () {
+      const threshold = 0;
+      const matchPercentage = 10;
+      final shouldAutoReject =
+          threshold > 0 && matchPercentage < threshold;
+      expect(shouldAutoReject, isFalse);
+    });
+  });
+
+  group('Reapply prevention logic', () {
+    test('within reapply window prevents re-application', () {
+      final appliedAt = DateTime(2026, 4, 1);
+      final now = DateTime(2026, 4, 10); // 9 days later
+      const reapplyWindowDays = 30;
+      final canReapply =
+          now.difference(appliedAt).inDays >= reapplyWindowDays;
+      expect(canReapply, isFalse);
+    });
+
+    test('after reapply window allows re-application', () {
+      final appliedAt = DateTime(2026, 3, 1);
+      final now = DateTime(2026, 4, 10); // 40 days later
+      const reapplyWindowDays = 30;
+      final canReapply =
+          now.difference(appliedAt).inDays >= reapplyWindowDays;
+      expect(canReapply, isTrue);
+    });
+
+    test('exactly at boundary (30 days) allows re-application', () {
+      final appliedAt = DateTime(2026, 3, 11);
+      final now = DateTime(2026, 4, 10); // exactly 30 days later
+      const reapplyWindowDays = 30;
+      final canReapply =
+          now.difference(appliedAt).inDays >= reapplyWindowDays;
+      expect(canReapply, isTrue);
+    });
+  });
+}
