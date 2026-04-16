@@ -1,3 +1,4 @@
+import '../models/application.dart';
 import '../models/employer_profiles_data.dart';
 import '../models/job_listing.dart';
 import '../models/job_listing_template.dart';
@@ -25,4 +26,9 @@ abstract class AppRepository {
   Future<JobListing> createJob(JobListing job);
   Future<JobListing> updateJob(JobListing job);
   Future<void> deleteJob(JobListing job);
+
+  // Application methods
+  Future<void> saveApplication(Application app);
+  Future<List<Application>> getApplicationsBySeeker(String seekerId);
+  Future<bool> hasApplied(String seekerId, String jobId);
 }

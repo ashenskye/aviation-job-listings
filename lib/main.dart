@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'models/application.dart';
 import 'models/aviation_certificate_utils.dart';
 import 'models/employer_profile.dart';
 import 'models/employer_profiles_data.dart';
@@ -681,6 +682,20 @@ class _MyHomePageState extends State<MyHomePage> {
   final Set<String> _favoriteIds = {};
 
   // ============================================================================
+  // APPLICATION STATE: Job seeker applications
+  // ============================================================================
+
+  static const String _localJobSeekerId = 'local_seeker';
+
+  List<Application> _myApplications = const [];
+  Map<String, bool> _applicationsByJobId = {};
+
+  bool _hasApplied(String jobId) => _applicationsByJobId[jobId] ?? false;
+
+  String _generateApplicationId() =>
+      DateTime.now().millisecondsSinceEpoch.toString();
+
+  // ============================================================================
   // JOB CREATION FORM STATE: User selections for creating new job listings
   // ============================================================================
 
@@ -768,6 +783,7 @@ class _MyHomePageState extends State<MyHomePage> {
     _loadJobSeekerProfile();
     _loadEmployerProfiles();
     _loadJobTemplates();
+    _loadMyApplications();
     _loadCookieConsentPreference();
     _fetchJobs();
   }
@@ -4243,11 +4259,15 @@ class _MyHomePageState extends State<MyHomePage> {
           job: job,
           isFavorite: _favoriteIds.contains(job.id),
           onFavorite: () => _toggleFavorite(job),
-          onApply: () => _applyToJob(job),
+          onApply: _hasApplied(job.id) ? null : () => _handleApplyTap(job),
           onShare: () => _shareJobListing(job),
           companyProfile: _findEmployerProfileForJob(job),
           openRoleCount: _countOpenRolesForJob(job),
           onSeeAllListings: () => _seeAllListingsForCompany(job),
+          hasApplied: _hasApplied(job.id),
+          matchPercentage: _profileType == ProfileType.jobSeeker
+              ? _evaluateJobMatch(job).matchPercentage
+              : null,
           profile: _profileType == ProfileType.jobSeeker
               ? _jobSeekerProfile
               : null,
@@ -4256,12 +4276,128 @@ class _MyHomePageState extends State<MyHomePage> {
     );
   }
 
-  void _applyToJob(JobListing job) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Application sent for ${job.title} at ${job.company}.'),
+  Future<void> _loadMyApplications() async {
+    final apps = await _appRepository.getApplicationsBySeeker(
+      _localJobSeekerId,
+    );
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _myApplications = apps;
+      _applicationsByJobId = {for (final app in apps) app.jobId: true};
+    });
+  }
+
+  Future<void> _applyToJob(JobListing job, {String? coverLetter}) async {
+    if (_hasApplied(job.id)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('You already applied to this job.')),
+      );
+      return;
+    }
+
+    try {
+      final match = _evaluateJobMatch(job);
+      final application = Application(
+        id: _generateApplicationId(),
+        jobSeekerId: _localJobSeekerId,
+        jobId: job.id,
+        employerId: job.employerId ?? '',
+        status: 'applied',
+        matchPercentage: match.matchPercentage,
+        coverLetter: coverLetter ?? '',
+        appliedAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      );
+
+      await _appRepository.saveApplication(application);
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _myApplications = [..._myApplications, application];
+        _applicationsByJobId = {..._applicationsByJobId, job.id: true};
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Applied! Employer will see your profile.')),
+      );
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error applying: $e')),
+      );
+    }
+  }
+
+  void _handleApplyTap(JobListing job) {
+    final match = _evaluateJobMatch(job);
+    if (match.matchPercentage >= 90) {
+      _applyToJob(job);
+    } else {
+      _showQuickApplyDialog(job, match);
+    }
+  }
+
+  Future<void> _showQuickApplyDialog(
+    JobListing job,
+    _MatchResult match,
+  ) async {
+    final coverLetterController = TextEditingController();
+    final matchLabel = match.matchPercentage >= 70
+        ? '${match.matchPercentage}% Good Match'
+        : '${match.matchPercentage}% Stretch Match';
+    final bodyText = match.missingRequirements.isEmpty
+        ? 'Add an optional cover letter.'
+        : 'Missing: ${match.missingRequirements.take(3).join(', ')}'
+            '${match.missingRequirements.length > 3 ? '...' : ''}.';
+    final submitted = await showDialog<String?>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(match.matchPercentage >= 70 ? 'Quick Apply' : 'Apply Anyway'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(matchLabel, style: const TextStyle(fontWeight: FontWeight.w600)),
+            const SizedBox(height: 4),
+            Text(bodyText),
+            const SizedBox(height: 16),
+            TextField(
+              controller: coverLetterController,
+              decoration: const InputDecoration(
+                labelText: 'Cover letter (optional)',
+                border: OutlineInputBorder(),
+              ),
+              maxLines: 4,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(null),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () =>
+                Navigator.of(dialogContext).pop(coverLetterController.text),
+            child: const Text('Submit Application'),
+          ),
+        ],
       ),
     );
+
+    coverLetterController.dispose();
+
+    if (!mounted || submitted == null) {
+      return;
+    }
+
+    await _applyToJob(job, coverLetter: submitted);
   }
 
   Future<void> _shareJobListing(JobListing job) async {
@@ -6253,9 +6389,21 @@ class _MyHomePageState extends State<MyHomePage> {
                                               visualDensity: isNarrowCard
                                                   ? VisualDensity.compact
                                                   : VisualDensity.standard,
-                                              icon: const Icon(Icons.send),
-                                              tooltip: 'Apply',
-                                              onPressed: () => _applyToJob(job),
+                                              icon: Icon(
+                                                _hasApplied(job.id)
+                                                    ? Icons.check_circle
+                                                    : Icons.send,
+                                                color: _hasApplied(job.id)
+                                                    ? Colors.green
+                                                    : null,
+                                              ),
+                                              tooltip: _hasApplied(job.id)
+                                                  ? 'Applied'
+                                                  : 'Apply',
+                                              onPressed: _hasApplied(job.id)
+                                                  ? null
+                                                  : () =>
+                                                      _handleApplyTap(job),
                                             ),
                                           if (_canEditJob(job))
                                             OutlinedButton.icon(
@@ -6300,6 +6448,125 @@ class _MyHomePageState extends State<MyHomePage> {
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildMyApplicationsTab() {
+    if (_myApplications.isEmpty) {
+      return const Center(
+        child: Text('No applications yet. Browse jobs and hit Apply!'),
+      );
+    }
+
+    final sorted = [..._myApplications]
+      ..sort((a, b) => b.appliedAt.compareTo(a.appliedAt));
+
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      itemCount: sorted.length,
+      itemBuilder: (context, index) {
+        final app = sorted[index];
+        final job = _allJobs.firstWhere(
+          (j) => j.id == app.jobId,
+          orElse: () => JobListing(
+            id: app.jobId,
+            title: 'Unknown Job',
+            company: 'Unknown',
+            location: '',
+            type: '',
+            crewRole: '',
+            faaRules: const [],
+            description: '',
+            faaCertificates: const [],
+            flightExperience: const [],
+            aircraftFlown: const [],
+          ),
+        );
+
+        final Color badgeColor;
+        final String matchLabel;
+        if (app.isPerfectMatch) {
+          badgeColor = Colors.green.shade100;
+          matchLabel = '🟢 ${app.matchPercentage}% Perfect Match';
+        } else if (app.isGoodMatch) {
+          badgeColor = Colors.yellow.shade100;
+          matchLabel = '🟡 ${app.matchPercentage}% Good Match';
+        } else {
+          badgeColor = Colors.red.shade100;
+          matchLabel = '🔴 ${app.matchPercentage}% Stretch Match';
+        }
+
+        final statusLabel = switch (app.status) {
+          'viewed' => 'Viewed by employer',
+          'interested' => '⭐ Employer interested',
+          'rejected' => 'Not moving forward',
+          _ => 'Submitted',
+        };
+
+        return Card(
+          margin: const EdgeInsets.symmetric(vertical: 8),
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  job.title,
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text('${job.company} • ${job.location}'),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: badgeColor,
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        matchLabel,
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade100,
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        statusLabel,
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Applied ${_formatYmd(app.appliedAt.toLocal())}',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Colors.grey.shade600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -8332,6 +8599,7 @@ class _MyHomePageState extends State<MyHomePage> {
             Tab(text: 'Search'),
             Tab(text: 'Profile'),
             Tab(text: 'Favorites'),
+            Tab(text: 'My Applications'),
           ];
 
     return DefaultTabController(
@@ -8400,6 +8668,7 @@ class _MyHomePageState extends State<MyHomePage> {
                       _buildResponsiveTabContent(_buildSearchTab()),
                       _buildResponsiveTabContent(_buildProfileTab()),
                       _buildResponsiveTabContent(_buildFavoritesTab()),
+                      _buildResponsiveTabContent(_buildMyApplicationsTab()),
                     ],
             ),
           ),
@@ -8422,6 +8691,8 @@ class JobDetailsPage extends StatelessWidget {
   final JobSeekerProfile? profile;
   final EmployerProfile? companyProfile;
   final int openRoleCount;
+  final bool hasApplied;
+  final int? matchPercentage;
 
   const JobDetailsPage({
     super.key,
@@ -8434,6 +8705,8 @@ class JobDetailsPage extends StatelessWidget {
     this.profile,
     this.companyProfile,
     this.openRoleCount = 0,
+    this.hasApplied = false,
+    this.matchPercentage,
   });
 
   void _openCompanyInfo(BuildContext context) {
@@ -8828,11 +9101,7 @@ class JobDetailsPage extends StatelessWidget {
                             spacing: 10,
                             runSpacing: 10,
                             children: [
-                              ElevatedButton.icon(
-                                onPressed: onApply,
-                                icon: const Icon(Icons.send_outlined),
-                                label: const Text('Apply'),
-                              ),
+                              _buildApplyButton(context),
                               OutlinedButton.icon(
                                 onPressed: onShare,
                                 icon: const Icon(Icons.share_outlined),
@@ -8859,6 +9128,49 @@ class JobDetailsPage extends StatelessWidget {
         ),
       ),
     );
+  }
+
+
+  Widget _buildApplyButton(BuildContext context) {
+    if (hasApplied) {
+      return OutlinedButton.icon(
+        onPressed: null,
+        icon: const Icon(Icons.check),
+        label: const Text('✓ Applied'),
+      );
+    }
+
+    final pct = matchPercentage;
+    if (pct == null) {
+      return ElevatedButton.icon(
+        onPressed: onApply,
+        icon: const Icon(Icons.send_outlined),
+        label: const Text('Apply'),
+      );
+    }
+
+    if (pct >= 90) {
+      return FilledButton.icon(
+        onPressed: onApply,
+        icon: const Icon(Icons.check_circle),
+        label: const Text('Apply Now'),
+        style: FilledButton.styleFrom(backgroundColor: Colors.green),
+      );
+    } else if (pct >= 70) {
+      return FilledButton.icon(
+        onPressed: onApply,
+        icon: const Icon(Icons.send),
+        label: const Text('Quick Apply'),
+        style: FilledButton.styleFrom(backgroundColor: Colors.orange),
+      );
+    } else {
+      return FilledButton.icon(
+        onPressed: onApply,
+        icon: const Icon(Icons.warning),
+        label: const Text('Apply Anyway'),
+        style: FilledButton.styleFrom(backgroundColor: Colors.red),
+      );
+    }
   }
 
   Widget _buildDetailSection({

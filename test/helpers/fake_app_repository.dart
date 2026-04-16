@@ -1,3 +1,4 @@
+import 'package:aviation_job_listings/models/application.dart';
 import 'package:aviation_job_listings/models/employer_profiles_data.dart';
 import 'package:aviation_job_listings/models/job_listing.dart';
 import 'package:aviation_job_listings/models/job_listing_template.dart';
@@ -11,6 +12,7 @@ class FakeAppRepository implements AppRepository {
   EmployerProfilesData _employerData = const EmployerProfilesData.empty();
   final List<JobListing> _jobs = <JobListing>[];
   final List<JobListingTemplate> _templates = <JobListingTemplate>[];
+  final List<Application> _applications = <Application>[];
 
   @override
   Future<Set<String>> loadFavoriteIds() async => _favoriteIds;
@@ -75,5 +77,29 @@ class FakeAppRepository implements AppRepository {
   @override
   Future<void> deleteJob(JobListing job) async {
     _jobs.removeWhere((item) => item.id == job.id);
+  }
+
+  @override
+  Future<void> saveApplication(Application app) async {
+    final index = _applications.indexWhere((a) => a.id == app.id);
+    if (index >= 0) {
+      _applications[index] = app;
+    } else {
+      _applications.add(app);
+    }
+  }
+
+  @override
+  Future<List<Application>> getApplicationsBySeeker(String seekerId) async {
+    return _applications
+        .where((app) => app.jobSeekerId == seekerId)
+        .toList();
+  }
+
+  @override
+  Future<bool> hasApplied(String seekerId, String jobId) async {
+    return _applications.any(
+      (app) => app.jobSeekerId == seekerId && app.jobId == jobId,
+    );
   }
 }
