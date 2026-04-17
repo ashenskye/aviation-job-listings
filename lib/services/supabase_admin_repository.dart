@@ -209,7 +209,10 @@ class SupabaseAdminRepository implements AdminRepository {
         .eq('id', jobId)
         .maybeSingle();
 
-    await _client.from('job_listings').update(updated.toJson()).eq('id', jobId);
+    await _client
+      .from('job_listings')
+      .update(_toJobListingRow(updated))
+      .eq('id', jobId);
 
     await logAdminAction(
       AdminActionLog(
@@ -696,7 +699,7 @@ class SupabaseAdminRepository implements AdminRepository {
 
     final nextRow = {
       'employer_id': employerId,
-      if (companyName != null) 'company_name': companyName,
+      'company_name': ?companyName,
       'admin_deleted_job_count':
           previousDeletedJobCount + deletedJobListingCount,
       'is_banned': isBanned,
@@ -764,8 +767,8 @@ class SupabaseAdminRepository implements AdminRepository {
 
     final nextRow = {
       'user_id': userId,
-      if (displayName != null) 'display_name': displayName,
-      if (email != null) 'email': email,
+      'display_name': ?displayName,
+      'email': ?email,
       'admin_deleted_application_count':
           previousDeletedApplicationCount + deletedApplicationCount,
       'is_banned': isBanned,
@@ -805,6 +808,41 @@ class SupabaseAdminRepository implements AdminRepository {
     data['updated_at'] = row['updated_at'] ?? data['updated_at'];
     data['applied_at'] = row['created_at'] ?? data['applied_at'];
     return Application.fromJson(data);
+  }
+
+  Map<String, dynamic> _toJobListingRow(JobListing job) {
+    return {
+      'id': job.id,
+      'employer_id': job.employerId,
+      'title': job.title,
+      'company': job.company,
+      'location': job.location,
+      'employment_type': job.type,
+      'crew_role': job.crewRole,
+      'crew_position': job.crewPosition,
+      'faa_rules': job.faaRules,
+      'description': job.description,
+      'faa_certificates': job.faaCertificates,
+      'type_ratings_required': job.typeRatingsRequired,
+      'flight_experience': job.flightExperience,
+      'flight_hours': job.flightHours,
+      'preferred_flight_hours': job.preferredFlightHours,
+      'instructor_hours': job.instructorHours,
+      'preferred_instructor_hours': job.preferredInstructorHours,
+      'specialty_experience': job.specialtyExperience,
+      'specialty_hours': job.specialtyHours,
+      'preferred_specialty_hours': job.preferredSpecialtyHours,
+      'aircraft_flown': job.aircraftFlown,
+      'salary_range': job.salaryRange,
+      'minimum_hours': job.minimumHours,
+      'benefits': job.benefits,
+      'deadline_date': job.deadlineDate?.toIso8601String(),
+      'auto_reject_threshold': job.autoRejectThreshold,
+      'reapply_window_days': job.reapplyWindowDays,
+      'is_external': job.isExternal,
+      'external_apply_url': job.externalApplyUrl,
+      'status': job.isActive ? 'active' : 'archived',
+    };
   }
 
   Map<String, dynamic> _fromJobListingRow(Map<String, dynamic> row) {

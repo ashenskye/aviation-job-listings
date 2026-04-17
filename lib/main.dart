@@ -1138,6 +1138,12 @@ class _MyHomePageState extends State<MyHomePage> {
       createdAt: job.createdAt,
       updatedAt: job.updatedAt,
       employerId: job.employerId,
+      autoRejectThreshold: job.autoRejectThreshold,
+      reapplyWindowDays: job.reapplyWindowDays,
+      isExternal: job.isExternal,
+      externalApplyUrl: job.externalApplyUrl,
+      isActive: job.isActive,
+      archivedAt: job.archivedAt,
     );
   }
 
@@ -4640,7 +4646,7 @@ class _MyHomePageState extends State<MyHomePage> {
           isFavorite: _favoriteIds.contains(job.id),
           onFavorite: () => _toggleFavorite(job),
           onApply: isExternalListing
-              ? () => _openExternalApply(job)
+              ? null
               : (hasApplied ? null : () => _handleApplyTap(job)),
           onShare: () => _shareJobListing(job),
           onReport: _profileType == ProfileType.jobSeeker
@@ -7609,6 +7615,26 @@ class _MyHomePageState extends State<MyHomePage> {
                                                               FontWeight.w600,
                                                         ),
                                                       ),
+                                                      if (job.isExternal) ...[
+                                                        const SizedBox(height: 2),
+                                                        Container(
+                                                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                                          decoration: BoxDecoration(
+                                                            color: Colors.teal.shade50,
+                                                            border: Border.all(color: Colors.teal.shade300),
+                                                            borderRadius: BorderRadius.circular(4),
+                                                          ),
+                                                          child: Text(
+                                                            'EXTERNAL',
+                                                            style: TextStyle(
+                                                              fontSize: 10,
+                                                              color: Colors.teal.shade800,
+                                                              fontWeight: FontWeight.w700,
+                                                              letterSpacing: 0.5,
+                                                            ),
+                                                          ),
+                                                        ),
+                                                      ],
                                                       if (_profileType ==
                                                           ProfileType
                                                               .employer) ...[
@@ -7976,8 +8002,7 @@ class _MyHomePageState extends State<MyHomePage> {
                                                   ? 'Applied'
                                                   : 'Apply',
                                               onPressed: job.isExternal
-                                                  ? () =>
-                                                        _openExternalApply(job)
+                                                  ? null
                                                   : hasApplied
                                                   ? null
                                                   : () => _handleApplyTap(job),
@@ -12013,7 +12038,7 @@ class JobDetailsPage extends StatelessWidget {
   Widget _buildApplyButton(BuildContext context) {
     if (isExternalListing) {
       return FilledButton.icon(
-        onPressed: onApply,
+        onPressed: null,
         icon: const Icon(Icons.open_in_new),
         label: const Text('Apply Externally'),
       );

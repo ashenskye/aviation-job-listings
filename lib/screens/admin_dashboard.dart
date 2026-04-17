@@ -256,17 +256,130 @@ class _ExternalPostingsTab extends StatefulWidget {
   State<_ExternalPostingsTab> createState() => _ExternalPostingsTabState();
 }
 
+enum _ExternalPostsView { create, view }
+
 class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
+  static const List<String> _availableFaaCertificates = [
+    'Airline Transport Pilot (ATP)',
+    'Commercial Pilot (CPL)',
+    'Instrument Rating (IFR)',
+    'Private Pilot (PPL)',
+    'Airframe & Powerplant (A&P)',
+    'Inspection Authorization (IA)',
+    'Dispatcher (DSP)',
+  ];
+
+  static const List<String> _availableInstructorCertificates = [
+    'Flight Instructor (CFI)',
+    'Instrument Instructor (CFII)',
+    'Multi-Engine Instructor (MEI)',
+  ];
+
+  static const List<String> _availableFaaRules = [
+    'Part 121',
+    'Part 135',
+    'Part 91',
+  ];
+
+  static const List<String> _availableEmployerFlightHours = [
+    'Total Time',
+    'PIC Jet',
+    'SIC Jet',
+    'PIC Turbine',
+    'SIC Turbine',
+    'PIC',
+    'SIC',
+    'Multi-engine',
+  ];
+
+  static const List<String> _availableInstructorHours = [
+    'Total Instructor Hours',
+    'Instrument (CFII)',
+    'Multi-Engine (MEI)',
+  ];
+
+  static const List<String> _availableSpecialtyExperience = [
+    'Fire Fighting',
+    'Aerobatic',
+    'Floatplane',
+    'Tailwheel',
+    'Off Airport',
+    'Banner Towing',
+    'Low Altitude',
+    'Aerial Survey',
+  ];
+
+  static const List<String> _availableJobTypes = [
+    'Full-Time',
+    'Part-Time',
+    'Seasonal',
+    'Rotations',
+    'Contract',
+  ];
+
+  static const List<String> _availablePayRateMetrics = [
+    'Flight Hour',
+    'Hourly Pay for Duty Time',
+    'Daily Rate',
+    'Weekly Salary',
+    'Monthly Salary',
+    'Annual Salary',
+    'Shift',
+    'Contract Completion',
+  ];
+
+  static const List<String> _availableRatingSelections = [
+    'Multi-Engine Land',
+    'Single-Engine Land',
+    'Multi-Engine Sea',
+    'Single-Engine Sea',
+    'Tailwheel Endorsement',
+    'Rotorcraft',
+    'Gyroplane',
+    'Glider',
+    'Lighter-than-Air',
+  ];
+
   final _titleController = TextEditingController();
   final _companyController = TextEditingController();
   final _locationController = TextEditingController();
-  final _employmentTypeController = TextEditingController(text: 'External');
-  final _summaryController = TextEditingController();
+  final _employmentTypeController = TextEditingController();
+  final _descriptionController = TextEditingController();
+  final _startingPayController = TextEditingController();
+  final _payForExperienceController = TextEditingController();
+  final _typeRatingsController = TextEditingController();
+  final _aircraftController = TextEditingController();
   final _sourceNameController = TextEditingController();
   final _sourceUrlController = TextEditingController();
   final _reasonController = TextEditingController();
 
+  _ExternalPostsView _selectedView = _ExternalPostsView.create;
+  List<JobListing> _externalListings = const [];
+  JobListing? _editingListing;
+  final Set<String> _archivingListingIds = <String>{};
+  final Set<String> _deletingListingIds = <String>{};
+  bool _externalListingsLoading = false;
   bool _isSubmitting = false;
+  String? _selectedPositionOption;
+  String? _selectedPayRateMetric;
+  String _selectedCrewRole = 'Single Pilot';
+  String _selectedCrewPosition = 'Captain';
+  bool _openListing = true;
+  DateTime? _deadlineDate;
+  final Set<String> _selectedFaaCertificates = <String>{};
+  final Set<String> _selectedFaaRules = <String>{};
+  final Map<String, int> _selectedFlightHours = <String, int>{};
+  final Set<String> _preferredFlightHours = <String>{};
+  final Map<String, int> _selectedInstructorHours = <String, int>{};
+  final Set<String> _preferredInstructorHours = <String>{};
+  final Map<String, int> _selectedSpecialtyHours = <String, int>{};
+  final Set<String> _preferredSpecialtyHours = <String>{};
+
+  @override
+  void initState() {
+    super.initState();
+    _loadExternalListings();
+  }
 
   @override
   void dispose() {
@@ -274,11 +387,37 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
     _companyController.dispose();
     _locationController.dispose();
     _employmentTypeController.dispose();
-    _summaryController.dispose();
+    _descriptionController.dispose();
+    _startingPayController.dispose();
+    _payForExperienceController.dispose();
+    _typeRatingsController.dispose();
+    _aircraftController.dispose();
     _sourceNameController.dispose();
     _sourceUrlController.dispose();
     _reasonController.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadExternalListings() async {
+    setState(() => _externalListingsLoading = true);
+    try {
+      final listings = await widget.adminRepository.getExternalJobListings();
+      if (!mounted) {
+        return;
+      }
+      setState(() => _externalListings = listings);
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not load external listings.')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _externalListingsLoading = false);
+      }
+    }
   }
 
   Future<void> _submitExternalListing() async {
@@ -291,19 +430,14 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
     final location = _locationController.text.trim();
     final employmentType = _employmentTypeController.text.trim();
     final sourceName = _sourceNameController.text.trim();
-    final sourceUrl = _sourceUrlController.text.trim();
+    final rawSourceUrl = _sourceUrlController.text.trim();
     final reason = _reasonController.text.trim();
+    var sourceUrl = rawSourceUrl;
 
-    if (title.isEmpty && company.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Provide at least a title or company name.'),
-        ),
-      );
-      return;
-    }
-
-    if (sourceUrl.isNotEmpty) {
+    if (rawSourceUrl.isNotEmpty) {
+      sourceUrl = rawSourceUrl.contains('://')
+          ? rawSourceUrl
+          : 'https://$rawSourceUrl';
       final parsed = Uri.tryParse(sourceUrl);
       final looksValid =
           parsed != null &&
@@ -312,17 +446,52 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
       if (!looksValid) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Source URL must be a valid http/https URL.'),
+            content: Text('Source URL looks invalid. Please check and try again.'),
           ),
         );
         return;
       }
     }
 
-    final summary = _summaryController.text.trim();
+    final descriptionInput = _descriptionController.text.trim();
+    final salaryRange = _buildExternalSalaryRange();
+    final selectedTypeRatings = _splitCommaSeparatedValues(
+      _typeRatingsController.text,
+    );
+    final selectedAircraft = _splitCommaSeparatedValues(_aircraftController.text);
+
+    final selectedFlightHours = {
+      for (final entry in _selectedFlightHours.entries)
+        if (entry.value > 0) entry.key: entry.value,
+    };
+    final selectedInstructorHours = {
+      for (final entry in _selectedInstructorHours.entries)
+        if (entry.value > 0) entry.key: entry.value,
+    };
+    final selectedSpecialtyHours = {
+      for (final entry in _selectedSpecialtyHours.entries)
+        if (entry.value > 0) entry.key: entry.value,
+    };
+
+    final preferredFlightHours = _preferredFlightHours
+        .where(selectedFlightHours.containsKey)
+        .toList();
+    final preferredInstructorHours = _preferredInstructorHours
+        .where(selectedInstructorHours.containsKey)
+        .toList();
+    final preferredSpecialtyHours = _preferredSpecialtyHours
+        .where(selectedSpecialtyHours.containsKey)
+        .toList();
+
+    final minimumHours = _deriveMinimumHours(
+      selectedFlightHours: selectedFlightHours,
+      selectedInstructorHours: selectedInstructorHours,
+      selectedSpecialtyHours: selectedSpecialtyHours,
+    );
+
     final descriptionLines = <String>[
-      if (summary.isNotEmpty) summary,
-      if (summary.isEmpty) 'Externally sourced listing posted by admin.',
+      if (descriptionInput.isNotEmpty) descriptionInput,
+      if (descriptionInput.isEmpty) 'Externally sourced listing posted by admin.',
       '',
       'External listing details:',
       if (sourceName.isNotEmpty) 'Source: $sourceName',
@@ -333,37 +502,109 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
 
     setState(() => _isSubmitting = true);
     try {
-      final created = await widget.adminRepository.createExternalJobListing(
-        title: title.isEmpty ? 'External Opportunity' : title,
-        company: company.isEmpty ? 'External Company' : company,
-        location: location.isEmpty ? 'Location not specified' : location,
-        employmentType: employmentType.isEmpty ? 'External' : employmentType,
-        description: description,
-        externalApplyUrl: sourceUrl.isEmpty ? null : sourceUrl,
-        reason: reason.isEmpty ? 'Admin posted external listing' : reason,
-      );
+      final activeEditListing = _editingListing;
 
-      if (!mounted) {
-        return;
+      if (activeEditListing == null) {
+        final created = await widget.adminRepository.createExternalJobListing(
+          title: title.isEmpty ? 'External Opportunity' : title,
+          company: company.isEmpty ? 'External Company' : company,
+          location: location.isEmpty ? 'Location not specified' : location,
+          employmentType: employmentType.isEmpty ? 'External' : employmentType,
+          crewRole: _selectedCrewRole,
+          crewPosition: _selectedCrewRole == 'Crew' ? _selectedCrewPosition : null,
+          faaRules: _selectedFaaRules.toList(),
+          faaCertificates: _selectedFaaCertificates.toList(),
+          typeRatingsRequired: selectedTypeRatings,
+          flightHours: selectedFlightHours,
+          preferredFlightHours: preferredFlightHours,
+          instructorHours: selectedInstructorHours,
+          preferredInstructorHours: preferredInstructorHours,
+          specialtyHours: selectedSpecialtyHours,
+          preferredSpecialtyHours: preferredSpecialtyHours,
+          aircraftFlown: selectedAircraft,
+          salaryRange: salaryRange,
+          minimumHours: minimumHours,
+          deadlineDate: _openListing ? null : _deadlineDate,
+          autoRejectThreshold: 0,
+          reapplyWindowDays: 30,
+          description: description,
+          externalApplyUrl: sourceUrl.isEmpty ? null : sourceUrl,
+          reason: reason.isEmpty ? 'Admin posted external listing' : reason,
+        );
+
+        if (!mounted) {
+          return;
+        }
+
+        _clearExternalListingForm();
+
+        await widget.onCreated();
+        await _loadExternalListings();
+        if (!mounted) {
+          return;
+        }
+
+        setState(() => _selectedView = _ExternalPostsView.view);
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('External listing posted: ${created.title}')),
+        );
+      } else {
+        final updated = activeEditListing.copyWith(
+          title: title.isEmpty ? 'External Opportunity' : title,
+          company: company.isEmpty ? 'External Company' : company,
+          location: location.isEmpty ? 'Location not specified' : location,
+          type: employmentType.isEmpty ? 'External' : employmentType,
+          crewRole: _selectedCrewRole,
+          crewPosition: _selectedCrewRole == 'Crew' ? _selectedCrewPosition : null,
+          faaRules: _selectedFaaRules.toList(),
+          faaCertificates: _selectedFaaCertificates.toList(),
+          typeRatingsRequired: selectedTypeRatings,
+          flightExperience: [
+            ...selectedFlightHours.keys,
+            ...selectedInstructorHours.keys,
+          ],
+          flightHours: selectedFlightHours,
+          preferredFlightHours: preferredFlightHours,
+          instructorHours: selectedInstructorHours,
+          preferredInstructorHours: preferredInstructorHours,
+          specialtyExperience: selectedSpecialtyHours.keys.toList(),
+          specialtyHours: selectedSpecialtyHours,
+          preferredSpecialtyHours: preferredSpecialtyHours,
+          aircraftFlown: selectedAircraft,
+          salaryRange: salaryRange,
+          minimumHours: minimumHours,
+          deadlineDate: _openListing ? null : _deadlineDate,
+          autoRejectThreshold: 0,
+          reapplyWindowDays: 30,
+          description: description,
+          externalApplyUrl: sourceUrl.isEmpty ? null : sourceUrl,
+          updatedAt: DateTime.now(),
+        );
+
+        await widget.adminRepository.updateJobListing(
+          activeEditListing.id,
+          updated,
+          reason.isEmpty ? 'Admin updated external listing' : reason,
+        );
+
+        if (!mounted) {
+          return;
+        }
+
+        _clearExternalListingForm();
+        await widget.onCreated();
+        await _loadExternalListings();
+        if (!mounted) {
+          return;
+        }
+
+        setState(() => _selectedView = _ExternalPostsView.view);
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('External listing updated: ${updated.title}')),
+        );
       }
-
-      _titleController.clear();
-      _companyController.clear();
-      _locationController.clear();
-      _employmentTypeController.text = 'External';
-      _summaryController.clear();
-      _sourceNameController.clear();
-      _sourceUrlController.clear();
-      _reasonController.clear();
-
-      await widget.onCreated();
-      if (!mounted) {
-        return;
-      }
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('External listing posted: ${created.title}')),
-      );
     } catch (e) {
       if (!mounted) {
         return;
@@ -378,11 +619,584 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
     }
   }
 
+  void _clearExternalListingForm() {
+    _titleController.clear();
+    _companyController.clear();
+    _locationController.clear();
+    _employmentTypeController.clear();
+    _descriptionController.clear();
+    _startingPayController.clear();
+    _payForExperienceController.clear();
+    _typeRatingsController.clear();
+    _aircraftController.clear();
+    _sourceNameController.clear();
+    _sourceUrlController.clear();
+    _reasonController.clear();
+    _selectedPositionOption = null;
+    _selectedPayRateMetric = null;
+    _selectedCrewRole = 'Single Pilot';
+    _selectedCrewPosition = 'Captain';
+    _openListing = true;
+    _deadlineDate = null;
+    _selectedFaaCertificates.clear();
+    _selectedFaaRules.clear();
+    _selectedFlightHours.clear();
+    _preferredFlightHours.clear();
+    _selectedInstructorHours.clear();
+    _preferredInstructorHours.clear();
+    _selectedSpecialtyHours.clear();
+    _preferredSpecialtyHours.clear();
+    _editingListing = null;
+  }
+
+  List<String> _splitCommaSeparatedValues(String input) {
+    return input
+        .split(',')
+        .map((value) => value.trim())
+        .where((value) => value.isNotEmpty)
+        .toSet()
+        .toList();
+  }
+
+  int? _parsePositiveInt(String raw) {
+    final value = int.tryParse(raw.trim());
+    if (value == null || value <= 0) {
+      return null;
+    }
+    return value;
+  }
+
+  String? _buildExternalSalaryRange() {
+    final startingPay = _parsePositiveInt(_startingPayController.text);
+    if (startingPay == null) {
+      return null;
+    }
+
+    final topEndPay = _parsePositiveInt(_payForExperienceController.text);
+    final metricSuffix = _selectedPayRateMetric == null
+        ? ''
+        : ' / ${_selectedPayRateMetric!}';
+
+    final startLabel = '\$${startingPay.toString()}';
+    if (topEndPay == null) {
+      return '$startLabel$metricSuffix';
+    }
+
+    return '$startLabel - \$${topEndPay.toString()}$metricSuffix';
+  }
+
+  int? _deriveMinimumHours({
+    required Map<String, int> selectedFlightHours,
+    required Map<String, int> selectedInstructorHours,
+    required Map<String, int> selectedSpecialtyHours,
+  }) {
+    final totalTime = selectedFlightHours['Total Time'];
+    if (totalTime != null && totalTime > 0) {
+      return totalTime;
+    }
+
+    final allHours = [
+      ...selectedFlightHours.values,
+      ...selectedInstructorHours.values,
+      ...selectedSpecialtyHours.values,
+    ].where((value) => value > 0);
+
+    if (allHours.isEmpty) {
+      return null;
+    }
+    return allHours.reduce((a, b) => a < b ? a : b);
+  }
+
+  String _extractSummary(String description) {
+    const detailsHeader = '\n\nExternal listing details:';
+    final markerIndex = description.indexOf(detailsHeader);
+    if (markerIndex < 0) {
+      return description.trim();
+    }
+    return description.substring(0, markerIndex).trim();
+  }
+
+  String _extractDetailLine(String description, String prefix) {
+    final lines = description.split('\n');
+    for (final line in lines) {
+      final trimmed = line.trim();
+      if (trimmed.startsWith(prefix)) {
+        return trimmed.substring(prefix.length).trim();
+      }
+    }
+    return '';
+  }
+
+  void _beginEditExternalListing(JobListing listing) {
+    final summary = _extractSummary(listing.description);
+    final sourceName = _extractDetailLine(listing.description, 'Source:');
+    final sourceUrl = (listing.externalApplyUrl?.trim().isNotEmpty ?? false)
+        ? listing.externalApplyUrl!.trim()
+        : _extractDetailLine(listing.description, 'Source URL:');
+
+    final positionOption = listing.crewRole == 'Single Pilot'
+        ? 'Single Pilot'
+        : (listing.crewPosition == 'Co-Pilot'
+              ? 'Crew Member: Co-Pilot'
+              : 'Crew Member: Captain');
+
+    setState(() {
+      _editingListing = listing;
+      _selectedView = _ExternalPostsView.create;
+      _titleController.text = listing.title;
+      _companyController.text = listing.company;
+      _locationController.text = listing.location;
+      _employmentTypeController.text = listing.type;
+      _descriptionController.text = summary;
+      _typeRatingsController.text = listing.typeRatingsRequired.join(', ');
+      _aircraftController.text = listing.aircraftFlown.join(', ');
+      _sourceNameController.text = sourceName;
+      _sourceUrlController.text = sourceUrl;
+      _selectedPositionOption = positionOption;
+      _selectedCrewRole = listing.crewRole;
+      _selectedCrewPosition = listing.crewPosition ?? 'Captain';
+      _selectedFaaRules
+        ..clear()
+        ..addAll(listing.faaRules);
+      _selectedFaaCertificates
+        ..clear()
+        ..addAll(listing.faaCertificates);
+      _selectedFlightHours
+        ..clear()
+        ..addAll(listing.flightHours);
+      _preferredFlightHours
+        ..clear()
+        ..addAll(listing.preferredFlightHours);
+      _selectedInstructorHours
+        ..clear()
+        ..addAll(listing.instructorHours);
+      _preferredInstructorHours
+        ..clear()
+        ..addAll(listing.preferredInstructorHours);
+      _selectedSpecialtyHours
+        ..clear()
+        ..addAll(listing.specialtyHours);
+      _preferredSpecialtyHours
+        ..clear()
+        ..addAll(listing.preferredSpecialtyHours);
+      _openListing = listing.deadlineDate == null;
+      _deadlineDate = listing.deadlineDate;
+      _startingPayController.clear();
+      _payForExperienceController.clear();
+      _reasonController.text = '';
+    });
+  }
+
+  void _cancelEditing() {
+    setState(_clearExternalListingForm);
+  }
+
+  Future<String?> _promptArchiveReason(JobListing listing) async {
+    final controller = TextEditingController();
+    String? errorText;
+    return showDialog<String>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text('Archive ${listing.title}?'),
+          content: TextField(
+            controller: controller,
+            maxLines: 3,
+            decoration: InputDecoration(
+              hintText: 'Enter reason for archiving this external listing.',
+              border: const OutlineInputBorder(),
+              errorText: errorText,
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                final value = controller.text.trim();
+                if (value.isEmpty) {
+                  setDialogState(() {
+                    errorText = 'Reason is required.';
+                  });
+                  return;
+                }
+                Navigator.of(dialogContext).pop(value);
+              },
+              child: const Text('Continue'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<bool> _confirmArchive(JobListing listing) async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Confirm archive'),
+        content: Text(
+          'Archive external listing "${listing.title}" from ${listing.company}?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Archive'),
+          ),
+        ],
+      ),
+    );
+    return result ?? false;
+  }
+
+  Future<void> _archiveExternalListing(JobListing listing) async {
+    if (_archivingListingIds.contains(listing.id) || !listing.isActive) {
+      return;
+    }
+
+    final reason = await _promptArchiveReason(listing);
+    if (reason == null) {
+      return;
+    }
+
+    final confirmed = await _confirmArchive(listing);
+    if (!confirmed) {
+      return;
+    }
+
+    setState(() {
+      _archivingListingIds.add(listing.id);
+    });
+
+    try {
+      await widget.adminRepository.deleteJobListing(listing.id, reason);
+      if (!mounted) {
+        return;
+      }
+      await widget.onCreated();
+      await _loadExternalListings();
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Archived external listing: ${listing.title}')),
+      );
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not archive listing: $e')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _archivingListingIds.remove(listing.id);
+        });
+      }
+    }
+  }
+
+  Future<String?> _promptDeleteReason(JobListing listing) async {
+    final controller = TextEditingController();
+    String? errorText;
+    return showDialog<String>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text('Delete ${listing.title}?'),
+          content: TextField(
+            controller: controller,
+            maxLines: 3,
+            decoration: InputDecoration(
+              hintText: 'Enter reason for deleting this external listing.',
+              border: const OutlineInputBorder(),
+              errorText: errorText,
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                final value = controller.text.trim();
+                if (value.isEmpty) {
+                  setDialogState(() {
+                    errorText = 'Reason is required.';
+                  });
+                  return;
+                }
+                Navigator.of(dialogContext).pop(value);
+              },
+              child: const Text('Continue'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<bool> _confirmDelete(JobListing listing) async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Confirm delete'),
+        content: Text(
+          'Delete external listing "${listing.title}" from ${listing.company}? This action archives the listing.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    return result ?? false;
+  }
+
+  Future<void> _deleteExternalListing(JobListing listing) async {
+    if (_deletingListingIds.contains(listing.id)) {
+      return;
+    }
+
+    final reason = await _promptDeleteReason(listing);
+    if (reason == null) {
+      return;
+    }
+
+    final confirmed = await _confirmDelete(listing);
+    if (!confirmed) {
+      return;
+    }
+
+    setState(() {
+      _deletingListingIds.add(listing.id);
+    });
+
+    try {
+      await widget.adminRepository.deleteJobListing(listing.id, reason);
+      if (!mounted) {
+        return;
+      }
+      await widget.onCreated();
+      await _loadExternalListings();
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Deleted external listing: ${listing.title}')),
+      );
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not delete listing: $e')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _deletingListingIds.remove(listing.id);
+        });
+      }
+    }
+  }
+
+  String _formatDateTime(DateTime? value) {
+    if (value == null) {
+      return 'Not set';
+    }
+    return value.toLocal().toString().substring(0, 19);
+  }
+
+  String _joinOrNone(Iterable<String> values) {
+    final cleaned = values
+        .map((value) => value.trim())
+        .where((value) => value.isNotEmpty)
+        .toList();
+    if (cleaned.isEmpty) {
+      return 'None';
+    }
+    return cleaned.join(', ');
+  }
+
+  String _formatHoursMap(Map<String, int> values) {
+    final entries = values.entries.where((entry) => entry.value > 0).toList();
+    if (entries.isEmpty) {
+      return 'None';
+    }
+    return entries.map((entry) => '${entry.key}: ${entry.value}').join(', ');
+  }
+
+  Future<void> _showExternalListingDetails(JobListing listing) async {
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(listing.title),
+        content: SizedBox(
+          width: 640,
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('${listing.company} • ${listing.location}'),
+                const SizedBox(height: 8),
+                Text('Type: ${listing.type}'),
+                Text('Status: ${listing.isActive ? 'Active' : 'Archived'}'),
+                Text(
+                  'Crew: ${listing.crewRole == 'Crew' ? 'Crew - ${listing.crewPosition ?? 'Captain'}' : 'Single Pilot'}',
+                ),
+                Text('External URL: ${listing.externalApplyUrl ?? 'None'}'),
+                Text('Created: ${_formatDateTime(listing.createdAt)}'),
+                Text('Updated: ${_formatDateTime(listing.updatedAt)}'),
+                Text('Deadline: ${_formatDateTime(listing.deadlineDate)}'),
+                const SizedBox(height: 12),
+                const Text(
+                  'Description',
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 4),
+                SelectableText(
+                  listing.description.trim().isEmpty
+                      ? 'No description provided.'
+                      : listing.description,
+                ),
+                const SizedBox(height: 12),
+                Text('FAA Rules: ${_joinOrNone(listing.faaRules)}'),
+                Text(
+                  'FAA Certificates: ${_joinOrNone(listing.faaCertificates)}',
+                ),
+                Text(
+                  'Type Ratings: ${_joinOrNone(listing.typeRatingsRequired)}',
+                ),
+                Text('Aircraft: ${_joinOrNone(listing.aircraftFlown)}'),
+                Text(
+                  'Flight Hours: ${_formatHoursMap(listing.flightHours)}',
+                ),
+                Text(
+                  'Preferred Flight Hours: ${_joinOrNone(listing.preferredFlightHours)}',
+                ),
+                Text(
+                  'Instructor Hours: ${_formatHoursMap(listing.instructorHours)}',
+                ),
+                Text(
+                  'Preferred Instructor Hours: ${_joinOrNone(listing.preferredInstructorHours)}',
+                ),
+                Text(
+                  'Specialty Hours: ${_formatHoursMap(listing.specialtyHours)}',
+                ),
+                Text(
+                  'Preferred Specialty Hours: ${_joinOrNone(listing.preferredSpecialtyHours)}',
+                ),
+                Text('Minimum Hours: ${listing.minimumHours ?? 'Not set'}'),
+                Text('Salary Range: ${listing.salaryRange ?? 'Not set'}'),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    return ListView(
-      padding: const EdgeInsets.all(16),
+    return Column(
       children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+          child: Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              ChoiceChip(
+                label: const Text('Create New External Listing'),
+                selected: _selectedView == _ExternalPostsView.create,
+                onSelected: (_) {
+                  setState(() {
+                    _selectedView = _ExternalPostsView.create;
+                  });
+                },
+              ),
+              ChoiceChip(
+                label: Text('View External Listings (${_externalListings.length})'),
+                selected: _selectedView == _ExternalPostsView.view,
+                onSelected: (_) {
+                  setState(() {
+                    _selectedView = _ExternalPostsView.view;
+                  });
+                  _loadExternalListings();
+                },
+              ),
+              IconButton(
+                icon: const Icon(Icons.refresh),
+                tooltip: 'Refresh external listings',
+                onPressed: _loadExternalListings,
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: _selectedView == _ExternalPostsView.create
+              ? _buildCreateExternalListingView()
+              : _buildExternalListingsView(),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCreateExternalListingView() {
+    return Column(
+      children: [
+        if (_editingListing != null)
+          Container(
+            margin: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: Colors.blue.shade50,
+              border: Border.all(color: Colors.blue.shade300),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.edit_note, color: Colors.blue.shade700),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Editing external listing: ${_editingListing!.title}',
+                    style: TextStyle(
+                      color: Colors.blue.shade800,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                TextButton(onPressed: _cancelEditing, child: const Text('Cancel')),
+              ],
+            ),
+          ),
+        Expanded(
+          child: ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           decoration: BoxDecoration(
@@ -396,7 +1210,7 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  'Post externally sourced roles without requiring a linked employer profile.',
+                  'Mirror the standard Create New Listing flow for externally sourced jobs. All fields are optional for incomplete scraped data.',
                   style: TextStyle(
                     color: Colors.orange.shade800,
                     fontWeight: FontWeight.w600,
@@ -410,7 +1224,7 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
         TextField(
           controller: _titleController,
           decoration: const InputDecoration(
-            labelText: 'Listing Title',
+            labelText: 'Title (optional)',
             border: OutlineInputBorder(),
           ),
         ),
@@ -418,7 +1232,7 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
         TextField(
           controller: _companyController,
           decoration: const InputDecoration(
-            labelText: 'Company',
+            labelText: 'Company (optional)',
             border: OutlineInputBorder(),
           ),
         ),
@@ -426,24 +1240,145 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
         TextField(
           controller: _locationController,
           decoration: const InputDecoration(
-            labelText: 'Location',
+            labelText: 'Location (optional)',
             border: OutlineInputBorder(),
           ),
         ),
         const SizedBox(height: 12),
-        TextField(
-          controller: _employmentTypeController,
+        DropdownButtonFormField<String>(
+          initialValue: _availableJobTypes.contains(_employmentTypeController.text)
+              ? _employmentTypeController.text
+              : null,
           decoration: const InputDecoration(
-            labelText: 'Employment Type',
+            labelText: 'Employment Type (optional)',
             border: OutlineInputBorder(),
+          ),
+          items: _availableJobTypes
+              .map(
+                (type) => DropdownMenuItem<String>(
+                  value: type,
+                  child: Text(type),
+                ),
+              )
+              .toList(),
+          onChanged: (value) {
+            setState(() {
+              _employmentTypeController.text = value ?? '';
+            });
+          },
+        ),
+        const SizedBox(height: 12),
+        DropdownButtonFormField<String>(
+          initialValue: _selectedPositionOption,
+          decoration: const InputDecoration(
+            labelText: 'Position Selection (optional)',
+            border: OutlineInputBorder(),
+          ),
+          items: const [
+            DropdownMenuItem(
+              value: 'Single Pilot',
+              child: Text('Single Pilot'),
+            ),
+            DropdownMenuItem(
+              value: 'Crew Member: Captain',
+              child: Text('Crew Member: Captain'),
+            ),
+            DropdownMenuItem(
+              value: 'Crew Member: Co-Pilot',
+              child: Text('Crew Member: Co-Pilot'),
+            ),
+          ],
+          onChanged: (value) {
+            setState(() {
+              _selectedPositionOption = value;
+              if (value == null || value == 'Single Pilot') {
+                _selectedCrewRole = 'Single Pilot';
+                _selectedCrewPosition = 'Captain';
+              } else if (value == 'Crew Member: Co-Pilot') {
+                _selectedCrewRole = 'Crew';
+                _selectedCrewPosition = 'Co-Pilot';
+              } else {
+                _selectedCrewRole = 'Crew';
+                _selectedCrewPosition = 'Captain';
+              }
+            });
+          },
+        ),
+        const SizedBox(height: 12),
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            border: Border.all(color: Colors.grey.shade300),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Salary Range (optional)',
+                style: TextStyle(fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _startingPayController,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        labelText: 'Starting Pay',
+                        prefixText: r'$',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: TextField(
+                      controller: _payForExperienceController,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        labelText: 'Top End Starting Pay',
+                        prefixText: r'$',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              DropdownButtonFormField<String>(
+                initialValue: _selectedPayRateMetric,
+                decoration: const InputDecoration(
+                  labelText: 'Pay Metric',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
+                items: _availablePayRateMetrics
+                    .map(
+                      (metric) => DropdownMenuItem<String>(
+                        value: metric,
+                        child: Text(metric),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (value) {
+                  setState(() {
+                    _selectedPayRateMetric = value;
+                  });
+                },
+              ),
+            ],
           ),
         ),
         const SizedBox(height: 12),
         TextField(
-          controller: _summaryController,
+          controller: _descriptionController,
           maxLines: 4,
           decoration: const InputDecoration(
-            labelText: 'Summary / Notes',
+            labelText: 'Description / Notes (optional)',
             border: OutlineInputBorder(),
           ),
         ),
@@ -472,22 +1407,501 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
             border: OutlineInputBorder(),
           ),
         ),
-        const SizedBox(height: 16),
-        SizedBox(
-          height: 44,
-          child: ElevatedButton.icon(
-            onPressed: _isSubmitting ? null : _submitExternalListing,
-            icon: _isSubmitting
-                ? const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.post_add),
-            label: Text(_isSubmitting ? 'Posting...' : 'Post External Listing'),
+        const SizedBox(height: 12),
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            border: Border.all(color: Colors.grey.shade300),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Application Timeline (optional)',
+                style: TextStyle(fontWeight: FontWeight.w600),
+              ),
+              RadioGroup<bool>(
+                groupValue: _openListing,
+                onChanged: (value) {
+                  setState(() {
+                    _openListing = value ?? true;
+                    if (_openListing) {
+                      _deadlineDate = null;
+                    }
+                  });
+                },
+                child: const Column(
+                  children: [
+                    RadioListTile<bool>(
+                      contentPadding: EdgeInsets.zero,
+                      title: Text('Open Listing (No Deadline)'),
+                      value: true,
+                    ),
+                    RadioListTile<bool>(
+                      contentPadding: EdgeInsets.zero,
+                      title: Text('Set Application Deadline'),
+                      value: false,
+                    ),
+                  ],
+                ),
+              ),
+              if (!_openListing)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: OutlinedButton.icon(
+                    onPressed: () async {
+                      final initialDate =
+                          _deadlineDate ?? DateTime.now().add(const Duration(days: 30));
+                      final pickedDate = await showDatePicker(
+                        context: context,
+                        initialDate: initialDate,
+                        firstDate: DateTime.now(),
+                        lastDate: DateTime.now().add(const Duration(days: 730)),
+                      );
+                      if (pickedDate == null || !mounted) {
+                        return;
+                      }
+                      setState(() {
+                        _deadlineDate = pickedDate;
+                      });
+                    },
+                    icon: const Icon(Icons.event),
+                    label: Text(
+                      _deadlineDate == null
+                          ? 'Choose deadline date'
+                          : 'Application Deadline: ${_deadlineDate!.toLocal().toString().substring(0, 10)}',
+                    ),
+                  ),
+                ),
+            ],
           ),
         ),
+        const SizedBox(height: 12),
+        _buildCheckboxCard(
+          title: 'FAA Operational Scope (optional)',
+          options: _availableFaaRules,
+          isSelected: (option) => _selectedFaaRules.contains(option),
+          onChanged: (option, selected) {
+            setState(() {
+              if (selected) {
+                _selectedFaaRules
+                  ..clear()
+                  ..add(option);
+              } else {
+                _selectedFaaRules.remove(option);
+              }
+            });
+          },
+        ),
+        const SizedBox(height: 12),
+        _buildCheckboxCard(
+          title: 'Required FAA Certificates (optional)',
+          options: _availableFaaCertificates,
+          isSelected: (option) => _selectedFaaCertificates.contains(option),
+          onChanged: (option, selected) {
+            setState(() {
+              if (selected) {
+                _selectedFaaCertificates.add(option);
+              } else {
+                _selectedFaaCertificates.remove(option);
+              }
+            });
+          },
+        ),
+        const SizedBox(height: 12),
+        _buildCheckboxCard(
+          title: 'Instructor Certificates (optional)',
+          options: _availableInstructorCertificates,
+          isSelected: (option) => _selectedFaaCertificates.contains(option),
+          onChanged: (option, selected) {
+            setState(() {
+              if (selected) {
+                _selectedFaaCertificates.add(option);
+              } else {
+                _selectedFaaCertificates.remove(option);
+              }
+            });
+          },
+        ),
+        const SizedBox(height: 12),
+        _buildCheckboxCard(
+          title: 'Required Ratings (optional)',
+          options: _availableRatingSelections,
+          isSelected: (option) => _selectedFaaCertificates.contains(option),
+          onChanged: (option, selected) {
+            setState(() {
+              if (selected) {
+                _selectedFaaCertificates.add(option);
+              } else {
+                _selectedFaaCertificates.remove(option);
+              }
+            });
+          },
+        ),
+        const SizedBox(height: 12),
+        _buildHoursRequirementSection(
+          title: 'Flight Hours (optional)',
+          options: _availableEmployerFlightHours,
+          selectedHours: _selectedFlightHours,
+          preferredHours: _preferredFlightHours,
+        ),
+        const SizedBox(height: 12),
+        _buildHoursRequirementSection(
+          title: 'Instructor Hours (optional)',
+          options: _availableInstructorHours,
+          selectedHours: _selectedInstructorHours,
+          preferredHours: _preferredInstructorHours,
+        ),
+        const SizedBox(height: 12),
+        _buildHoursRequirementSection(
+          title: 'Specialty Hours (optional)',
+          options: _availableSpecialtyExperience,
+          selectedHours: _selectedSpecialtyHours,
+          preferredHours: _preferredSpecialtyHours,
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _aircraftController,
+          decoration: const InputDecoration(
+            labelText: 'Aircraft Types (optional)',
+            hintText: 'Cessna 172, Boeing 737',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _typeRatingsController,
+          decoration: const InputDecoration(
+            labelText: 'Type Ratings (optional)',
+            hintText: 'Boeing 737, Embraer E-175',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        const SizedBox(height: 12),
+        if (_editingListing == null)
+          SizedBox(
+            height: 44,
+            child: ElevatedButton.icon(
+              onPressed: _isSubmitting ? null : _submitExternalListing,
+              icon: _isSubmitting
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.post_add),
+              label: const Text('Post External Listing'),
+            ),
+          ),
+        if (_editingListing == null) const SizedBox(height: 16),
+        const SizedBox(height: 16),
+            ],
+          ),
+        ),
+        if (_editingListing != null)
+          Container(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+            decoration: BoxDecoration(
+              color: Theme.of(context).scaffoldBackgroundColor,
+              border: Border(
+                top: BorderSide(color: Colors.grey.shade300),
+              ),
+            ),
+            child: SafeArea(
+              top: false,
+              child: SizedBox(
+                height: 44,
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: _isSubmitting ? null : _submitExternalListing,
+                  icon: _isSubmitting
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.save),
+                  label: Text(_isSubmitting ? 'Saving...' : 'Save External Listing'),
+                ),
+              ),
+            ),
+          ),
       ],
+    );
+  }
+
+  Widget _buildCheckboxCard({
+    required String title,
+    required List<String> options,
+    required bool Function(String option) isSelected,
+    required void Function(String option, bool selected) onChanged,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        border: Border.all(color: Colors.grey.shade300),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
+          const SizedBox(height: 8),
+          ...options.map(
+            (option) => CheckboxListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              title: Text(option),
+              value: isSelected(option),
+              onChanged: (selected) => onChanged(option, selected == true),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHoursRequirementSection({
+    required String title,
+    required List<String> options,
+    required Map<String, int> selectedHours,
+    required Set<String> preferredHours,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        border: Border.all(color: Colors.grey.shade300),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
+          const SizedBox(height: 8),
+          ...options.map((option) {
+            final isChecked = selectedHours.containsKey(option);
+            final isPreferred = preferredHours.contains(option);
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                CheckboxListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(option),
+                  value: isChecked,
+                  onChanged: (selected) {
+                    setState(() {
+                      if (selected == true) {
+                        selectedHours.putIfAbsent(option, () => 0);
+                      } else {
+                        selectedHours.remove(option);
+                        preferredHours.remove(option);
+                      }
+                    });
+                  },
+                ),
+                if (isChecked)
+                  Padding(
+                    padding: const EdgeInsets.only(left: 12, right: 12, bottom: 8),
+                    child: Column(
+                      children: [
+                        TextFormField(
+                          key: ValueKey('$title-$option'),
+                          keyboardType: TextInputType.number,
+                          initialValue: (selectedHours[option] ?? 0) > 0
+                              ? (selectedHours[option] ?? 0).toString()
+                              : '',
+                          decoration: InputDecoration(
+                            labelText: 'Hours for $option',
+                            border: const OutlineInputBorder(),
+                            isDense: true,
+                          ),
+                          onChanged: (value) {
+                            final parsed = int.tryParse(value.trim()) ?? 0;
+                            selectedHours[option] = parsed;
+                          },
+                        ),
+                        CheckboxListTile(
+                          contentPadding: EdgeInsets.zero,
+                          dense: true,
+                          title: const Text('Mark as preferred (optional)'),
+                          value: isPreferred,
+                          onChanged: (preferred) {
+                            setState(() {
+                              if (preferred == true) {
+                                preferredHours.add(option);
+                              } else {
+                                preferredHours.remove(option);
+                              }
+                            });
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            );
+          }),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildExternalListingsView() {
+    if (_externalListingsLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (_externalListings.isEmpty) {
+      return const Center(
+        child: Text(
+          'No external listings found.',
+          style: TextStyle(color: Colors.grey),
+        ),
+      );
+    }
+
+    return RefreshIndicator(
+      onRefresh: _loadExternalListings,
+      child: ListView.builder(
+        padding: const EdgeInsets.all(16),
+        itemCount: _externalListings.length,
+        itemBuilder: (context, index) {
+          final listing = _externalListings[index];
+          final createdLabel =
+              listing.createdAt?.toLocal().toString().substring(0, 19);
+
+          return Card(
+            margin: const EdgeInsets.only(bottom: 10),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(12),
+              onTap: () => _showExternalListingDetails(listing),
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            listing.title,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w700,
+                              fontSize: 15,
+                            ),
+                          ),
+                        ),
+                        if (!listing.isActive)
+                          Chip(
+                            label: const Text('Archived'),
+                            backgroundColor: Colors.grey.shade200,
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Text('${listing.company} • ${listing.location}'),
+                    const SizedBox(height: 4),
+                    Text('Type: ${listing.type}'),
+                    if (listing.externalApplyUrl?.trim().isNotEmpty ?? false) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        'Apply URL: ${listing.externalApplyUrl}',
+                        style: TextStyle(color: Colors.blueGrey.shade700),
+                      ),
+                    ],
+                    if (createdLabel != null) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        'Created $createdLabel',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey.shade600,
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 8),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.open_in_full,
+                          size: 14,
+                          color: Colors.blueGrey.shade600,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          'View Full Listing',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.blueGrey.shade700,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        OutlinedButton.icon(
+                          onPressed: () => _beginEditExternalListing(listing),
+                          icon: const Icon(Icons.edit_outlined),
+                          label: const Text('Edit'),
+                        ),
+                        if (listing.isActive)
+                          OutlinedButton.icon(
+                            onPressed: _archivingListingIds.contains(listing.id)
+                                ? null
+                                : () => _archiveExternalListing(listing),
+                            icon: _archivingListingIds.contains(listing.id)
+                                ? const SizedBox(
+                                    width: 14,
+                                    height: 14,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : const Icon(Icons.archive_outlined),
+                            label: Text(
+                              _archivingListingIds.contains(listing.id)
+                                  ? 'Archiving...'
+                                  : 'Archive',
+                            ),
+                          ),
+                        OutlinedButton.icon(
+                          onPressed: _deletingListingIds.contains(listing.id)
+                              ? null
+                              : () => _deleteExternalListing(listing),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: Colors.red.shade700,
+                          ),
+                          icon: _deletingListingIds.contains(listing.id)
+                              ? const SizedBox(
+                                  width: 14,
+                                  height: 14,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(Icons.delete_outline),
+                          label: Text(
+                            _deletingListingIds.contains(listing.id)
+                                ? 'Deleting...'
+                                : 'Delete',
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      ),
     );
   }
 }
@@ -1632,7 +3046,7 @@ class _UsersDataTabState extends State<_UsersDataTab> {
           builder: (context, constraints) {
             final isNarrow = constraints.maxWidth < 700;
             final sortDropdown = DropdownButtonFormField<String>(
-              value: selectedSort,
+              initialValue: selectedSort,
               isDense: true,
               isExpanded: true,
               decoration: const InputDecoration(
@@ -2004,7 +3418,7 @@ class _AuditLogsTab extends StatelessWidget {
             children: [
               Expanded(
                 child: DropdownButtonFormField<String?>(
-                  value: filterAction,
+                  initialValue: filterAction,
                   decoration: const InputDecoration(
                     labelText: 'Action',
                     border: OutlineInputBorder(),
@@ -2028,7 +3442,7 @@ class _AuditLogsTab extends StatelessWidget {
               const SizedBox(width: 8),
               Expanded(
                 child: DropdownButtonFormField<String?>(
-                  value: filterResource,
+                  initialValue: filterResource,
                   decoration: const InputDecoration(
                     labelText: 'Resource',
                     border: OutlineInputBorder(),
@@ -2074,7 +3488,7 @@ class _AuditLogsTab extends StatelessWidget {
             child: ListView.separated(
               padding: const EdgeInsets.all(8),
               itemCount: logs.length,
-              separatorBuilder: (_, __) => const Divider(height: 1),
+              separatorBuilder: (_, index) => const Divider(height: 1),
               itemBuilder: (context, i) {
                 final log = logs[i];
                 return _LogSummaryTile(
