@@ -413,6 +413,11 @@ class SupabaseAdminRepository implements AdminRepository {
 
   @override
   Future<void> deleteEmployerProfile(String employerId, String reason) async {
+    final isAdminOwnedEmployer = await _isAdminOwnedEmployer(employerId);
+    if (isAdminOwnedEmployer) {
+      throw StateError('Cannot delete an admin employer profile.');
+    }
+
     final beforeRow = await _client
         .from('employer_profiles')
         .select()
@@ -439,6 +444,11 @@ class SupabaseAdminRepository implements AdminRepository {
 
   @override
   Future<void> deleteJobSeekerProfile(String userId, String reason) async {
+    final isAdminUser = await _isAdminUser(userId);
+    if (isAdminUser) {
+      throw StateError('Cannot delete an admin job seeker profile.');
+    }
+
     final beforeRow = await _client
         .from('job_seeker_profiles')
         .select()
@@ -510,6 +520,13 @@ class SupabaseAdminRepository implements AdminRepository {
     String? reason,
     String? companyName,
   }) async {
+    if (isBanned) {
+      final isAdminOwnedEmployer = await _isAdminOwnedEmployer(employerId);
+      if (isAdminOwnedEmployer) {
+        throw StateError('Cannot ban an admin employer profile.');
+      }
+    }
+
     final beforeRow = await _client
         .from('employer_moderation')
         .select()
@@ -553,6 +570,13 @@ class SupabaseAdminRepository implements AdminRepository {
     String? displayName,
     String? email,
   }) async {
+    if (isBanned) {
+      final isAdminUser = await _isAdminUser(userId);
+      if (isAdminUser) {
+        throw StateError('Cannot ban an admin job seeker profile.');
+      }
+    }
+
     final beforeRow = await _client
         .from('job_seeker_moderation')
         .select()
@@ -760,5 +784,21 @@ class SupabaseAdminRepository implements AdminRepository {
       'ban_reason': existing?['ban_reason'] ?? '',
       'banned_at': existing?['banned_at'],
     });
+  }
+
+  Future<bool> _isAdminUser(String userId) async {
+    final result = await _client.rpc(
+      'user_is_admin',
+      params: {'target_user_id': userId},
+    );
+    return result == true;
+  }
+
+  Future<bool> _isAdminOwnedEmployer(String employerId) async {
+    final result = await _client.rpc(
+      'employer_owner_is_admin',
+      params: {'target_employer_id': employerId},
+    );
+    return result == true;
   }
 }

@@ -5,9 +5,11 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/admin_action_log.dart';
 import '../models/application.dart';
 import '../models/employer_moderation.dart';
+import '../models/employer_profile.dart';
 import '../models/job_listing.dart';
 import '../models/job_listing_report.dart';
 import '../models/job_seeker_moderation.dart';
+import '../models/job_seeker_profile.dart';
 import '../repositories/admin_repository.dart';
 import '../repositories/app_repository.dart';
 
@@ -570,6 +572,15 @@ class _ModerationTabState extends State<_ModerationTab> {
     return confirmed ?? false;
   }
 
+  String _actionErrorMessage(Object error) {
+    final raw = error.toString();
+    const statePrefix = 'Bad state: ';
+    if (raw.startsWith(statePrefix)) {
+      return raw.substring(statePrefix.length);
+    }
+    return 'Action failed. Please try again.';
+  }
+
   Future<void> _deleteReportedListing(JobListingReport report) async {
     final reason = await _promptForReason(
       title: 'Delete reported listing',
@@ -650,13 +661,22 @@ class _ModerationTabState extends State<_ModerationTab> {
       }
     }
 
-    await widget.adminRepository.setEmployerBan(
-      employer.employerId,
-      isBanned: nextIsBanned,
-      reason: nextIsBanned ? reason : '',
-      companyName: employer.companyName,
-    );
-    await _loadData();
+    try {
+      await widget.adminRepository.setEmployerBan(
+        employer.employerId,
+        isBanned: nextIsBanned,
+        reason: nextIsBanned ? reason : '',
+        companyName: employer.companyName,
+      );
+      await _loadData();
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(_actionErrorMessage(error))));
+    }
   }
 
   Future<void> _toggleJobSeekerBan(JobSeekerModeration jobSeeker) async {
@@ -687,14 +707,254 @@ class _ModerationTabState extends State<_ModerationTab> {
       }
     }
 
-    await widget.adminRepository.setJobSeekerBan(
-      jobSeeker.userId,
-      isBanned: nextIsBanned,
-      reason: nextIsBanned ? reason : '',
-      displayName: jobSeeker.displayName,
-      email: jobSeeker.email,
+    try {
+      await widget.adminRepository.setJobSeekerBan(
+        jobSeeker.userId,
+        isBanned: nextIsBanned,
+        reason: nextIsBanned ? reason : '',
+        displayName: jobSeeker.displayName,
+        email: jobSeeker.email,
+      );
+      await _loadData();
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(_actionErrorMessage(error))));
+    }
+  }
+
+  Future<void> _showEmployerProfileDialog(EmployerModeration employer) async {
+    final profile = await widget.adminRepository.getEmployerProfile(
+      employer.employerId,
     );
-    await _loadData();
+    if (!mounted) {
+      return;
+    }
+    if (profile == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Employer profile not found.')),
+      );
+      return;
+    }
+
+    final targetName = profile.companyName.trim().isNotEmpty
+        ? profile.companyName
+        : profile.id;
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('Employer Profile • $targetName'),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _DetailRow('ID', profile.id),
+              _DetailRow('Company', profile.companyName),
+              _DetailRow('Website', profile.website),
+              _DetailRow('Contact Name', profile.contactName),
+              _DetailRow('Contact Email', profile.contactEmail),
+              _DetailRow('Contact Phone', profile.contactPhone),
+              _DetailRow(
+                'HQ',
+                [
+                  profile.headquartersAddressLine1,
+                  profile.headquartersAddressLine2,
+                  profile.headquartersCity,
+                  profile.headquartersState,
+                  profile.headquartersPostalCode,
+                  profile.headquartersCountry,
+                ].where((part) => part.trim().isNotEmpty).join(', '),
+              ),
+              if (profile.companyDescription.trim().isNotEmpty)
+                _DetailRow('Description', profile.companyDescription),
+              if (profile.companyBenefits.isNotEmpty)
+                _DetailRow('Benefits', profile.companyBenefits.join(', ')),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Close'),
+          ),
+          TextButton(
+            onPressed: () async {
+              Navigator.of(dialogContext).pop();
+              await _deleteEmployerProfile(
+                employerId: employer.employerId,
+                companyName: targetName,
+              );
+            },
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('Delete Profile'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _showJobSeekerProfileDialog(
+    JobSeekerModeration jobSeeker,
+  ) async {
+    final profile = await widget.adminRepository.getJobSeekerProfile(
+      jobSeeker.userId,
+    );
+    if (!mounted) {
+      return;
+    }
+    if (profile == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Job seeker profile not found.')),
+      );
+      return;
+    }
+
+    final targetName = profile.fullName.trim().isNotEmpty
+        ? profile.fullName
+        : profile.email.trim().isNotEmpty
+        ? profile.email
+        : jobSeeker.userId;
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('Job Seeker Profile • $targetName'),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _DetailRow('User ID', jobSeeker.userId),
+              _DetailRow('Name', profile.fullName),
+              _DetailRow('Email', profile.email),
+              _DetailRow('Phone', profile.phone),
+              _DetailRow(
+                'Location',
+                [
+                  profile.city,
+                  profile.stateOrProvince,
+                  profile.country,
+                ].where((part) => part.trim().isNotEmpty).join(', '),
+              ),
+              _DetailRow('Total Flight Hours', '${profile.totalFlightHours}'),
+              if (profile.faaCertificates.isNotEmpty)
+                _DetailRow(
+                  'FAA Certificates',
+                  profile.faaCertificates.join(', '),
+                ),
+              if (profile.typeRatings.isNotEmpty)
+                _DetailRow('Type Ratings', profile.typeRatings.join(', ')),
+              if (profile.aircraftFlown.isNotEmpty)
+                _DetailRow('Aircraft Flown', profile.aircraftFlown.join(', ')),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Close'),
+          ),
+          TextButton(
+            onPressed: () async {
+              Navigator.of(dialogContext).pop();
+              await _deleteJobSeekerProfile(
+                userId: jobSeeker.userId,
+                displayName: targetName,
+              );
+            },
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('Delete Profile'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _deleteEmployerProfile({
+    required String employerId,
+    required String companyName,
+  }) async {
+    final reason = await _promptForReason(
+      title: 'Delete employer profile',
+      hintText: 'Explain why this employer profile is being removed.',
+    );
+    if (reason == null) {
+      return;
+    }
+
+    final confirmed = await _confirmAction(
+      title: 'Confirm employer delete',
+      message:
+          'Delete employer profile for $companyName? This permanently removes the profile and related employer data.',
+      confirmLabel: 'Delete',
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      await widget.adminRepository.deleteEmployerProfile(employerId, reason);
+      await _loadData();
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Deleted employer profile for $companyName.')),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(_actionErrorMessage(error))));
+    }
+  }
+
+  Future<void> _deleteJobSeekerProfile({
+    required String userId,
+    required String displayName,
+  }) async {
+    final reason = await _promptForReason(
+      title: 'Delete job seeker profile',
+      hintText: 'Explain why this job seeker profile is being removed.',
+    );
+    if (reason == null) {
+      return;
+    }
+
+    final confirmed = await _confirmAction(
+      title: 'Confirm job seeker delete',
+      message:
+          'Delete profile for $displayName? This permanently removes the profile and its linked data.',
+      confirmLabel: 'Delete',
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      await widget.adminRepository.deleteJobSeekerProfile(userId, reason);
+      await _loadData();
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Deleted job seeker profile for $displayName.')),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(_actionErrorMessage(error))));
+    }
   }
 
   @override
@@ -891,9 +1151,18 @@ class _ModerationTabState extends State<_ModerationTab> {
                     ? '$summary • Banned: ${employer.banReason}'
                     : summary,
               ),
-              trailing: TextButton(
-                onPressed: () => _toggleEmployerBan(employer),
-                child: Text(employer.isBanned ? 'Unban' : 'Ban'),
+              trailing: Wrap(
+                spacing: 4,
+                children: [
+                  TextButton(
+                    onPressed: () => _showEmployerProfileDialog(employer),
+                    child: const Text('View Profile'),
+                  ),
+                  TextButton(
+                    onPressed: () => _toggleEmployerBan(employer),
+                    child: Text(employer.isBanned ? 'Unban' : 'Ban'),
+                  ),
+                ],
               ),
             );
           }),
@@ -925,9 +1194,18 @@ class _ModerationTabState extends State<_ModerationTab> {
                     ? '$summary • Banned: ${jobSeeker.banReason}'
                     : summary,
               ),
-              trailing: TextButton(
-                onPressed: () => _toggleJobSeekerBan(jobSeeker),
-                child: Text(jobSeeker.isBanned ? 'Unban' : 'Ban'),
+              trailing: Wrap(
+                spacing: 4,
+                children: [
+                  TextButton(
+                    onPressed: () => _showJobSeekerProfileDialog(jobSeeker),
+                    child: const Text('View Profile'),
+                  ),
+                  TextButton(
+                    onPressed: () => _toggleJobSeekerBan(jobSeeker),
+                    child: Text(jobSeeker.isBanned ? 'Unban' : 'Ban'),
+                  ),
+                ],
               ),
             );
           }),
