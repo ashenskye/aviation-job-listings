@@ -1204,11 +1204,14 @@ class _UsersDataTabState extends State<_UsersDataTab> {
     try {
       final listings = await widget.adminRepository.getAllJobListings();
       final apps = await widget.adminRepository.getAllApplications();
+      final activeListings = listings
+          .where((listing) => listing.isActive)
+          .toList();
       if (!mounted) {
         return;
       }
       setState(() {
-        _jobListings = listings;
+        _jobListings = activeListings;
         _applications = apps;
       });
     } catch (_) {
