@@ -7887,6 +7887,25 @@ class _MyHomePageState extends State<MyHomePage> {
                                                   ? VisualDensity.compact
                                                   : VisualDensity.standard,
                                               icon: const Icon(
+                                                Icons.share_outlined,
+                                              ),
+                                              tooltip: 'Share listing',
+                                              onPressed: () =>
+                                                  _shareJobListing(job),
+                                            ),
+                                          if (_profileType ==
+                                              ProfileType.jobSeeker)
+                                            IconButton(
+                                              constraints:
+                                                  BoxConstraints.tightFor(
+                                                    width: actionButtonSize,
+                                                    height: actionButtonSize,
+                                                  ),
+                                              padding: actionButtonPadding,
+                                              visualDensity: isNarrowCard
+                                                  ? VisualDensity.compact
+                                                  : VisualDensity.standard,
+                                              icon: const Icon(
                                                 Icons.flag_outlined,
                                               ),
                                               tooltip: 'Report listing',
@@ -8996,6 +9015,11 @@ class _MyHomePageState extends State<MyHomePage> {
                             fontWeight: FontWeight.w600,
                           ),
                         ),
+                      ),
+                      IconButton(
+                        tooltip: 'Share listing',
+                        icon: const Icon(Icons.share_outlined),
+                        onPressed: () => _shareJobListing(job),
                       ),
                       IconButton(
                         tooltip: 'Remove from Favorites',
