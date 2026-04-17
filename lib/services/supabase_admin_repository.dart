@@ -17,7 +17,9 @@ class SupabaseAdminRepository implements AdminRepository {
 
   @override
   Future<void> logAdminAction(AdminActionLog log) async {
-    await _client.from('admin_action_logs').insert(log.toJson());
+    // Omit 'id' so the database generates it via gen_random_uuid() default.
+    final payload = Map<String, dynamic>.from(log.toJson())..remove('id');
+    await _client.from('admin_action_logs').insert(payload);
   }
 
   @override
@@ -134,7 +136,7 @@ class SupabaseAdminRepository implements AdminRepository {
 
     await logAdminAction(
       AdminActionLog(
-        id: _newId(),
+        id: '',
         adminUserId: _adminUserId,
         actionType: AdminActionLog.actionUpdate,
         resourceType: AdminActionLog.resourceJobListing,
@@ -168,7 +170,7 @@ class SupabaseAdminRepository implements AdminRepository {
 
     await logAdminAction(
       AdminActionLog(
-        id: _newId(),
+        id: '',
         adminUserId: _adminUserId,
         actionType: AdminActionLog.actionUpdate,
         resourceType: AdminActionLog.resourceApplication,
@@ -202,7 +204,7 @@ class SupabaseAdminRepository implements AdminRepository {
 
     await logAdminAction(
       AdminActionLog(
-        id: _newId(),
+        id: '',
         adminUserId: _adminUserId,
         actionType: AdminActionLog.actionUpdate,
         resourceType: AdminActionLog.resourceJobSeekerProfile,
@@ -236,7 +238,7 @@ class SupabaseAdminRepository implements AdminRepository {
 
     await logAdminAction(
       AdminActionLog(
-        id: _newId(),
+        id: '',
         adminUserId: _adminUserId,
         actionType: AdminActionLog.actionUpdate,
         resourceType: AdminActionLog.resourceEmployerProfile,
@@ -269,7 +271,7 @@ class SupabaseAdminRepository implements AdminRepository {
 
     await logAdminAction(
       AdminActionLog(
-        id: _newId(),
+        id: '',
         adminUserId: _adminUserId,
         actionType: AdminActionLog.actionDelete,
         resourceType: AdminActionLog.resourceApplication,
@@ -291,15 +293,15 @@ class SupabaseAdminRepository implements AdminRepository {
         .eq('id', jobId)
         .maybeSingle();
 
-    // Soft delete: mark archived/inactive
+    // Soft delete: mark status as 'archived' (matches the DB status enum).
     await _client
         .from('job_listings')
-        .update({'is_active': false, 'archived_at': DateTime.now().toIso8601String()})
+        .update({'status': 'archived'})
         .eq('id', jobId);
 
     await logAdminAction(
       AdminActionLog(
-        id: _newId(),
+        id: '',
         adminUserId: _adminUserId,
         actionType: AdminActionLog.actionDelete,
         resourceType: AdminActionLog.resourceJobListing,
@@ -336,11 +338,4 @@ class SupabaseAdminRepository implements AdminRepository {
     return rows.length;
   }
 
-  // ── Helpers ───────────────────────────────────────────────────────────────
-
-  String _newId() {
-    // UUID-like id using timestamp + random suffix
-    final ts = DateTime.now().millisecondsSinceEpoch;
-    return 'adm-$ts-${_adminUserId.hashCode.toRadixString(16)}';
-  }
 }
