@@ -178,6 +178,23 @@ class SupabaseAdminRepository implements AdminRepository {
     }).toList();
   }
 
+  @override
+  Future<List<JobListing>> getExternalJobListings() async {
+    final rows = await _client
+        .from('job_listings')
+        .select()
+        .eq('is_external', true)
+        .order('created_at', ascending: false);
+
+    return (rows as List)
+        .map(
+          (row) => JobListing.fromJson(
+            _fromJobListingRow(Map<String, dynamic>.from(row)),
+          ),
+        )
+        .toList();
+  }
+
   // ── Edit Data ─────────────────────────────────────────────────────────────
 
   @override
@@ -320,6 +337,24 @@ class SupabaseAdminRepository implements AdminRepository {
     required String location,
     required String employmentType,
     required String description,
+    String crewRole = 'Single Pilot',
+    String? crewPosition,
+    List<String> faaRules = const [],
+    List<String> faaCertificates = const [],
+    List<String> typeRatingsRequired = const [],
+    Map<String, int> flightHours = const {},
+    List<String> preferredFlightHours = const [],
+    Map<String, int> instructorHours = const {},
+    List<String> preferredInstructorHours = const [],
+    Map<String, int> specialtyHours = const {},
+    List<String> preferredSpecialtyHours = const [],
+    List<String> aircraftFlown = const [],
+    String? salaryRange,
+    int? minimumHours,
+    List<String> benefits = const [],
+    DateTime? deadlineDate,
+    int autoRejectThreshold = 0,
+    int reapplyWindowDays = 30,
     String? externalApplyUrl,
     String? reason,
   }) async {
@@ -332,29 +367,29 @@ class SupabaseAdminRepository implements AdminRepository {
       'company': company,
       'location': location,
       'employment_type': employmentType,
-      'crew_role': 'Single Pilot',
-      'crew_position': null,
-      'faa_rules': const <String>[],
+      'crew_role': crewRole,
+      'crew_position': crewPosition,
+      'faa_rules': faaRules,
       'description': description,
-      'faa_certificates': const <String>[],
-      'type_ratings_required': const <String>[],
-      'flight_experience': const <String>[],
-      'flight_hours': const <String, int>{},
-      'preferred_flight_hours': const <String>[],
-      'instructor_hours': const <String, int>{},
-      'preferred_instructor_hours': const <String>[],
-      'specialty_experience': const <String>[],
-      'specialty_hours': const <String, int>{},
-      'preferred_specialty_hours': const <String>[],
-      'aircraft_flown': const <String>[],
-      'salary_range': null,
-      'minimum_hours': null,
-      'benefits': const <String>[],
-      'auto_reject_threshold': 0,
-      'reapply_window_days': 30,
+      'faa_certificates': faaCertificates,
+      'type_ratings_required': typeRatingsRequired,
+      'flight_experience': flightHours.keys.toList(),
+      'flight_hours': flightHours,
+      'preferred_flight_hours': preferredFlightHours,
+      'instructor_hours': instructorHours,
+      'preferred_instructor_hours': preferredInstructorHours,
+      'specialty_experience': specialtyHours.keys.toList(),
+      'specialty_hours': specialtyHours,
+      'preferred_specialty_hours': preferredSpecialtyHours,
+      'aircraft_flown': aircraftFlown,
+      'salary_range': salaryRange,
+      'minimum_hours': minimumHours,
+      'benefits': benefits,
+      'auto_reject_threshold': autoRejectThreshold,
+      'reapply_window_days': reapplyWindowDays,
       'is_external': true,
       'external_apply_url': externalApplyUrl,
-      'deadline_date': null,
+      'deadline_date': deadlineDate?.toIso8601String(),
       'status': 'active',
     };
 
@@ -615,7 +650,6 @@ class SupabaseAdminRepository implements AdminRepository {
     String? companyName,
   }) async {
     var deletedJobListingCount = 0;
-    var deletedApplicationCount = 0;
 
     if (isBanned) {
       final isAdminOwnedEmployer = await _isAdminOwnedEmployer(employerId);
@@ -632,12 +666,6 @@ class SupabaseAdminRepository implements AdminRepository {
           .where((id) => id.isNotEmpty)
           .toList();
       deletedJobListingCount = listingIds.length;
-
-      final applicationRows = await _client
-          .from('job_applications')
-          .select('id')
-          .eq('employer_id', employerId);
-      deletedApplicationCount = applicationRows.length;
 
       // Deleting listings will cascade to related applications.
       await _client.from('job_listings').delete().eq('employer_id', employerId);

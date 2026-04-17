@@ -24,6 +24,7 @@ abstract class AdminRepository {
   Future<List<JobListingReport>> getJobListingReports({String? status});
   Future<List<EmployerModeration>> getEmployerModerationSummaries();
   Future<List<JobSeekerModeration>> getJobSeekerModerationSummaries();
+  Future<List<JobListing>> getExternalJobListings();
 
   // Edit/Fix Data
   Future<void> updateJobListing(
@@ -52,6 +53,24 @@ abstract class AdminRepository {
     required String location,
     required String employmentType,
     required String description,
+    String crewRole = 'Single Pilot',
+    String? crewPosition,
+    List<String> faaRules = const [],
+    List<String> faaCertificates = const [],
+    List<String> typeRatingsRequired = const [],
+    Map<String, int> flightHours = const {},
+    List<String> preferredFlightHours = const [],
+    Map<String, int> instructorHours = const {},
+    List<String> preferredInstructorHours = const [],
+    Map<String, int> specialtyHours = const {},
+    List<String> preferredSpecialtyHours = const [],
+    List<String> aircraftFlown = const [],
+    String? salaryRange,
+    int? minimumHours,
+    List<String> benefits = const [],
+    DateTime? deadlineDate,
+    int autoRejectThreshold = 0,
+    int reapplyWindowDays = 30,
     String? externalApplyUrl,
     String? reason,
   });

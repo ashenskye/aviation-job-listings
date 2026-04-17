@@ -5,11 +5,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/admin_action_log.dart';
 import '../models/application.dart';
 import '../models/employer_moderation.dart';
-import '../models/employer_profile.dart';
 import '../models/job_listing.dart';
 import '../models/job_listing_report.dart';
 import '../models/job_seeker_moderation.dart';
-import '../models/job_seeker_profile.dart';
 import '../repositories/admin_repository.dart';
 import '../repositories/app_repository.dart';
 

@@ -8783,7 +8783,7 @@ class _MyHomePageState extends State<MyHomePage> {
         (rejectedByThreshold || rejectedByAutoFeedback);
     final autoRejectMessage = isAutoRejected
         ? rejectedByAutoFeedback
-              ? appFeedback!.message
+              ? appFeedback.message
               : rejectedByThreshold
               ? 'Auto-rejected: match ${app.matchPercentage}% is below threshold ${job.autoRejectThreshold}%.'
               : 'Auto-rejected by employer settings.'
@@ -11677,6 +11677,115 @@ class JobDetailsPage extends StatelessWidget {
                                 ],
                               ),
                             ),
+                            const SizedBox(height: 12),
+                            if (isExternalListing)
+                              Container(
+                                width: double.infinity,
+                                padding: const EdgeInsets.all(16),
+                                decoration: BoxDecoration(
+                                  color: Colors.amber.shade50,
+                                  border: Border.all(
+                                    color: Colors.amber.shade300,
+                                    width: 2,
+                                  ),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        Icon(
+                                          Icons.info_outlined,
+                                          color: Colors.amber.shade800,
+                                          size: 24,
+                                        ),
+                                        const SizedBox(width: 12),
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                'External Posting',
+                                                style: Theme.of(context)
+                                                    .textTheme
+                                                    .titleMedium
+                                                    ?.copyWith(
+                                                      fontWeight:
+                                                          FontWeight.w700,
+                                                      color:
+                                                          Colors.amber.shade900,
+                                                    ),
+                                              ),
+                                              const SizedBox(height: 6),
+                                              Text(
+                                                'This listing is posted by a third party. '
+                                                'To apply, you will contact them directly '
+                                                'through an external link.',
+                                                style: TextStyle(
+                                                  fontSize: 13,
+                                                  color: Colors.amber.shade900,
+                                                  height: 1.4,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 14),
+                                    Container(
+                                      width: double.infinity,
+                                      padding: const EdgeInsets.all(12),
+                                      decoration: BoxDecoration(
+                                        color: Colors.white,
+                                        border: Border.all(
+                                          color: Colors.amber.shade200,
+                                        ),
+                                        borderRadius: BorderRadius.circular(10),
+                                      ),
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Row(
+                                            children: [
+                                              Icon(
+                                                Icons.business,
+                                                size: 18,
+                                                color: Colors.amber.shade700,
+                                              ),
+                                              const SizedBox(width: 8),
+                                              Expanded(
+                                                child: Text(
+                                                  'Is this your business?',
+                                                  style: TextStyle(
+                                                    fontWeight: FontWeight.w600,
+                                                    color:
+                                                        Colors.amber.shade900,
+                                                    fontSize: 13,
+                                                  ),
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                          const SizedBox(height: 8),
+                                          Text(
+                                            'Create a verified account to manage job listings, '
+                                            'view applicants, and communicate directly with candidates.',
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              color: Colors.grey.shade700,
+                                              height: 1.4,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
                             const SizedBox(height: 12),
                             _buildDetailSection(
                               context: context,
