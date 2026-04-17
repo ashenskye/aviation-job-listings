@@ -547,10 +547,46 @@ class SupabaseAdminRepository implements AdminRepository {
     String? reason,
     String? companyName,
   }) async {
+    var deletedJobListingCount = 0;
+    var deletedApplicationCount = 0;
+
     if (isBanned) {
       final isAdminOwnedEmployer = await _isAdminOwnedEmployer(employerId);
       if (isAdminOwnedEmployer) {
         throw StateError('Cannot ban an admin employer profile.');
+      }
+
+      final listingRows = await _client
+          .from('job_listings')
+          .select('id')
+          .eq('employer_id', employerId);
+      final listingIds = listingRows
+          .map((row) => row['id']?.toString() ?? '')
+          .where((id) => id.isNotEmpty)
+          .toList();
+      deletedJobListingCount = listingIds.length;
+
+      final applicationRows = await _client
+          .from('job_applications')
+          .select('id')
+          .eq('employer_id', employerId);
+      deletedApplicationCount = applicationRows.length;
+
+      // Deleting listings will cascade to related applications.
+      await _client.from('job_listings').delete().eq('employer_id', employerId);
+
+      for (final listingId in listingIds) {
+        await _client
+            .from('job_listing_reports')
+            .update({
+              'status': JobListingReport.statusDeleted,
+              'reviewed_at': DateTime.now().toIso8601String(),
+              'reviewed_by_admin_user_id': _adminUserId,
+              'admin_notes':
+                  'Listing deleted due to employer ban: ${reason ?? ''}',
+            })
+            .eq('job_listing_id', listingId)
+            .eq('status', JobListingReport.statusOpen);
       }
     }
 
@@ -560,9 +596,14 @@ class SupabaseAdminRepository implements AdminRepository {
         .eq('employer_id', employerId)
         .maybeSingle();
 
+    final previousDeletedJobCount =
+        ((beforeRow?['admin_deleted_job_count'] as num?)?.toInt() ?? 0);
+
     final nextRow = {
       'employer_id': employerId,
       if (companyName != null) 'company_name': companyName,
+      'admin_deleted_job_count':
+          previousDeletedJobCount + deletedJobListingCount,
       'is_banned': isBanned,
       'banned_at': isBanned ? DateTime.now().toIso8601String() : null,
       'ban_reason': isBanned ? (reason ?? '') : '',
@@ -597,11 +638,24 @@ class SupabaseAdminRepository implements AdminRepository {
     String? displayName,
     String? email,
   }) async {
+    var deletedApplicationCount = 0;
+
     if (isBanned) {
       final isAdminUser = await _isAdminUser(userId);
       if (isAdminUser) {
         throw StateError('Cannot ban an admin job seeker profile.');
       }
+
+      final applicationRows = await _client
+          .from('job_applications')
+          .select('id')
+          .eq('applicant_user_id', userId);
+      deletedApplicationCount = applicationRows.length;
+
+      await _client
+          .from('job_applications')
+          .delete()
+          .eq('applicant_user_id', userId);
     }
 
     final beforeRow = await _client
@@ -610,10 +664,15 @@ class SupabaseAdminRepository implements AdminRepository {
         .eq('user_id', userId)
         .maybeSingle();
 
+    final previousDeletedApplicationCount =
+        ((beforeRow?['admin_deleted_application_count'] as num?)?.toInt() ?? 0);
+
     final nextRow = {
       'user_id': userId,
       if (displayName != null) 'display_name': displayName,
       if (email != null) 'email': email,
+      'admin_deleted_application_count':
+          previousDeletedApplicationCount + deletedApplicationCount,
       'is_banned': isBanned,
       'banned_at': isBanned ? DateTime.now().toIso8601String() : null,
       'ban_reason': isBanned ? (reason ?? '') : '',

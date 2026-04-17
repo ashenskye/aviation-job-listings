@@ -1,4 +1,4 @@
-import 'package:flutter/foundation.dart';
+is mport 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -211,7 +211,10 @@ class _AdminDashboardState extends State<AdminDashboard>
             recentLogs: _recentLogs,
             onRefresh: _loadStats,
           ),
-          _ModerationTab(adminRepository: widget.adminRepository),
+          _ModerationTab(
+            adminRepository: widget.adminRepository,
+            onDataChanged: _loadStats,
+          ),
           _UsersDataTab(
             adminRepository: widget.adminRepository,
             appRepository: widget.appRepository,
@@ -397,9 +400,13 @@ class _StatCard extends StatelessWidget {
 }
 
 class _ModerationTab extends StatefulWidget {
-  const _ModerationTab({required this.adminRepository});
+  const _ModerationTab({
+    required this.adminRepository,
+    required this.onDataChanged,
+  });
 
   final AdminRepository adminRepository;
+  final Future<void> Function() onDataChanged;
 
   @override
   State<_ModerationTab> createState() => _ModerationTabState();
@@ -625,6 +632,7 @@ class _ModerationTabState extends State<_ModerationTab> {
       adminNotes: reason,
     );
     await _loadData();
+    await widget.onDataChanged();
 
     if (!mounted) {
       return;
@@ -687,6 +695,7 @@ class _ModerationTabState extends State<_ModerationTab> {
         companyName: employer.companyName,
       );
       await _loadData();
+      await widget.onDataChanged();
     } catch (error) {
       if (!mounted) {
         return;
@@ -734,6 +743,7 @@ class _ModerationTabState extends State<_ModerationTab> {
         email: jobSeeker.email,
       );
       await _loadData();
+      await widget.onDataChanged();
     } catch (error) {
       if (!mounted) {
         return;
@@ -918,6 +928,7 @@ class _ModerationTabState extends State<_ModerationTab> {
     try {
       await widget.adminRepository.deleteEmployerProfile(employerId, reason);
       await _loadData();
+      await widget.onDataChanged();
       if (!mounted) {
         return;
       }
@@ -959,6 +970,7 @@ class _ModerationTabState extends State<_ModerationTab> {
     try {
       await widget.adminRepository.deleteJobSeekerProfile(userId, reason);
       await _loadData();
+      await widget.onDataChanged();
       if (!mounted) {
         return;
       }
