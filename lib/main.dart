@@ -703,7 +703,14 @@ class _MyHomePageState extends State<MyHomePage> {
   String _selectedEmployerApplicationFilter = 'all';
   String _selectedEmployerApplicationSort = 'newest';
   String _selectedMatchFilter = 'all';
+  // 'all', 'active', 'archived', 'rejected'
+  String _selectedArchiveFilter = 'all';
   Map<String, bool> _applicationsByJobId = {};
+  // Tracks which job groups are expanded in the applicants tab
+  final Set<String> _expandedJobGroups = {};
+  // Tracks which application IDs are selected for bulk actions
+  final Set<String> _selectedApplicationIds = {};
+  bool _bulkSelectMode = false;
 
   bool _hasApplied(String jobId) => _applicationsByJobId[jobId] ?? false;
 
@@ -3775,7 +3782,8 @@ class _MyHomePageState extends State<MyHomePage> {
 
   List<JobListing> get _visibleJobs {
     if (_profileType != ProfileType.employer) {
-      return _allJobs;
+      // Public view: only show active, non-expired listings
+      return _allJobs.where((job) => job.shouldShow).toList();
     }
 
     return _allJobs
@@ -4811,6 +4819,136 @@ class _MyHomePageState extends State<MyHomePage> {
     return parts.isEmpty ? 'Not provided' : parts.join(' • ');
   }
 
+  Future<void> _toggleArchiveApplication(Application application) async {
+    final newArchived = !application.isArchived;
+    try {
+      await _appRepository.updateApplicationArchived(
+        application.id,
+        newArchived,
+      );
+      if (!mounted) return;
+      final updated = application.copyWith(
+        isArchived: newArchived,
+        updatedAt: DateTime.now(),
+      );
+      setState(() {
+        _employerApplications = _employerApplications
+            .map((app) => app.id == updated.id ? updated : app)
+            .toList();
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            newArchived ? 'Applicant archived.' : 'Applicant unarchived.',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not update applicant: $e')),
+      );
+    }
+  }
+
+  Future<void> _deleteApplication(Application application) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete application?'),
+        content: const Text(
+          'Permanently delete this application? This cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      await _appRepository.deleteApplication(application.id);
+      if (!mounted) return;
+      setState(() {
+        _employerApplications.removeWhere((app) => app.id == application.id);
+        _selectedApplicationIds.remove(application.id);
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Application deleted.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not delete application: $e')),
+      );
+    }
+  }
+
+  Future<void> _bulkDeleteApplications(List<Application> applications) async {
+    final count = applications.length;
+    if (count == 0) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Delete $count application${count == 1 ? '' : 's'}?'),
+        content: Text(
+          'Permanently delete $count application${count == 1 ? '' : 's'}? '
+          'This cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: Text('Delete $count'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    final ids = applications.map((app) => app.id).toList();
+    try {
+      await _appRepository.deleteApplications(ids);
+      if (!mounted) return;
+      final idSet = ids.toSet();
+      setState(() {
+        _employerApplications.removeWhere((app) => idSet.contains(app.id));
+        _selectedApplicationIds.removeAll(idSet);
+        if (_selectedApplicationIds.isEmpty) {
+          _bulkSelectMode = false;
+        }
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Deleted $count application${count == 1 ? '' : 's'}.',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not delete applications: $e')),
+      );
+    }
+  }
+
   String _normalizeRequirementToken(String value) {
     return value.trim().toLowerCase();
   }
@@ -5302,8 +5440,72 @@ class _MyHomePageState extends State<MyHomePage> {
     }
   }
 
+  Future<void> _archiveJob(JobListing job) async {
+    final updated = job.copyWith(
+      isActive: false,
+      archivedAt: DateTime.now(),
+    );
+    try {
+      await _appRepository.updateJob(updated);
+      if (!mounted) return;
+      setState(() {
+        _allJobs = _allJobs
+            .map((j) => j.id == updated.id ? updated : j)
+            .toList();
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Archived "${job.title}".')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not archive job: $e')),
+      );
+    }
+  }
+
+  Future<void> _reopenJob(JobListing job) async {
+    final now = DateTime.now();
+    final initialDate =
+        (job.deadlineDate != null && job.deadlineDate!.isAfter(now))
+        ? job.deadlineDate!
+        : now.add(const Duration(days: 30));
+
+    if (!mounted) return;
+    final newDeadline = await showDatePicker(
+      context: context,
+      initialDate: initialDate,
+      firstDate: now,
+      lastDate: now.add(const Duration(days: 730)),
+      helpText: 'Choose new application deadline',
+    );
+    if (newDeadline == null) return;
+
+    final updated = job.copyWith(
+      isActive: true,
+      archivedAt: null,
+      deadlineDate: newDeadline,
+    );
+    try {
+      await _appRepository.updateJob(updated);
+      if (!mounted) return;
+      setState(() {
+        _allJobs = _allJobs
+            .map((j) => j.id == updated.id ? updated : j)
+            .toList();
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Reopened "${job.title}".')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not reopen job: $e')),
+      );
+    }
+  }
+
   Future<void> _editJob(JobListing job) async {
-    final titleController = TextEditingController(text: job.title);
     final locationController = TextEditingController(text: job.location);
     String? selectedEmploymentType = _availableJobTypes.contains(job.type)
         ? job.type
@@ -7111,6 +7313,74 @@ class _MyHomePageState extends State<MyHomePage> {
                                                               FontWeight.w600,
                                                         ),
                                                       ),
+                                                      if (_profileType ==
+                                                          ProfileType
+                                                              .employer) ...[
+                                                        const SizedBox(
+                                                          height: 4,
+                                                        ),
+                                                        Builder(
+                                                          builder: (ctx) {
+                                                            final String
+                                                            statusIcon;
+                                                            final Color
+                                                            statusColor;
+                                                            final String
+                                                            statusLabel;
+                                                            if (!job.isActive) {
+                                                              statusIcon = '📦';
+                                                              statusColor = Colors
+                                                                  .grey
+                                                                  .shade200;
+                                                              statusLabel =
+                                                                  'Archived';
+                                                            } else if (job
+                                                                .isExpired) {
+                                                              statusIcon = '⏳';
+                                                              statusColor = Colors
+                                                                  .orange
+                                                                  .shade100;
+                                                              statusLabel =
+                                                                  'Expired';
+                                                            } else {
+                                                              statusIcon = '✅';
+                                                              statusColor = Colors
+                                                                  .green
+                                                                  .shade100;
+                                                              final days =
+                                                                  job.daysUntilDeadline;
+                                                              statusLabel = days !=
+                                                                      null
+                                                                  ? 'Active · $days day${days == 1 ? '' : 's'} left'
+                                                                  : 'Active';
+                                                            }
+                                                            return Container(
+                                                              padding:
+                                                                  const EdgeInsets.symmetric(
+                                                                    horizontal:
+                                                                        8,
+                                                                    vertical: 2,
+                                                                  ),
+                                                              decoration: BoxDecoration(
+                                                                color:
+                                                                    statusColor,
+                                                                borderRadius:
+                                                                    BorderRadius.circular(
+                                                                      12,
+                                                                    ),
+                                                              ),
+                                                              child: Text(
+                                                                '$statusIcon $statusLabel',
+                                                                style:
+                                                                    const TextStyle(
+                                                                      fontSize:
+                                                                          11,
+                                                                    ),
+                                                              ),
+                                                            );
+                                                          },
+                                                        ),
+                                                      ],
                                                       const SizedBox(height: 4),
                                                       Text(
                                                         '${job.company} • ${job.location}',
@@ -7381,7 +7651,26 @@ class _MyHomePageState extends State<MyHomePage> {
                                               label: const Text('Delete'),
                                             ),
                                           if (_profileType ==
-                                              ProfileType.employer)
+                                              ProfileType.employer) ...[
+                                            if (!job.isActive ||
+                                                job.isExpired)
+                                              OutlinedButton.icon(
+                                                onPressed: () =>
+                                                    _reopenJob(job),
+                                                icon: const Icon(
+                                                  Icons.refresh,
+                                                ),
+                                                label: const Text('Reopen'),
+                                              ),
+                                            if (job.isActive)
+                                              OutlinedButton.icon(
+                                                onPressed: () =>
+                                                    _archiveJob(job),
+                                                icon: const Icon(
+                                                  Icons.archive_outlined,
+                                                ),
+                                                label: const Text('Archive'),
+                                              ),
                                             OutlinedButton.icon(
                                               onPressed: () =>
                                                   _saveJobAsTemplate(job),
@@ -7392,6 +7681,7 @@ class _MyHomePageState extends State<MyHomePage> {
                                                 'Save as Template',
                                               ),
                                             ),
+                                          ],
                                         ],
                                       ),
                                     ),
@@ -7607,6 +7897,15 @@ class _MyHomePageState extends State<MyHomePage> {
 
   Widget _buildEmployerApplicationsTab() {
     final allApplications = _employerApplications;
+
+    // Archive filter options
+    final archiveFilterOptions = const [
+      ('all', 'All Applicants'),
+      ('active', 'Active Only'),
+      ('archived', 'Archived Only'),
+      ('rejected', 'Rejected'),
+    ];
+
     final filterOptions = const [
       ('all', 'All'),
       ('applied', 'Submitted'),
@@ -7625,15 +7924,28 @@ class _MyHomePageState extends State<MyHomePage> {
       ('highest_match', 'Highest Match'),
       ('status', 'Status'),
     ];
+
+    // Apply archive filter
+    final archiveFiltered = switch (_selectedArchiveFilter) {
+      'active' => allApplications.where((app) => !app.isArchived).toList(),
+      'archived' => allApplications.where((app) => app.isArchived).toList(),
+      'rejected' => allApplications
+          .where((app) => app.status == Application.statusRejected)
+          .toList(),
+      _ => allApplications,
+    };
+
     final countsByStatus = {
-      'applied': allApplications.where((app) => app.status == 'applied').length,
-      'reviewed': allApplications
+      'applied': archiveFiltered
+          .where((app) => app.status == 'applied')
+          .length,
+      'reviewed': archiveFiltered
           .where((app) => app.status == 'reviewed')
           .length,
-      'interested': allApplications
+      'interested': archiveFiltered
           .where((app) => app.status == 'interested')
           .length,
-      'rejected': allApplications
+      'rejected': archiveFiltered
           .where((app) => app.status == 'rejected')
           .length,
     };
@@ -7647,9 +7959,11 @@ class _MyHomePageState extends State<MyHomePage> {
 
     // Apply status filter
     final statusFiltered = _selectedEmployerApplicationFilter == 'all'
-        ? allApplications
-        : allApplications
-              .where((app) => app.status == _selectedEmployerApplicationFilter)
+        ? archiveFiltered
+        : archiveFiltered
+              .where(
+                (app) => app.status == _selectedEmployerApplicationFilter,
+              )
               .toList();
 
     // Apply match % filter
@@ -7660,43 +7974,42 @@ class _MyHomePageState extends State<MyHomePage> {
       _ => statusFiltered,
     };
 
+    // Sort the applications
     final sorted = [...filteredApplications]
       ..sort((a, b) {
         if (_selectedEmployerApplicationSort == 'highest_match') {
           final matchCompare = b.matchPercentage.compareTo(a.matchPercentage);
-          if (matchCompare != 0) {
-            return matchCompare;
-          }
+          if (matchCompare != 0) return matchCompare;
           return b.appliedAt.compareTo(a.appliedAt);
         }
-
         if (_selectedEmployerApplicationSort == 'status') {
-          int statusRank(String status) {
-            switch (status) {
-              case 'applied':
-                return 0;
-              case 'reviewed':
-                return 1;
-              case 'interested':
-                return 2;
-              case 'rejected':
-                return 3;
-              default:
-                return 4;
-            }
-          }
-
-          final statusCompare = statusRank(
-            a.status,
-          ).compareTo(statusRank(b.status));
-          if (statusCompare != 0) {
-            return statusCompare;
-          }
+          int statusRank(String status) => switch (status) {
+            'applied' => 0,
+            'reviewed' => 1,
+            'interested' => 2,
+            'rejected' => 3,
+            _ => 4,
+          };
+          final statusCompare =
+              statusRank(a.status).compareTo(statusRank(b.status));
+          if (statusCompare != 0) return statusCompare;
           return b.appliedAt.compareTo(a.appliedAt);
         }
-
         return b.appliedAt.compareTo(a.appliedAt);
       });
+
+    // Group by job id for collapsible sections
+    final jobGroups = <String, List<Application>>{};
+    for (final app in sorted) {
+      jobGroups.putIfAbsent(app.jobId, () => []).add(app);
+    }
+
+    final selectedApps = allApplications
+        .where((app) => _selectedApplicationIds.contains(app.id))
+        .toList();
+    final rejectedApps = allApplications
+        .where((app) => app.status == Application.statusRejected)
+        .toList();
 
     if (allApplications.isEmpty) {
       return const Center(
@@ -7704,147 +8017,256 @@ class _MyHomePageState extends State<MyHomePage> {
       );
     }
 
-    return ListView.builder(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      itemCount: sorted.isEmpty ? 2 : sorted.length + 1,
-      itemBuilder: (context, index) {
-        if (index == 0) {
-          return Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Quick stats
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(10),
-                  margin: const EdgeInsets.only(bottom: 10),
-                  decoration: BoxDecoration(
-                    color: Colors.blueGrey.shade50,
-                    border: Border.all(color: Colors.blueGrey.shade100),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Wrap(
-                    spacing: 16,
-                    runSpacing: 4,
-                    children: [
-                      Text(
-                        '🟢 $perfectCount perfect',
-                        style: const TextStyle(fontSize: 13),
-                      ),
-                      Text(
-                        '🟡 $goodCount good',
-                        style: const TextStyle(fontSize: 13),
-                      ),
-                      Text(
-                        '🔴 $stretchCount stretch',
-                        style: const TextStyle(fontSize: 13),
-                      ),
-                    ],
-                  ),
-                ),
-                // Status filter
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: filterOptions.map((option) {
-                    final key = option.$1;
-                    final label = option.$2;
-                    final count = key == 'all'
-                        ? allApplications.length
-                        : (countsByStatus[key] ?? 0);
-                    return ChoiceChip(
-                      label: Text('$label ($count)'),
-                      selected: _selectedEmployerApplicationFilter == key,
-                      onSelected: (_) {
-                        setState(() {
-                          _selectedEmployerApplicationFilter = key;
-                        });
-                      },
-                    );
-                  }).toList(),
-                ),
-                const SizedBox(height: 8),
-                // Match % filter
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    Text(
-                      'Match:',
-                      style: TextStyle(
-                        fontWeight: FontWeight.w600,
-                        color: Colors.grey.shade700,
-                      ),
-                    ),
-                    ...matchFilterOptions.map((option) {
-                      final key = option.$1;
-                      final label = option.$2;
-                      return ChoiceChip(
-                        label: Text(label),
-                        selected: _selectedMatchFilter == key,
-                        onSelected: (_) {
-                          setState(() {
-                            _selectedMatchFilter = key;
-                          });
-                        },
-                      );
-                    }),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                // Sort
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    Text(
-                      'Sort:',
-                      style: TextStyle(
-                        fontWeight: FontWeight.w600,
-                        color: Colors.grey.shade700,
-                      ),
-                    ),
-                    ...sortOptions.map((option) {
-                      final key = option.$1;
-                      final label = option.$2;
-                      return ChoiceChip(
-                        label: Text(label),
-                        selected: _selectedEmployerApplicationSort == key,
-                        onSelected: (_) {
-                          setState(() {
-                            _selectedEmployerApplicationSort = key;
-                          });
-                        },
-                      );
-                    }),
-                  ],
-                ),
-              ],
-            ),
-          );
-        }
+    // Build the flat list of widgets to display
+    final listItems = <Widget>[];
 
-        if (sorted.isEmpty) {
-          return Card(
-            margin: const EdgeInsets.symmetric(vertical: 8),
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Text(
-                'No applications match the selected filters.',
-                style: TextStyle(color: Colors.grey.shade700),
+    // ── Header: stats + filters ─────────────────────────────────────────────
+    listItems.add(
+      Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Overall quick stats
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(10),
+              margin: const EdgeInsets.only(bottom: 10),
+              decoration: BoxDecoration(
+                color: Colors.blueGrey.shade50,
+                border: Border.all(color: Colors.blueGrey.shade100),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Wrap(
+                spacing: 16,
+                runSpacing: 4,
+                children: [
+                  Text(
+                    '🟢 $perfectCount perfect',
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                  Text(
+                    '🟡 $goodCount good',
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                  Text(
+                    '🔴 $stretchCount stretch',
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                ],
               ),
             ),
-          );
-        }
+            // Archive view filter
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                Text(
+                  'View:',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    color: Colors.grey.shade700,
+                  ),
+                ),
+                ...archiveFilterOptions.map((option) {
+                  final key = option.$1;
+                  final label = option.$2;
+                  return ChoiceChip(
+                    label: Text(label),
+                    selected: _selectedArchiveFilter == key,
+                    onSelected: (_) {
+                      setState(() {
+                        _selectedArchiveFilter = key;
+                      });
+                    },
+                  );
+                }),
+              ],
+            ),
+            const SizedBox(height: 8),
+            // Status filter
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: filterOptions.map((option) {
+                final key = option.$1;
+                final label = option.$2;
+                final count = key == 'all'
+                    ? archiveFiltered.length
+                    : (countsByStatus[key] ?? 0);
+                return ChoiceChip(
+                  label: Text('$label ($count)'),
+                  selected: _selectedEmployerApplicationFilter == key,
+                  onSelected: (_) {
+                    setState(() {
+                      _selectedEmployerApplicationFilter = key;
+                    });
+                  },
+                );
+              }).toList(),
+            ),
+            const SizedBox(height: 8),
+            // Match % filter
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                Text(
+                  'Match:',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    color: Colors.grey.shade700,
+                  ),
+                ),
+                ...matchFilterOptions.map((option) {
+                  final key = option.$1;
+                  final label = option.$2;
+                  return ChoiceChip(
+                    label: Text(label),
+                    selected: _selectedMatchFilter == key,
+                    onSelected: (_) {
+                      setState(() {
+                        _selectedMatchFilter = key;
+                      });
+                    },
+                  );
+                }),
+              ],
+            ),
+            const SizedBox(height: 8),
+            // Sort
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                Text(
+                  'Sort:',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    color: Colors.grey.shade700,
+                  ),
+                ),
+                ...sortOptions.map((option) {
+                  final key = option.$1;
+                  final label = option.$2;
+                  return ChoiceChip(
+                    label: Text(label),
+                    selected: _selectedEmployerApplicationSort == key,
+                    onSelected: (_) {
+                      setState(() {
+                        _selectedEmployerApplicationSort = key;
+                      });
+                    },
+                  );
+                }),
+              ],
+            ),
+            const SizedBox(height: 8),
+            // Bulk action row
+            Row(
+              children: [
+                TextButton.icon(
+                  onPressed: () {
+                    setState(() {
+                      _bulkSelectMode = !_bulkSelectMode;
+                      if (!_bulkSelectMode) {
+                        _selectedApplicationIds.clear();
+                      }
+                    });
+                  },
+                  icon: Icon(
+                    _bulkSelectMode
+                        ? Icons.check_box
+                        : Icons.check_box_outline_blank,
+                  ),
+                  label: Text(
+                    _bulkSelectMode ? 'Cancel Select' : 'Select',
+                  ),
+                ),
+                if (_bulkSelectMode) ...[
+                  const SizedBox(width: 4),
+                  TextButton(
+                    onPressed: () {
+                      setState(() {
+                        if (_selectedApplicationIds.length ==
+                            filteredApplications.length) {
+                          _selectedApplicationIds.clear();
+                        } else {
+                          _selectedApplicationIds.addAll(
+                            filteredApplications.map((app) => app.id),
+                          );
+                        }
+                      });
+                    },
+                    child: Text(
+                      _selectedApplicationIds.length ==
+                              filteredApplications.length
+                          ? 'Deselect All'
+                          : 'Select All',
+                    ),
+                  ),
+                  if (_selectedApplicationIds.isNotEmpty)
+                    Text(
+                      '${_selectedApplicationIds.length} selected',
+                      style: TextStyle(color: Colors.grey.shade600),
+                    ),
+                ],
+                const Spacer(),
+                if (_bulkSelectMode && _selectedApplicationIds.isNotEmpty)
+                  TextButton.icon(
+                    onPressed: () => _bulkDeleteApplications(selectedApps),
+                    icon: const Icon(Icons.delete_outline, color: Colors.red),
+                    label: Text(
+                      'Delete ${_selectedApplicationIds.length}',
+                      style: const TextStyle(color: Colors.red),
+                    ),
+                  ),
+                if (rejectedApps.isNotEmpty)
+                  TextButton.icon(
+                    onPressed: () => _bulkDeleteApplications(rejectedApps),
+                    icon: const Icon(
+                      Icons.delete_sweep_outlined,
+                      color: Colors.red,
+                    ),
+                    label: Text(
+                      'Delete All Rejected (${rejectedApps.length})',
+                      style: const TextStyle(color: Colors.red),
+                    ),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
 
-        final app = sorted[index - 1];
+    if (sorted.isEmpty) {
+      listItems.add(
+        Card(
+          margin: const EdgeInsets.symmetric(vertical: 8),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Text(
+              'No applications match the selected filters.',
+              style: TextStyle(color: Colors.grey.shade700),
+            ),
+          ),
+        ),
+      );
+    } else {
+      // ── Grouped sections ─────────────────────────────────────────────────
+      for (final entry in jobGroups.entries) {
+        final jobId = entry.key;
+        final groupApps = entry.value;
+        final isExpanded = _expandedJobGroups.contains(jobId);
+
         final job = _allJobs.firstWhere(
-          (j) => j.id == app.jobId,
+          (j) => j.id == jobId,
           orElse: () => JobListing(
-            id: app.jobId,
+            id: jobId,
             title: 'Unknown Job',
             company: _currentEmployer.companyName,
             location: '',
@@ -7858,312 +8280,425 @@ class _MyHomePageState extends State<MyHomePage> {
           ),
         );
 
-        final statusLabel = switch (app.status) {
-          'reviewed' => 'Reviewed',
-          'interested' => 'Interested',
-          'rejected' => 'Not moving forward',
-          _ => 'Submitted',
-        };
+        // Match tiers: perfect=90%+, good=70-89%, stretch=<70%
+        final groupPerfect = groupApps.where((a) => a.isPerfectMatch).length;
+        final groupGood = groupApps.where((a) => a.isGoodMatch).length;
+        final groupStretch = groupApps.where((a) => a.isStretchMatch).length;
 
-        final statusColor = switch (app.status) {
-          'reviewed' => Colors.blueGrey.shade100,
-          'interested' => Colors.green.shade100,
-          'rejected' => Colors.red.shade100,
-          _ => Colors.orange.shade100,
-        };
+        // Group header
+        listItems.add(
+          InkWell(
+            onTap: () {
+              setState(() {
+                if (isExpanded) {
+                  _expandedJobGroups.remove(jobId);
+                } else {
+                  _expandedJobGroups.add(jobId);
+                }
+              });
+            },
+            child: Container(
+              margin: const EdgeInsets.only(top: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: Colors.blueGrey.shade50,
+                border: Border.all(color: Colors.blueGrey.shade200),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    isExpanded
+                        ? Icons.keyboard_arrow_down
+                        : Icons.keyboard_arrow_right,
+                    color: Colors.blueGrey,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '${job.title} (${groupApps.length} applicant${groupApps.length == 1 ? '' : 's'})',
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 14,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          '🟢 $groupPerfect perfect · 🟡 $groupGood good · 🔴 $groupStretch stretch',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.blueGrey.shade700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
 
-        final Color matchBadgeColor;
-        final String matchBadgeLabel;
-        if (app.isPerfectMatch) {
-          matchBadgeColor = Colors.green.shade100;
-          matchBadgeLabel = '🟢 ${app.matchPercentage}%';
-        } else if (app.isGoodMatch) {
-          matchBadgeColor = Colors.yellow.shade100;
-          matchBadgeLabel = '🟡 ${app.matchPercentage}%';
-        } else {
-          matchBadgeColor = Colors.red.shade100;
-          matchBadgeLabel = '🔴 ${app.matchPercentage}%';
+        if (isExpanded) {
+          for (final app in groupApps) {
+            listItems.add(_buildApplicantCard(app, job));
+          }
         }
+      }
+    }
 
-        final appFeedback = _getFeedbackForApplication(app.id);
-        final hasFeedback = appFeedback != null;
-        final rejectedByThreshold =
-            job.autoRejectThreshold > 0 &&
-            app.matchPercentage < job.autoRejectThreshold;
-        final rejectedByAutoFeedback =
-            hasFeedback && appFeedback.isAutoGenerated;
-        final isAutoRejected =
-            app.status == 'rejected' &&
-            (rejectedByThreshold || rejectedByAutoFeedback);
-        final metRequirements = _metRequirementsForApplicant(app, job);
-        final lackingRequirements = _lackingRequirementsForApplicant(app, job);
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      itemCount: listItems.length,
+      itemBuilder: (context, index) => listItems[index],
+    );
+  }
 
-        return Card(
-          margin: const EdgeInsets.symmetric(vertical: 8),
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        job.title,
-                        style: const TextStyle(
-                          fontSize: 16,
+  Widget _buildApplicantCard(Application app, JobListing job) {
+    final statusLabel = switch (app.status) {
+      'reviewed' => 'Reviewed',
+      'interested' => 'Interested',
+      'rejected' => 'Not moving forward',
+      _ => 'Submitted',
+    };
+
+    final statusColor = switch (app.status) {
+      'reviewed' => Colors.blueGrey.shade100,
+      'interested' => Colors.green.shade100,
+      'rejected' => Colors.red.shade100,
+      _ => Colors.orange.shade100,
+    };
+
+    final Color matchBadgeColor;
+    final String matchBadgeLabel;
+    if (app.isPerfectMatch) {
+      matchBadgeColor = Colors.green.shade100;
+      matchBadgeLabel = '🟢 ${app.matchPercentage}%';
+    } else if (app.isGoodMatch) {
+      matchBadgeColor = Colors.yellow.shade100;
+      matchBadgeLabel = '🟡 ${app.matchPercentage}%';
+    } else {
+      matchBadgeColor = Colors.red.shade100;
+      matchBadgeLabel = '🔴 ${app.matchPercentage}%';
+    }
+
+    final appFeedback = _getFeedbackForApplication(app.id);
+    final hasFeedback = appFeedback != null;
+    final rejectedByThreshold =
+        job.autoRejectThreshold > 0 &&
+        app.matchPercentage < job.autoRejectThreshold;
+    final rejectedByAutoFeedback = hasFeedback && appFeedback.isAutoGenerated;
+    final isAutoRejected =
+        app.status == 'rejected' &&
+        (rejectedByThreshold || rejectedByAutoFeedback);
+    final metRequirements = _metRequirementsForApplicant(app, job);
+    final lackingRequirements = _lackingRequirementsForApplicant(app, job);
+    final isSelected = _selectedApplicationIds.contains(app.id);
+
+    return Opacity(
+      opacity: app.isArchived ? 0.6 : 1.0,
+      child: Card(
+        margin: const EdgeInsets.symmetric(vertical: 4),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  if (_bulkSelectMode)
+                    Checkbox(
+                      value: isSelected,
+                      onChanged: (checked) {
+                        setState(() {
+                          if (checked == true) {
+                            _selectedApplicationIds.add(app.id);
+                          } else {
+                            _selectedApplicationIds.remove(app.id);
+                          }
+                        });
+                      },
+                    ),
+                  Expanded(
+                    child: Text(
+                      app.applicantName.trim().isNotEmpty
+                          ? app.applicantName
+                          : 'Applicant ID: ${app.jobSeekerId}',
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                  if (app.isArchived)
+                    Container(
+                      margin: const EdgeInsets.only(left: 4),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade200,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Text(
+                        '📦 Archived',
+                        style: TextStyle(fontSize: 11),
+                      ),
+                    ),
+                  if (hasFeedback && !isAutoRejected)
+                    Container(
+                      margin: const EdgeInsets.only(left: 4),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.orange.shade100,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Text(
+                        '[!]',
+                        style: TextStyle(
+                          fontSize: 11,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
                     ),
-                    if (hasFeedback && !isAutoRejected)
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 6,
-                          vertical: 2,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.orange.shade100,
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: const Text(
-                          '[!]',
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                          ),
+                  if (isAutoRejected)
+                    Container(
+                      margin: const EdgeInsets.only(left: 4),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.red.shade100,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Text(
+                        '[✓] Auto-Rejected',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
                         ),
                       ),
-                    if (isAutoRejected) ...[
-                      const SizedBox(width: 4),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 6,
-                          vertical: 2,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.red.shade100,
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: const Text(
-                          '[✓] Auto-Rejected (Threshold)',
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  app.applicantName.trim().isNotEmpty
-                      ? app.applicantName
-                      : 'Applicant ID: ${app.jobSeekerId}',
-                  style: const TextStyle(fontWeight: FontWeight.w600),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  app.applicantEmail.trim().isNotEmpty
-                      ? app.applicantEmail
-                      : 'Email not provided',
-                  style: TextStyle(color: Colors.grey.shade700),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  _applicantLocation(app),
-                  style: TextStyle(color: Colors.grey.shade700),
-                ),
-                const SizedBox(height: 8),
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: Colors.blueGrey.shade50,
-                    border: Border.all(color: Colors.blueGrey.shade100),
-                    borderRadius: BorderRadius.circular(10),
+                    ),
+                  // Archive (star) toggle
+                  IconButton(
+                    tooltip: app.isArchived ? 'Unarchive' : 'Archive',
+                    icon: Icon(
+                      app.isArchived ? Icons.star : Icons.star_border,
+                      color: app.isArchived ? Colors.amber : null,
+                    ),
+                    onPressed: () => _toggleArchiveApplication(app),
                   ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Profile Snapshot',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w700,
-                          color: Colors.blueGrey.shade800,
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      Text('Match Score: ${app.matchPercentage}%'),
-                      const SizedBox(height: 4),
-                      Text(
-                        'Total Flight Hours: ${app.applicantTotalFlightHours}',
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Requirements Met',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w700,
-                          color: Colors.green.shade800,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      if (metRequirements.isEmpty)
-                        Text(
-                          'No required items currently marked as met.',
-                          style: TextStyle(
-                            color: Colors.green.shade900,
-                            fontSize: 12,
-                          ),
-                        )
-                      else
-                        Wrap(
-                          spacing: 6,
-                          runSpacing: 6,
-                          children: metRequirements
-                              .take(8)
-                              .map(
-                                (item) => Chip(
-                                  label: Text(item),
-                                  backgroundColor: Colors.green.shade50,
-                                  side: BorderSide(
-                                    color: Colors.green.shade200,
-                                  ),
-                                ),
-                              )
-                              .toList(),
-                        ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Requirements Lacking',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w700,
-                          color: Colors.red.shade800,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      if (lackingRequirements.isEmpty)
-                        Text(
-                          'No required gaps detected in the snapshot.',
-                          style: TextStyle(
-                            color: Colors.green.shade900,
-                            fontSize: 12,
-                          ),
-                        )
-                      else
-                        Wrap(
-                          spacing: 6,
-                          runSpacing: 6,
-                          children: lackingRequirements
-                              .take(8)
-                              .map(
-                                (item) => Chip(
-                                  label: Text(item),
-                                  backgroundColor: Colors.red.shade50,
-                                  side: BorderSide(color: Colors.red.shade200),
-                                ),
-                              )
-                              .toList(),
-                        ),
-                      if (app.applicantFaaCertificates.isNotEmpty) ...[
-                        const SizedBox(height: 8),
-                        Wrap(
-                          spacing: 6,
-                          runSpacing: 6,
-                          children: app.applicantFaaCertificates
-                              .take(4)
-                              .map((cert) => Chip(label: Text(cert)))
-                              .toList(),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: matchBadgeColor,
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: Text(matchBadgeLabel),
-                    ),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: statusColor,
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: Text(statusLabel),
-                    ),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.grey.shade100,
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: Text(
-                        'Applied ${_formatYmd(app.appliedAt.toLocal())}',
-                      ),
-                    ),
-                  ],
-                ),
-                if (app.coverLetter.trim().isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  Text(
-                    'Message to Hiring Team: ${app.coverLetter.trim()}',
-                    style: TextStyle(color: Colors.grey.shade800),
+                  // Delete button
+                  IconButton(
+                    tooltip: 'Delete application',
+                    icon: const Icon(Icons.delete_outline, color: Colors.red),
+                    onPressed: () => _deleteApplication(app),
                   ),
                 ],
-                const SizedBox(height: 10),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
+              ),
+              const SizedBox(height: 2),
+              Text(
+                app.applicantEmail.trim().isNotEmpty
+                    ? app.applicantEmail
+                    : 'Email not provided',
+                style: TextStyle(color: Colors.grey.shade700),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                _applicantLocation(app),
+                style: TextStyle(color: Colors.grey.shade700),
+              ),
+              const SizedBox(height: 8),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.blueGrey.shade50,
+                  border: Border.all(color: Colors.blueGrey.shade100),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    OutlinedButton.icon(
-                      onPressed: () => _openApplicantDetails(app, job),
-                      icon: const Icon(Icons.person_outline),
-                      label: const Text('View Applicant'),
+                    Text(
+                      'Profile Snapshot',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w700,
+                        color: Colors.blueGrey.shade800,
+                      ),
                     ),
-                    OutlinedButton(
-                      onPressed: app.status == 'reviewed'
-                          ? null
-                          : () => _updateApplicationStatus(app, 'reviewed'),
-                      child: const Text('Mark Reviewed'),
+                    const SizedBox(height: 6),
+                    Text('Match Score: ${app.matchPercentage}%'),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Total Flight Hours: ${app.applicantTotalFlightHours}',
                     ),
-                    OutlinedButton(
-                      onPressed: app.status == 'interested'
-                          ? null
-                          : () => _updateApplicationStatus(app, 'interested'),
-                      child: const Text('Interested'),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Requirements Met',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w700,
+                        color: Colors.green.shade800,
+                      ),
                     ),
-                    OutlinedButton(
-                      onPressed: app.status == 'rejected'
-                          ? null
-                          : () => _updateApplicationStatus(app, 'rejected'),
-                      child: const Text('Not Moving Forward'),
+                    const SizedBox(height: 4),
+                    if (metRequirements.isEmpty)
+                      Text(
+                        'No required items currently marked as met.',
+                        style: TextStyle(
+                          color: Colors.green.shade900,
+                          fontSize: 12,
+                        ),
+                      )
+                    else
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: metRequirements
+                            .take(8)
+                            .map(
+                              (item) => Chip(
+                                label: Text(item),
+                                backgroundColor: Colors.green.shade50,
+                                side: BorderSide(color: Colors.green.shade200),
+                              ),
+                            )
+                            .toList(),
+                      ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Requirements Lacking',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w700,
+                        color: Colors.red.shade800,
+                      ),
                     ),
+                    const SizedBox(height: 4),
+                    if (lackingRequirements.isEmpty)
+                      Text(
+                        'No required gaps detected in the snapshot.',
+                        style: TextStyle(
+                          color: Colors.green.shade900,
+                          fontSize: 12,
+                        ),
+                      )
+                    else
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: lackingRequirements
+                            .take(8)
+                            .map(
+                              (item) => Chip(
+                                label: Text(item),
+                                backgroundColor: Colors.red.shade50,
+                                side: BorderSide(color: Colors.red.shade200),
+                              ),
+                            )
+                            .toList(),
+                      ),
+                    if (app.applicantFaaCertificates.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: app.applicantFaaCertificates
+                            .take(4)
+                            .map((cert) => Chip(label: Text(cert)))
+                            .toList(),
+                      ),
+                    ],
                   ],
                 ),
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: matchBadgeColor,
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(matchBadgeLabel),
+                  ),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: statusColor,
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(statusLabel),
+                  ),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade100,
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(
+                      'Applied ${_formatYmd(app.appliedAt.toLocal())}',
+                    ),
+                  ),
+                ],
+              ),
+              if (app.coverLetter.trim().isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Text(
+                  'Message to Hiring Team: ${app.coverLetter.trim()}',
+                  style: TextStyle(color: Colors.grey.shade800),
+                ),
               ],
-            ),
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: () => _openApplicantDetails(app, job),
+                    icon: const Icon(Icons.person_outline),
+                    label: const Text('View Applicant'),
+                  ),
+                  OutlinedButton(
+                    onPressed: app.status == 'reviewed'
+                        ? null
+                        : () => _updateApplicationStatus(app, 'reviewed'),
+                    child: const Text('Mark Reviewed'),
+                  ),
+                  OutlinedButton(
+                    onPressed: app.status == 'interested'
+                        ? null
+                        : () => _updateApplicationStatus(app, 'interested'),
+                    child: const Text('Interested'),
+                  ),
+                  OutlinedButton(
+                    onPressed: app.status == 'rejected'
+                        ? null
+                        : () => _updateApplicationStatus(app, 'rejected'),
+                    child: const Text('Not Moving Forward'),
+                  ),
+                ],
+              ),
+            ],
           ),
-        );
-      },
+        ),
+      ),
     );
   }
 

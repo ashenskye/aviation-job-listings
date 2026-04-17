@@ -117,6 +117,30 @@ class FakeAppRepository implements AppRepository {
   }
 
   @override
+  Future<void> updateApplicationArchived(
+    String applicationId,
+    bool isArchived,
+  ) async {
+    final index = _applications.indexWhere((app) => app.id == applicationId);
+    if (index < 0) return;
+    _applications[index] = _applications[index].copyWith(
+      isArchived: isArchived,
+      updatedAt: DateTime.now(),
+    );
+  }
+
+  @override
+  Future<void> deleteApplication(String applicationId) async {
+    _applications.removeWhere((app) => app.id == applicationId);
+  }
+
+  @override
+  Future<void> deleteApplications(List<String> applicationIds) async {
+    final idSet = applicationIds.toSet();
+    _applications.removeWhere((app) => idSet.contains(app.id));
+  }
+
+  @override
   Future<bool> hasApplied(String seekerId, String jobId) async {
     return _applications.any(
       (app) => app.jobSeekerId == seekerId && app.jobId == jobId,

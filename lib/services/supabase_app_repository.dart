@@ -423,6 +423,81 @@ class SupabaseAppRepository implements AppRepository {
   }
 
   @override
+  Future<void> updateApplicationArchived(
+    String applicationId,
+    bool isArchived,
+  ) async {
+    final userId = _currentUserId;
+    if (!SupabaseBootstrap.isConfigured || userId == null) {
+      await localFallback.updateApplicationArchived(applicationId, isArchived);
+      return;
+    }
+
+    try {
+      final existingRow = await _client
+          .from('job_applications')
+          .select()
+          .eq('id', applicationId)
+          .maybeSingle();
+
+      if (existingRow == null) {
+        throw StateError('Application not found: $applicationId');
+      }
+
+      final updatedAt = DateTime.now().toIso8601String();
+      final existingData = Map<String, dynamic>.from(
+        (existingRow['data'] as Map?) ?? const {},
+      );
+      existingData['is_archived'] = isArchived;
+      existingData['updated_at'] = updatedAt;
+
+      await _client
+          .from('job_applications')
+          .update({'data': existingData, 'updated_at': updatedAt})
+          .eq('id', applicationId);
+    } catch (_) {
+      await localFallback.updateApplicationArchived(applicationId, isArchived);
+    }
+  }
+
+  @override
+  Future<void> deleteApplication(String applicationId) async {
+    final userId = _currentUserId;
+    if (!SupabaseBootstrap.isConfigured || userId == null) {
+      await localFallback.deleteApplication(applicationId);
+      return;
+    }
+
+    try {
+      await _client
+          .from('job_applications')
+          .delete()
+          .eq('id', applicationId);
+    } catch (_) {
+      await localFallback.deleteApplication(applicationId);
+    }
+  }
+
+  @override
+  Future<void> deleteApplications(List<String> applicationIds) async {
+    if (applicationIds.isEmpty) return;
+    final userId = _currentUserId;
+    if (!SupabaseBootstrap.isConfigured || userId == null) {
+      await localFallback.deleteApplications(applicationIds);
+      return;
+    }
+
+    try {
+      await _client
+          .from('job_applications')
+          .delete()
+          .inFilter('id', applicationIds);
+    } catch (_) {
+      await localFallback.deleteApplications(applicationIds);
+    }
+  }
+
+  @override
   Future<bool> hasApplied(String seekerId, String jobId) async {
     final userId = _currentUserId;
     if (!SupabaseBootstrap.isConfigured || userId == null) {
