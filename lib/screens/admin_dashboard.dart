@@ -545,12 +545,47 @@ class _ModerationTabState extends State<_ModerationTab> {
     );
   }
 
+  Future<bool> _confirmAction({
+    required String title,
+    required String message,
+    String confirmLabel = 'Confirm',
+  }) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: Text(confirmLabel),
+          ),
+        ],
+      ),
+    );
+    return confirmed ?? false;
+  }
+
   Future<void> _deleteReportedListing(JobListingReport report) async {
     final reason = await _promptForReason(
       title: 'Delete reported listing',
       hintText: 'Explain why this listing is being removed.',
     );
     if (reason == null) {
+      return;
+    }
+
+    final confirmed = await _confirmAction(
+      title: 'Confirm delete listing',
+      message:
+          'Delete "${report.jobTitle}" from ${report.company}? This will archive the listing and close open reports.',
+      confirmLabel: 'Delete',
+    );
+    if (!confirmed) {
       return;
     }
 
@@ -601,6 +636,20 @@ class _ModerationTabState extends State<_ModerationTab> {
       return;
     }
 
+    if (nextIsBanned) {
+      final targetName = employer.companyName.trim().isEmpty
+          ? employer.employerId
+          : employer.companyName;
+      final confirmed = await _confirmAction(
+        title: 'Confirm employer ban',
+        message: 'Ban $targetName from posting and managing listings?',
+        confirmLabel: 'Ban',
+      );
+      if (!confirmed) {
+        return;
+      }
+    }
+
     await widget.adminRepository.setEmployerBan(
       employer.employerId,
       isBanned: nextIsBanned,
@@ -620,6 +669,22 @@ class _ModerationTabState extends State<_ModerationTab> {
         : '';
     if (nextIsBanned && reason == null) {
       return;
+    }
+
+    if (nextIsBanned) {
+      final targetName = jobSeeker.displayName.trim().isNotEmpty
+          ? jobSeeker.displayName
+          : jobSeeker.email.trim().isNotEmpty
+          ? jobSeeker.email
+          : jobSeeker.userId;
+      final confirmed = await _confirmAction(
+        title: 'Confirm job seeker ban',
+        message: 'Ban $targetName from applying and managing profile data?',
+        confirmLabel: 'Ban',
+      );
+      if (!confirmed) {
+        return;
+      }
     }
 
     await widget.adminRepository.setJobSeekerBan(

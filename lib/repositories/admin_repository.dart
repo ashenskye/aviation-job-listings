@@ -50,6 +50,8 @@ abstract class AdminRepository {
   // Delete (soft delete recommended)
   Future<void> deleteApplication(String appId, String reason);
   Future<void> deleteJobListing(String jobId, String reason);
+  Future<void> deleteEmployerProfile(String employerId, String reason);
+  Future<void> deleteJobSeekerProfile(String userId, String reason);
   Future<void> resolveJobListingReport(
     String reportId, {
     required String status,

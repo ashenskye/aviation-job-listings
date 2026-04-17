@@ -411,6 +411,58 @@ class SupabaseAdminRepository implements AdminRepository {
     );
   }
 
+  @override
+  Future<void> deleteEmployerProfile(String employerId, String reason) async {
+    final beforeRow = await _client
+        .from('employer_profiles')
+        .select()
+        .eq('id', employerId)
+        .maybeSingle();
+
+    await _client.from('employer_profiles').delete().eq('id', employerId);
+
+    await logAdminAction(
+      AdminActionLog(
+        id: _pendingId,
+        adminUserId: _adminUserId,
+        actionType: AdminActionLog.actionDelete,
+        resourceType: AdminActionLog.resourceEmployerProfile,
+        resourceId: employerId,
+        changesBefore: beforeRow != null
+            ? Map<String, dynamic>.from(beforeRow)
+            : null,
+        reason: reason,
+        timestamp: DateTime.now(),
+      ),
+    );
+  }
+
+  @override
+  Future<void> deleteJobSeekerProfile(String userId, String reason) async {
+    final beforeRow = await _client
+        .from('job_seeker_profiles')
+        .select()
+        .eq('user_id', userId)
+        .maybeSingle();
+
+    await _client.from('job_seeker_profiles').delete().eq('user_id', userId);
+
+    await logAdminAction(
+      AdminActionLog(
+        id: _pendingId,
+        adminUserId: _adminUserId,
+        actionType: AdminActionLog.actionDelete,
+        resourceType: AdminActionLog.resourceJobSeekerProfile,
+        resourceId: userId,
+        changesBefore: beforeRow != null
+            ? Map<String, dynamic>.from(beforeRow)
+            : null,
+        reason: reason,
+        timestamp: DateTime.now(),
+      ),
+    );
+  }
+
   // ── Analytics ─────────────────────────────────────────────────────────────
 
   @override
