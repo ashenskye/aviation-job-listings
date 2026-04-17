@@ -424,6 +424,32 @@ class SupabaseAdminRepository implements AdminRepository {
         .eq('id', employerId)
         .maybeSingle();
 
+    final listingRows = await _client
+        .from('job_listings')
+        .select('id')
+        .eq('employer_id', employerId);
+    final listingIds = listingRows
+        .map((row) => row['id']?.toString() ?? '')
+        .where((id) => id.isNotEmpty)
+        .toList();
+
+    // Hard-delete all listings owned by this employer before deleting profile.
+    await _client.from('job_listings').delete().eq('employer_id', employerId);
+
+    for (final listingId in listingIds) {
+      await _client
+          .from('job_listing_reports')
+          .update({
+            'status': JobListingReport.statusDeleted,
+            'reviewed_at': DateTime.now().toIso8601String(),
+            'reviewed_by_admin_user_id': _adminUserId,
+            'admin_notes':
+                'Listing deleted due to employer profile deletion: $reason',
+          })
+          .eq('job_listing_id', listingId)
+          .eq('status', JobListingReport.statusOpen);
+    }
+
     await _client.from('employer_profiles').delete().eq('id', employerId);
 
     await logAdminAction(
@@ -436,6 +462,7 @@ class SupabaseAdminRepository implements AdminRepository {
         changesBefore: beforeRow != null
             ? Map<String, dynamic>.from(beforeRow)
             : null,
+        changesAfter: {'deleted_job_listing_count': listingIds.length},
         reason: reason,
         timestamp: DateTime.now(),
       ),

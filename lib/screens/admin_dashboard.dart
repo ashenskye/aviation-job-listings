@@ -578,6 +578,24 @@ class _ModerationTabState extends State<_ModerationTab> {
     if (raw.startsWith(statePrefix)) {
       return raw.substring(statePrefix.length);
     }
+
+    if (raw.contains('employer_owner_is_admin') &&
+        raw.contains('does not exist')) {
+      return 'Admin protection functions are missing in the database. Run Supabase migrations and try again.';
+    }
+
+    if (raw.contains('user_is_admin') && raw.contains('does not exist')) {
+      return 'Admin protection functions are missing in the database. Run Supabase migrations and try again.';
+    }
+
+    if (raw.toLowerCase().contains('violates foreign key constraint')) {
+      return 'This profile cannot be deleted because related records still reference it.';
+    }
+
+    if (raw.toLowerCase().contains('permission denied')) {
+      return 'This action is not allowed by current database permissions.';
+    }
+
     return 'Action failed. Please try again.';
   }
 
