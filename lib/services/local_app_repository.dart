@@ -286,7 +286,9 @@ class LocalAppRepository implements AppRepository {
   }
 
   @override
-  Future<void> saveFeedback(ApplicationFeedback feedback) async {
+  Future<FeedbackSaveDestination> saveFeedback(
+    ApplicationFeedback feedback,
+  ) async {
     final prefs = await SharedPreferences.getInstance();
     final stored = prefs.getString(_feedbackKey);
     List<Map<String, dynamic>> feedbackList;
@@ -314,6 +316,7 @@ class LocalAppRepository implements AppRepository {
     }
 
     await prefs.setString(_feedbackKey, jsonEncode(feedbackList));
+    return FeedbackSaveDestination.local;
   }
 
   @override

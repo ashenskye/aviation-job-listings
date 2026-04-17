@@ -322,27 +322,124 @@ class SupabaseAppRepository implements AppRepository {
 
   @override
   Future<void> saveApplication(Application app) async {
-    await localFallback.saveApplication(app);
+    final userId = _currentUserId;
+    if (!SupabaseBootstrap.isConfigured || userId == null) {
+      await localFallback.saveApplication(app);
+      return;
+    }
+
+    try {
+      await _client.from('job_applications').upsert({
+        'id': app.id,
+        'job_listing_id': app.jobId,
+        'employer_id': app.employerId,
+        'applicant_user_id': userId,
+        'status': app.status,
+        'match_percentage': app.matchPercentage,
+        'data': app.toJson(),
+      });
+    } catch (_) {
+      await localFallback.saveApplication(app);
+    }
   }
 
   @override
   Future<List<Application>> getApplicationsBySeeker(String seekerId) async {
-    return localFallback.getApplicationsBySeeker(seekerId);
+    final userId = _currentUserId;
+    if (!SupabaseBootstrap.isConfigured || userId == null) {
+      return localFallback.getApplicationsBySeeker(seekerId);
+    }
+
+    try {
+      final rows = await _client
+          .from('job_applications')
+          .select()
+          .eq('applicant_user_id', userId);
+      return rows
+          .map((row) => _fromApplicationRow(row))
+          .toList();
+    } catch (_) {
+      return localFallback.getApplicationsBySeeker(seekerId);
+    }
   }
 
   @override
   Future<List<Application>> loadApplicationsForEmployer(String employerId) async {
-    return localFallback.loadApplicationsForEmployer(employerId);
+    final userId = _currentUserId;
+    if (!SupabaseBootstrap.isConfigured || userId == null) {
+      return localFallback.loadApplicationsForEmployer(employerId);
+    }
+
+    try {
+      final rows = await _client
+          .from('job_applications')
+          .select()
+          .eq('employer_id', employerId);
+      return rows
+          .map((row) => _fromApplicationRow(row))
+          .toList();
+    } catch (_) {
+      return localFallback.loadApplicationsForEmployer(employerId);
+    }
   }
 
   @override
   Future<void> updateApplicationStatus(String applicationId, String status) async {
-    await localFallback.updateApplicationStatus(applicationId, status);
+    final userId = _currentUserId;
+    if (!SupabaseBootstrap.isConfigured || userId == null) {
+      await localFallback.updateApplicationStatus(applicationId, status);
+      return;
+    }
+
+    try {
+      final existingRow = await _client
+          .from('job_applications')
+          .select()
+          .eq('id', applicationId)
+          .maybeSingle();
+
+      if (existingRow == null) {
+        throw StateError('Application not found: $applicationId');
+      }
+
+      final updatedAt = DateTime.now().toIso8601String();
+      final existingData = Map<String, dynamic>.from(
+        (existingRow['data'] as Map?) ?? const {},
+      );
+      existingData['status'] = Application.normalizeStatus(status);
+      existingData['updated_at'] = updatedAt;
+
+      await _client
+          .from('job_applications')
+          .update({
+            'status': Application.normalizeStatus(status),
+            'data': existingData,
+            'updated_at': updatedAt,
+          })
+          .eq('id', applicationId);
+    } catch (_) {
+      await localFallback.updateApplicationStatus(applicationId, status);
+    }
   }
 
   @override
   Future<bool> hasApplied(String seekerId, String jobId) async {
-    return localFallback.hasApplied(seekerId, jobId);
+    final userId = _currentUserId;
+    if (!SupabaseBootstrap.isConfigured || userId == null) {
+      return localFallback.hasApplied(seekerId, jobId);
+    }
+
+    try {
+      final rows = await _client
+          .from('job_applications')
+          .select('id')
+          .eq('applicant_user_id', userId)
+          .eq('job_listing_id', jobId)
+          .limit(1);
+      return rows.isNotEmpty;
+    } catch (_) {
+      return localFallback.hasApplied(seekerId, jobId);
+    }
   }
 
   @override
@@ -350,24 +447,111 @@ class SupabaseAppRepository implements AppRepository {
     String seekerId,
     String jobId,
   ) async {
-    return localFallback.getLatestApplicationForJob(seekerId, jobId);
+    final userId = _currentUserId;
+    if (!SupabaseBootstrap.isConfigured || userId == null) {
+      return localFallback.getLatestApplicationForJob(seekerId, jobId);
+    }
+
+    try {
+      final rows = await _client
+          .from('job_applications')
+          .select()
+          .eq('applicant_user_id', userId)
+          .eq('job_listing_id', jobId)
+          .order('created_at', ascending: false)
+          .limit(1);
+      if (rows.isEmpty) {
+        return null;
+      }
+      return _fromApplicationRow(rows.first);
+    } catch (_) {
+      return localFallback.getLatestApplicationForJob(seekerId, jobId);
+    }
   }
 
   @override
-  Future<void> saveFeedback(ApplicationFeedback feedback) async {
-    await localFallback.saveFeedback(feedback);
+  Future<FeedbackSaveDestination> saveFeedback(
+    ApplicationFeedback feedback,
+  ) async {
+    final userId = _currentUserId;
+    if (!SupabaseBootstrap.isConfigured || userId == null) {
+      return localFallback.saveFeedback(feedback);
+    }
+
+    try {
+      await _client.from('application_feedback').upsert(
+        {
+          'id': feedback.id,
+          'application_id': feedback.applicationId,
+          'message': feedback.message,
+          'feedback_type': feedback.feedbackType,
+          'sent_by_employer': feedback.sentByEmployer,
+          'sent_at': feedback.sentAt.toIso8601String(),
+          'is_auto_generated': feedback.isAutoGenerated,
+        },
+        onConflict: 'application_id',
+      );
+      return FeedbackSaveDestination.remote;
+    } catch (_) {
+      return localFallback.saveFeedback(feedback);
+    }
   }
 
   @override
   Future<List<ApplicationFeedback>> getAllFeedback() async {
-    return localFallback.getAllFeedback();
+    final userId = _currentUserId;
+    if (!SupabaseBootstrap.isConfigured || userId == null) {
+      return localFallback.getAllFeedback();
+    }
+
+    try {
+      final rows = await _client.from('application_feedback').select();
+      return rows
+          .map(
+            (row) => ApplicationFeedback.fromJson(
+              Map<String, dynamic>.from(row),
+            ),
+          )
+          .toList();
+    } catch (_) {
+      return localFallback.getAllFeedback();
+    }
   }
 
   @override
   Future<ApplicationFeedback?> getFeedbackForApplication(
     String applicationId,
   ) async {
-    return localFallback.getFeedbackForApplication(applicationId);
+    final userId = _currentUserId;
+    if (!SupabaseBootstrap.isConfigured || userId == null) {
+      return localFallback.getFeedbackForApplication(applicationId);
+    }
+
+    try {
+      final row = await _client
+          .from('application_feedback')
+          .select()
+          .eq('application_id', applicationId)
+          .maybeSingle();
+      if (row == null) {
+        return null;
+      }
+      return ApplicationFeedback.fromJson(Map<String, dynamic>.from(row));
+    } catch (_) {
+      return localFallback.getFeedbackForApplication(applicationId);
+    }
+  }
+
+  Application _fromApplicationRow(Map<String, dynamic> row) {
+    final data = Map<String, dynamic>.from((row['data'] as Map?) ?? const {});
+    data['id'] = row['id'] ?? data['id'];
+    data['job_listing_id'] = row['job_listing_id'] ?? data['job_listing_id'];
+    data['employer_id'] = row['employer_id'] ?? data['employer_id'];
+    data['status'] = row['status'] ?? data['status'];
+    data['matchPercentage'] = row['match_percentage'] ?? data['matchPercentage'];
+    data['updated_at'] = row['updated_at'] ?? data['updated_at'];
+    data['applied_at'] = row['created_at'] ?? data['applied_at'];
+    return Application.fromJson(data);
   }
 
   Map<String, dynamic> _toJobListingRow(JobListing job) {
@@ -397,6 +581,8 @@ class SupabaseAppRepository implements AppRepository {
       'minimum_hours': job.minimumHours,
       'benefits': job.benefits,
       'deadline_date': job.deadlineDate?.toIso8601String(),
+      'auto_reject_threshold': job.autoRejectThreshold,
+      'reapply_window_days': job.reapplyWindowDays,
       'status': 'active',
     };
   }
@@ -452,6 +638,8 @@ class SupabaseAppRepository implements AppRepository {
       'deadlineDate': row['deadline_date'],
       'createdAt': row['created_at'],
       'updatedAt': row['updated_at'],
+      'autoRejectThreshold': (row['auto_reject_threshold'] as num?)?.toInt() ?? 0,
+      'reapplyWindowDays': (row['reapply_window_days'] as num?)?.toInt() ?? 30,
     };
   }
 

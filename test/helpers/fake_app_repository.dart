@@ -136,7 +136,9 @@ class FakeAppRepository implements AppRepository {
   }
 
   @override
-  Future<void> saveFeedback(ApplicationFeedback feedback) async {
+  Future<FeedbackSaveDestination> saveFeedback(
+    ApplicationFeedback feedback,
+  ) async {
     final index = _feedback.indexWhere(
       (f) => f.applicationId == feedback.applicationId,
     );
@@ -145,6 +147,7 @@ class FakeAppRepository implements AppRepository {
     } else {
       _feedback.add(feedback);
     }
+    return FeedbackSaveDestination.local;
   }
 
   @override

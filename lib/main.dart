@@ -23,6 +23,11 @@ import 'services/app_repository_factory.dart';
 import 'services/supabase_bootstrap.dart';
 import 'services/web_image_file_picker.dart';
 
+// Controllers for job location fields (custom location)
+final TextEditingController _createCityController = TextEditingController();
+final TextEditingController _createStateController = TextEditingController();
+final TextEditingController _createCountryController = TextEditingController();
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await SupabaseBootstrap.initializeIfConfigured();
@@ -530,6 +535,7 @@ class _MyHomePageState extends State<MyHomePage> {
     '401K',
     'Relocation Reinbursement',
     'Sign-On Bonus',
+    'Commuter Program',
     'Longevity Bonus',
     'Flight Benefits',
     'Paid Vacation',
@@ -704,8 +710,7 @@ class _MyHomePageState extends State<MyHomePage> {
   String _generateApplicationId() =>
       DateTime.now().millisecondsSinceEpoch.toString();
 
-  String _generateFeedbackId() =>
-      'fb_${DateTime.now().millisecondsSinceEpoch}';
+  String _generateFeedbackId() => 'fb_${DateTime.now().millisecondsSinceEpoch}';
 
   String _currentJobSeekerId() {
     if (SupabaseBootstrap.isConfigured) {
@@ -741,11 +746,11 @@ class _MyHomePageState extends State<MyHomePage> {
     return appsById.values.toList();
   }
 
-  Future<Application?> _getLatestApplicationForCurrentSeeker(String jobId) async {
+  Future<Application?> _getLatestApplicationForCurrentSeeker(
+    String jobId,
+  ) async {
     final apps = await _loadApplicationsForCurrentSeeker();
-    final matching = apps
-        .where((app) => app.jobId == jobId)
-        .toList()
+    final matching = apps.where((app) => app.jobId == jobId).toList()
       ..sort((a, b) => b.appliedAt.compareTo(a.appliedAt));
     return matching.isEmpty ? null : matching.first;
   }
@@ -1099,8 +1104,7 @@ class _MyHomePageState extends State<MyHomePage> {
       return _buildProfileSummaryRow('Website', '');
     }
 
-    final normalized =
-        url.startsWith('http://') || url.startsWith('https://')
+    final normalized = url.startsWith('http://') || url.startsWith('https://')
         ? url
         : 'https://$url';
     final uri = Uri.tryParse(normalized);
@@ -1124,10 +1128,7 @@ class _MyHomePageState extends State<MyHomePage> {
             child: GestureDetector(
               onTap: uri == null
                   ? null
-                  : () => launchUrl(
-                        uri,
-                        mode: LaunchMode.externalApplication,
-                      ),
+                  : () => launchUrl(uri, mode: LaunchMode.externalApplication),
               child: Text(
                 url,
                 style: const TextStyle(
@@ -1814,9 +1815,9 @@ class _MyHomePageState extends State<MyHomePage> {
 
               bool hasPersonalChanges() {
                 return firstNameController.text.trim() !=
-                    _jobSeekerProfile.firstName ||
-                  lastNameController.text.trim() !=
-                    _jobSeekerProfile.lastName ||
+                        _jobSeekerProfile.firstName ||
+                    lastNameController.text.trim() !=
+                        _jobSeekerProfile.lastName ||
                     _phoneDigits(phoneController.text) !=
                         _phoneDigits(_jobSeekerProfile.phone) ||
                     cityController.text.trim() != _jobSeekerProfile.city ||
@@ -2382,14 +2383,143 @@ class _MyHomePageState extends State<MyHomePage> {
                     ],
                   ),
                 )
-              else
+              else ...[
                 TextField(
-                  controller: _createLocationController,
+                  controller: _createCityController,
                   decoration: const InputDecoration(
-                    hintText: 'Enter job location',
+                    labelText: 'City',
+                    hintText: 'Enter city',
                     isDense: true,
                   ),
                 ),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<String>(
+                  initialValue: _createCountryController.text.isNotEmpty
+                      ? _createCountryController.text
+                      : null,
+                  decoration: const InputDecoration(labelText: 'Country'),
+                  items: _countryOptions
+                      .map(
+                        (country) => DropdownMenuItem(
+                          value: country,
+                          child: Text(country),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (value) {
+                    setState(() {
+                      _createCountryController.text = value ?? '';
+                      final allowed = _stateProvinceOptionsForCountry(
+                        value ?? '',
+                      );
+                      if (!allowed.contains(_createStateController.text)) {
+                        _createStateController.clear();
+                      }
+                    });
+                  },
+                ),
+                const SizedBox(height: 8),
+                if (_normalizeCountryValue(_createCountryController.text) !=
+                    'International')
+                  Autocomplete<String>(
+                    key: ValueKey(
+                      'job-state-${_normalizeCountryValue(_createCountryController.text) ?? 'any'}',
+                    ),
+                    initialValue: TextEditingValue(
+                      text: _createStateController.text,
+                    ),
+                    optionsBuilder: (textEditingValue) {
+                      final scopedOptions = _stateProvinceOptionsForCountry(
+                        _createCountryController.text,
+                      );
+                      final query = textEditingValue.text.trim().toLowerCase();
+                      if (query.isEmpty) {
+                        return scopedOptions;
+                      }
+                      final exactAbbreviationMatches =
+                          _stateProvinceAbbreviations.entries
+                              .where(
+                                (entry) =>
+                                    entry.value.toLowerCase() == query &&
+                                    scopedOptions.contains(entry.key),
+                              )
+                              .map((entry) => entry.key)
+                              .toList();
+                      if (exactAbbreviationMatches.isNotEmpty) {
+                        return exactAbbreviationMatches;
+                      }
+                      return scopedOptions.where((option) {
+                        final optionLower = option.toLowerCase();
+                        final abbreviation =
+                            (_stateProvinceAbbreviations[option] ?? '')
+                                .toLowerCase();
+                        final words = optionLower.split(RegExp(r'[\s-]+'));
+                        return optionLower.startsWith(query) ||
+                            words.any((word) => word.startsWith(query)) ||
+                            abbreviation.startsWith(query);
+                      });
+                    },
+                    onSelected: (selection) {
+                      _createStateController.text = selection;
+                    },
+                    optionsViewBuilder: (context, onSelected, options) {
+                      final optionList = options.toList(growable: false);
+                      return Align(
+                        alignment: Alignment.topLeft,
+                        child: Material(
+                          elevation: 4,
+                          borderRadius: BorderRadius.circular(8),
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(
+                              maxHeight: 240,
+                              minWidth: 280,
+                            ),
+                            child: ListView.builder(
+                              padding: EdgeInsets.zero,
+                              shrinkWrap: true,
+                              itemCount: optionList.length,
+                              itemBuilder: (context, index) {
+                                final option = optionList[index];
+                                return ListTile(
+                                  dense: true,
+                                  title: Text(_stateProvinceLabel(option)),
+                                  onTap: () => onSelected(option),
+                                );
+                              },
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                    fieldViewBuilder:
+                        (
+                          context,
+                          textEditingController,
+                          focusNode,
+                          onFieldSubmitted,
+                        ) {
+                          if (textEditingController.text !=
+                              _createStateController.text) {
+                            textEditingController.value = TextEditingValue(
+                              text: _createStateController.text,
+                              selection: TextSelection.collapsed(
+                                offset: _createStateController.text.length,
+                              ),
+                            );
+                          }
+                          return TextField(
+                            controller: textEditingController,
+                            focusNode: focusNode,
+                            decoration: const InputDecoration(
+                              labelText: 'State / Province',
+                            ),
+                            onChanged: (value) {
+                              _createStateController.text = value;
+                            },
+                          );
+                        },
+                  ),
+              ],
             ],
           ),
         ),
@@ -3733,9 +3863,23 @@ class _MyHomePageState extends State<MyHomePage> {
     final company = _profileType == ProfileType.employer
         ? _currentEmployer.companyName.trim()
         : _createCompanyController.text.trim();
-    final location = _useCompanyLocationForJob
-        ? _buildCompanyLocationString()
-        : _createLocationController.text.trim();
+    String location;
+    if (_useCompanyLocationForJob) {
+      location = _buildCompanyLocationString();
+    } else {
+      final city = _createCityController.text.trim();
+      final state = _createStateController.text.trim();
+      final country = _createCountryController.text.trim();
+      if (country.isEmpty || country == 'International') {
+        location = city.isNotEmpty ? city : 'International';
+      } else {
+        location = [
+          if (city.isNotEmpty) city,
+          if (state.isNotEmpty) state,
+          country,
+        ].join(', ');
+      }
+    }
     final typeRatingsRequired = _createTypeRatingsController.text
         .split(',')
         .map((rating) => rating.trim())
@@ -3775,14 +3919,16 @@ class _MyHomePageState extends State<MyHomePage> {
           .toSet()
           .toList(),
       salaryRange: _buildCreateSalaryRange(),
+      benefits: List<String>.from(_currentEmployer.companyBenefits),
       deadlineDate: _createOpenListing ? null : _createDeadlineDate,
       createdAt: DateTime.now(),
       updatedAt: DateTime.now(),
       employerId: _profileType == ProfileType.employer
           ? _currentEmployer.id
           : null,
-      autoRejectThreshold:
-          _createAutoRejectEnabled ? _createAutoRejectThreshold : 0,
+      autoRejectThreshold: _createAutoRejectEnabled
+          ? _createAutoRejectThreshold
+          : 0,
       reapplyWindowDays: _createReapplyWindowDays,
     );
   }
@@ -3793,6 +3939,27 @@ class _MyHomePageState extends State<MyHomePage> {
     setState(() {
       _createTitleController.text = job.title;
       _createCompanyController.text = _currentEmployer.companyName;
+      // Parse job.location into city/state/country if possible
+      if (_useCompanyLocationForJob) {
+        _createCityController.clear();
+        _createStateController.clear();
+        _createCountryController.clear();
+      } else {
+        final parts = job.location.split(',').map((e) => e.trim()).toList();
+        if (parts.length == 3) {
+          _createCityController.text = parts[0];
+          _createStateController.text = parts[1];
+          _createCountryController.text = parts[2];
+        } else if (parts.length == 2) {
+          _createCityController.text = parts[0];
+          _createStateController.text = '';
+          _createCountryController.text = parts[1];
+        } else if (parts.length == 1) {
+          _createCityController.text = parts[0];
+          _createStateController.clear();
+          _createCountryController.clear();
+        }
+      }
       _createLocationController.text = job.location;
       _useCompanyLocationForJob =
           companyLocation.isNotEmpty &&
@@ -3843,11 +4010,12 @@ class _MyHomePageState extends State<MyHomePage> {
       _createDeadlineDate = job.deadlineDate;
 
       _createAutoRejectEnabled = job.autoRejectThreshold > 0;
-      _createAutoRejectThreshold =
-          job.autoRejectThreshold > 0 ? job.autoRejectThreshold : 65;
+      _createAutoRejectThreshold = job.autoRejectThreshold > 0
+          ? job.autoRejectThreshold
+          : 65;
       _createReapplyWindowDays = job.reapplyWindowDays;
-      _createReapplyWindowDaysController.text =
-          job.reapplyWindowDays.toString();
+      _createReapplyWindowDaysController.text = job.reapplyWindowDays
+          .toString();
 
       final salary = job.salaryRange?.trim() ?? '';
       _createStartingPayController.clear();
@@ -4061,6 +4229,8 @@ class _MyHomePageState extends State<MyHomePage> {
     if (!mounted) {
       return;
     }
+    _closeTemplateEditor();
+    DefaultTabController.maybeOf(context)?.animateTo(3);
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('Updated template "${selected.name}".')),
     );
@@ -4479,10 +4649,11 @@ class _MyHomePageState extends State<MyHomePage> {
 
     try {
       final match = _evaluateJobMatch(job);
-      final applicantName = JobSeekerProfile.combineName(
-        _jobSeekerProfile.firstName,
-        _jobSeekerProfile.lastName,
-      ).isNotEmpty
+      final applicantName =
+          JobSeekerProfile.combineName(
+            _jobSeekerProfile.firstName,
+            _jobSeekerProfile.lastName,
+          ).isNotEmpty
           ? JobSeekerProfile.combineName(
               _jobSeekerProfile.firstName,
               _jobSeekerProfile.lastName,
@@ -4514,7 +4685,9 @@ class _MyHomePageState extends State<MyHomePage> {
         applicantAircraftFlown: List<String>.from(
           _jobSeekerProfile.aircraftFlown,
         ),
-        applicantFlightHours: Map<String, int>.from(_jobSeekerProfile.flightHours),
+        applicantFlightHours: Map<String, int>.from(
+          _jobSeekerProfile.flightHours,
+        ),
         applicantFlightHoursTypes: List<String>.from(
           _jobSeekerProfile.flightHoursTypes,
         ),
@@ -4579,9 +4752,9 @@ class _MyHomePageState extends State<MyHomePage> {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error applying: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Error applying: $e')));
     }
   }
 
@@ -4679,7 +4852,9 @@ class _MyHomePageState extends State<MyHomePage> {
     final minimumHours = job.minimumHours;
     if (minimumHours != null && minimumHours > 0) {
       if (app.applicantTotalFlightHours >= minimumHours) {
-        met.add('Total Hours: ${app.applicantTotalFlightHours} / $minimumHours');
+        met.add(
+          'Total Hours: ${app.applicantTotalFlightHours} / $minimumHours',
+        );
       }
     }
 
@@ -4706,7 +4881,9 @@ class _MyHomePageState extends State<MyHomePage> {
     }
 
     for (final requirement in job.instructorHoursByType.entries) {
-      final isPreferred = job.preferredInstructorHours.contains(requirement.key);
+      final isPreferred = job.preferredInstructorHours.contains(
+        requirement.key,
+      );
       if (isPreferred) {
         continue;
       }
@@ -4753,7 +4930,10 @@ class _MyHomePageState extends State<MyHomePage> {
     return met;
   }
 
-  List<String> _lackingRequirementsForApplicant(Application app, JobListing job) {
+  List<String> _lackingRequirementsForApplicant(
+    Application app,
+    JobListing job,
+  ) {
     final lacking = <String>[];
 
     final applicantCertificates = <String>{
@@ -4819,7 +4999,9 @@ class _MyHomePageState extends State<MyHomePage> {
     }
 
     for (final requirement in job.instructorHoursByType.entries) {
-      final isPreferred = job.preferredInstructorHours.contains(requirement.key);
+      final isPreferred = job.preferredInstructorHours.contains(
+        requirement.key,
+      );
       if (isPreferred) {
         continue;
       }
@@ -4866,72 +5048,6 @@ class _MyHomePageState extends State<MyHomePage> {
     return lacking;
   }
 
-  Future<void> _sendApplicationFeedback(
-    String applicationId,
-    String feedbackType,
-    String message,
-  ) async {
-    try {
-      final feedback = ApplicationFeedback(
-        id: _generateFeedbackId(),
-        applicationId: applicationId,
-        message: message,
-        feedbackType: feedbackType,
-        sentByEmployer: true,
-        sentAt: DateTime.now(),
-      );
-
-      await _appRepository.saveFeedback(feedback);
-
-      // Update application status
-      Application? application;
-      try {
-        application = _employerApplications.firstWhere(
-          (app) => app.id == applicationId,
-        );
-      } catch (_) {
-        try {
-          application = _myApplications.firstWhere(
-            (app) => app.id == applicationId,
-          );
-        } catch (_) {
-          application = null;
-        }
-      }
-      if (application == null) {
-        throw StateError('Application not found: $applicationId');
-      }
-      final nextStatus = feedbackType == ApplicationFeedback.feedbackTypeInterested
-          ? Application.statusInterested
-          : Application.statusRejected;
-      await _appRepository.updateApplicationStatus(applicationId, nextStatus);
-
-      if (!mounted) return;
-
-      final updated = application.copyWith(
-        status: nextStatus,
-        updatedAt: DateTime.now(),
-      );
-      setState(() {
-        _employerApplications = _employerApplications
-            .map((app) => app.id == updated.id ? updated : app)
-            .toList();
-      });
-      await _loadMyApplications();
-      await _loadAllFeedback();
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Feedback sent to applicant.')),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error sending feedback: $e')),
-      );
-    }
-  }
-
   Widget _buildApplicantDetailsList({
     required String title,
     required List<String> values,
@@ -4961,248 +5077,113 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Future<void> _openApplicantDetails(Application app, JobListing job) async {
-    final existingFeedback = _getFeedbackForApplication(app.id);
-    final customMessageController = TextEditingController();
-    String? selectedFeedbackType;
-
     await showDialog<void>(
       context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          title: const Text('Applicant Details'),
-          content: SingleChildScrollView(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 560),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    app.applicantName.trim().isNotEmpty
-                        ? app.applicantName
-                        : app.jobSeekerId,
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w700,
-                    ),
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Applicant Details'),
+        content: SingleChildScrollView(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 560),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  app.applicantName.trim().isNotEmpty
+                      ? app.applicantName
+                      : app.jobSeekerId,
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
                   ),
-                  const SizedBox(height: 4),
-                  Text('Applied for: ${job.title}'),
-                  const SizedBox(height: 4),
-                  Text('Match: ${app.matchPercentage}%'),
-                  const SizedBox(height: 4),
-                  Text('Location: ${_applicantLocation(app)}'),
-                  const SizedBox(height: 10),
-                  Text(
-                    'Email: ${app.applicantEmail.trim().isNotEmpty ? app.applicantEmail : 'Not provided'}',
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Phone: ${app.applicantPhone.trim().isNotEmpty ? app.applicantPhone : 'Not provided'}',
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Total Flight Hours: ${app.applicantTotalFlightHours}',
-                  ),
+                ),
+                const SizedBox(height: 4),
+                Text('Applied for: ${job.title}'),
+                const SizedBox(height: 4),
+                Text('Match: ${app.matchPercentage}%'),
+                const SizedBox(height: 4),
+                Text('Location: ${_applicantLocation(app)}'),
+                const SizedBox(height: 10),
+                Text(
+                  'Email: ${app.applicantEmail.trim().isNotEmpty ? app.applicantEmail : 'Not provided'}',
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Phone: ${app.applicantPhone.trim().isNotEmpty ? app.applicantPhone : 'Not provided'}',
+                ),
+                const SizedBox(height: 4),
+                Text('Total Flight Hours: ${app.applicantTotalFlightHours}'),
+                const SizedBox(height: 12),
+                _buildApplicantDetailsList(
+                  title: 'FAA Certificates',
+                  values: app.applicantFaaCertificates,
+                  emptyText: 'No certificates provided.',
+                ),
+                const SizedBox(height: 12),
+                _buildApplicantDetailsList(
+                  title: 'Type Ratings',
+                  values: app.applicantTypeRatings,
+                  emptyText: 'No type ratings provided.',
+                ),
+                const SizedBox(height: 12),
+                _buildApplicantDetailsList(
+                  title: 'Aircraft Experience',
+                  values: app.applicantAircraftFlown,
+                  emptyText: 'No aircraft experience provided.',
+                ),
+                if (app.coverLetter.trim().isNotEmpty) ...[
                   const SizedBox(height: 12),
-                  _buildApplicantDetailsList(
-                    title: 'FAA Certificates',
-                    values: app.applicantFaaCertificates,
-                    emptyText: 'No certificates provided.',
-                  ),
-                  const SizedBox(height: 12),
-                  _buildApplicantDetailsList(
-                    title: 'Type Ratings',
-                    values: app.applicantTypeRatings,
-                    emptyText: 'No type ratings provided.',
-                  ),
-                  const SizedBox(height: 12),
-                  _buildApplicantDetailsList(
-                    title: 'Aircraft Experience',
-                    values: app.applicantAircraftFlown,
-                    emptyText: 'No aircraft experience provided.',
-                  ),
-                  if (app.coverLetter.trim().isNotEmpty) ...[
-                    const SizedBox(height: 12),
-                    const Text(
-                      'Cover Letter',
-                      style: TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(app.coverLetter.trim()),
-                  ],
-                  const SizedBox(height: 16),
-                  const Divider(),
-                  const SizedBox(height: 8),
-                  // Previous feedback display
-                  if (existingFeedback != null) ...[
-                    const Text(
-                      'Previous Feedback Sent',
-                      style: TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                    const SizedBox(height: 6),
-                    Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: Colors.blueGrey.shade50,
-                        border: Border.all(color: Colors.blueGrey.shade200),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            existingFeedback.message,
-                            style: const TextStyle(fontStyle: FontStyle.italic),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            'Sent ${_formatYmd(existingFeedback.sentAt.toLocal())}',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Colors.grey.shade600,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                  ],
-                  // Feedback form
                   const Text(
-                    'Send Feedback',
-                    style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                    ),
+                    'Message to Hiring Team',
+                    style: TextStyle(fontWeight: FontWeight.w600),
                   ),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      ChoiceChip(
-                        label: const Text('Interested'),
-                        selected: selectedFeedbackType ==
-                            ApplicationFeedback.feedbackTypeInterested,
-                        selectedColor: Colors.green.shade100,
-                        onSelected: (_) {
-                          setDialogState(() {
-                            selectedFeedbackType =
-                                ApplicationFeedback.feedbackTypeInterested;
-                          });
-                        },
-                      ),
-                      ChoiceChip(
-                        label: const Text('Not a Fit'),
-                        selected: selectedFeedbackType ==
-                            ApplicationFeedback.feedbackTypeNotFit,
-                        selectedColor: Colors.red.shade100,
-                        onSelected: (_) {
-                          setDialogState(() {
-                            selectedFeedbackType =
-                                ApplicationFeedback.feedbackTypeNotFit;
-                          });
-                        },
-                      ),
-                      ChoiceChip(
-                        label: const Text('Custom'),
-                        selected: selectedFeedbackType ==
-                            ApplicationFeedback.feedbackTypeCustom,
-                        selectedColor: Colors.blue.shade100,
-                        onSelected: (_) {
-                          setDialogState(() {
-                            selectedFeedbackType =
-                                ApplicationFeedback.feedbackTypeCustom;
-                          });
-                        },
-                      ),
-                    ],
-                  ),
-                  if (selectedFeedbackType ==
-                      ApplicationFeedback.feedbackTypeCustom) ...[
-                    const SizedBox(height: 10),
-                    TextField(
-                      controller: customMessageController,
-                      decoration: const InputDecoration(
-                        labelText: 'Custom message',
-                        border: OutlineInputBorder(),
-                        hintText: 'Enter your feedback message...',
-                      ),
-                      maxLines: 3,
-                    ),
-                  ],
+                  const SizedBox(height: 6),
+                  Text(app.coverLetter.trim()),
                 ],
-              ),
+              ],
             ),
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text('Close'),
-            ),
-            if (selectedFeedbackType != null)
-              FilledButton(
-                onPressed: () async {
-                  final type = selectedFeedbackType!;
-                  final message = type ==
-                          ApplicationFeedback.feedbackTypeInterested
-                      ? 'We are interested in your application and would like to move forward.'
-                      : type == ApplicationFeedback.feedbackTypeNotFit
-                      ? 'Thank you for your interest. Unfortunately, you are not a fit for this role at this time.'
-                      : customMessageController.text.trim();
-
-                  if (type == ApplicationFeedback.feedbackTypeCustom &&
-                      message.isEmpty) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Please enter a custom message.'),
-                      ),
-                    );
-                    return;
-                  }
-
-                  Navigator.of(dialogContext).pop();
-                  await _sendApplicationFeedback(app.id, type, message);
-                },
-                child: const Text('Send Feedback'),
-              ),
-          ],
         ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Close'),
+          ),
+        ],
       ),
     );
-
-    customMessageController.dispose();
   }
 
-  Future<void> _showQuickApplyDialog(
-    JobListing job,
-    _MatchResult match,
-  ) async {
+  Future<void> _showQuickApplyDialog(JobListing job, _MatchResult match) async {
     final coverLetterController = TextEditingController();
     final matchLabel = match.matchPercentage >= 70
         ? '${match.matchPercentage}% Good Match'
         : '${match.matchPercentage}% Stretch Match';
     final bodyText = match.missingRequirements.isEmpty
-        ? 'Add an optional cover letter.'
+        ? 'Add an optional message for hiring staff.'
         : 'Missing: ${match.missingRequirements.take(3).join(', ')}'
-            '${match.missingRequirements.length > 3 ? '...' : ''}.';
+              '${match.missingRequirements.length > 3 ? '...' : ''}.';
     final submitted = await showDialog<String?>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: Text(match.matchPercentage >= 70 ? 'Quick Apply' : 'Apply Anyway'),
+        title: Text(
+          match.matchPercentage >= 70 ? 'Quick Apply' : 'Apply Anyway',
+        ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(matchLabel, style: const TextStyle(fontWeight: FontWeight.w600)),
+            Text(
+              matchLabel,
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
             const SizedBox(height: 4),
             Text(bodyText),
             const SizedBox(height: 16),
             TextField(
               controller: coverLetterController,
               decoration: const InputDecoration(
-                labelText: 'Cover letter (optional)',
+                labelText: 'Message to Hiring Team (optional)',
                 border: OutlineInputBorder(),
               ),
               maxLines: 4,
@@ -5532,6 +5513,7 @@ class _MyHomePageState extends State<MyHomePage> {
     JobListing? buildEditedDraft({bool showValidationFeedback = true}) {
       final title = titleController.text.trim();
       final location = locationController.text.trim();
+      final normalizedLocation = _normalizeCityStateLocation(location);
 
       final missingRequirements = <String>[];
       if (title.isEmpty) {
@@ -5539,6 +5521,11 @@ class _MyHomePageState extends State<MyHomePage> {
       }
       if (location.isEmpty) {
         missingRequirements.add('Location');
+      }
+      if (location.isNotEmpty && normalizedLocation == null) {
+        missingRequirements.add(
+          'Location must follow City, State format (e.g., Dallas, TX)',
+        );
       }
       if (selectedEmploymentType == null || selectedEmploymentType!.isEmpty) {
         missingRequirements.add('Employment Type');
@@ -5696,7 +5683,7 @@ class _MyHomePageState extends State<MyHomePage> {
         id: job.id,
         title: title,
         company: lockedCompanyName,
-        location: location,
+        location: normalizedLocation ?? location,
         type: selectedEmploymentType!,
         crewRole: selectedCrewRole,
         crewPosition: selectedCrewRole == 'Crew' ? selectedCrewPosition : null,
@@ -5749,7 +5736,10 @@ class _MyHomePageState extends State<MyHomePage> {
           TextField(
             controller: locationController,
             onChanged: (_) => setModalState(() {}),
-            decoration: const InputDecoration(labelText: 'Location *'),
+            decoration: const InputDecoration(
+              labelText: 'Location *',
+              hintText: 'City, ST',
+            ),
           ),
           const SizedBox(height: 10),
           DropdownButtonFormField<String>(
@@ -6400,6 +6390,39 @@ class _MyHomePageState extends State<MyHomePage> {
     return 'Company headquarters location not set';
   }
 
+  String _toTitleCaseWords(String input) {
+    return input
+        .split(RegExp(r'\s+'))
+        .where((part) => part.isNotEmpty)
+        .map((part) {
+          if (part.length == 1) {
+            return part.toUpperCase();
+          }
+          return '${part[0].toUpperCase()}${part.substring(1).toLowerCase()}';
+        })
+        .join(' ');
+  }
+
+  String? _normalizeCityStateLocation(String value) {
+    final trimmed = value.trim();
+    final match = RegExp(
+      r"^([A-Za-z][A-Za-z .'-]*),\s*([A-Za-z]{2}|[A-Za-z][A-Za-z .'-]*)$",
+    ).firstMatch(trimmed);
+    if (match == null) {
+      return null;
+    }
+
+    final city = _toTitleCaseWords(
+      match.group(1)!.replaceAll(RegExp(r'\s+'), ' '),
+    );
+    final stateRaw = match.group(2)!.replaceAll(RegExp(r'\s+'), ' ').trim();
+    final state = stateRaw.length == 2
+        ? stateRaw.toUpperCase()
+        : _toTitleCaseWords(stateRaw);
+
+    return '$city, $state';
+  }
+
   String _buildJobTimelineText(JobListing job) {
     return _buildTimelineLabels(
       createdAt: job.createdAt,
@@ -6449,9 +6472,16 @@ class _MyHomePageState extends State<MyHomePage> {
     final company = _profileType == ProfileType.employer
         ? _currentEmployer.companyName.trim()
         : _createCompanyController.text.trim();
+    final customCity = _createCityController.text.trim();
+    final customState = _createStateController.text.trim();
+    final customCountry = _createCountryController.text.trim();
     final location = _useCompanyLocationForJob
         ? _buildCompanyLocationString()
-        : _createLocationController.text.trim();
+        : [
+            customCity,
+            customState,
+            customCountry,
+          ].where((part) => part.isNotEmpty).join(', ');
     final type = _createTypeController.text.trim();
     final position = _selectedCreatePositionOption;
     final startingPay = _createStartingPayController.text.trim();
@@ -6462,6 +6492,15 @@ class _MyHomePageState extends State<MyHomePage> {
     if (title.isEmpty) missing.add('Title');
     if (company.isEmpty) missing.add('Company');
     if (location.isEmpty) missing.add('Location');
+    if (!_useCompanyLocationForJob && customCity.isEmpty) {
+      missing.add('City');
+    }
+    if (!_useCompanyLocationForJob && customState.isEmpty) {
+      missing.add('State / Province');
+    }
+    if (!_useCompanyLocationForJob && customCountry.isEmpty) {
+      missing.add('Country');
+    }
     if (type.isEmpty) missing.add('Employment Type');
     if (position == null || position.isEmpty) missing.add('Position Selection');
     if (description.isEmpty) missing.add('Description');
@@ -7076,6 +7115,41 @@ class _MyHomePageState extends State<MyHomePage> {
                                                       Text(
                                                         '${job.company} • ${job.location}',
                                                       ),
+                                                      if (_profileType ==
+                                                          ProfileType.jobSeeker)
+                                                        Align(
+                                                          alignment: Alignment
+                                                              .centerLeft,
+                                                          child: TextButton.icon(
+                                                            onPressed: () =>
+                                                                _openLocationInMaps(
+                                                                  job.location,
+                                                                ),
+                                                            icon: const Icon(
+                                                              Icons
+                                                                  .map_outlined,
+                                                              size: 16,
+                                                            ),
+                                                            label: const Text(
+                                                              'View map',
+                                                            ),
+                                                            style: TextButton.styleFrom(
+                                                              padding:
+                                                                  EdgeInsets
+                                                                      .zero,
+                                                              minimumSize:
+                                                                  const Size(
+                                                                    0,
+                                                                    28,
+                                                                  ),
+                                                              tapTargetSize:
+                                                                  MaterialTapTargetSize
+                                                                      .shrinkWrap,
+                                                              alignment: Alignment
+                                                                  .centerLeft,
+                                                            ),
+                                                          ),
+                                                        ),
                                                       const SizedBox(height: 2),
                                                       Text(job.type),
                                                       if (deadlineText !=
@@ -7184,6 +7258,58 @@ class _MyHomePageState extends State<MyHomePage> {
                                         color: Colors.grey.shade800,
                                       ),
                                     ),
+                                    if (job.benefits.isNotEmpty) ...[
+                                      const SizedBox(height: 8),
+                                      Wrap(
+                                        spacing: 6,
+                                        runSpacing: 4,
+                                        children: [
+                                          ...job.benefits
+                                              .take(3)
+                                              .map(
+                                                (benefit) => Container(
+                                                  padding:
+                                                      const EdgeInsets.symmetric(
+                                                        horizontal: 8,
+                                                        vertical: 4,
+                                                      ),
+                                                  decoration: BoxDecoration(
+                                                    color: Colors.blue.shade50,
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                          12,
+                                                        ),
+                                                  ),
+                                                  child: Text(
+                                                    benefit,
+                                                    style: const TextStyle(
+                                                      fontSize: 11,
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                          if (job.benefits.length > 3)
+                                            Container(
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                    horizontal: 8,
+                                                    vertical: 4,
+                                                  ),
+                                              decoration: BoxDecoration(
+                                                color: Colors.blue.shade50,
+                                                borderRadius:
+                                                    BorderRadius.circular(12),
+                                              ),
+                                              child: Text(
+                                                '+${job.benefits.length - 3} more',
+                                                style: const TextStyle(
+                                                  fontSize: 11,
+                                                ),
+                                              ),
+                                            ),
+                                        ],
+                                      ),
+                                    ],
                                     const SizedBox(height: 8),
                                     Align(
                                       alignment: Alignment.centerRight,
@@ -7238,8 +7364,7 @@ class _MyHomePageState extends State<MyHomePage> {
                                                   : 'Apply',
                                               onPressed: _hasApplied(job.id)
                                                   ? null
-                                                  : () =>
-                                                      _handleApplyTap(job),
+                                                  : () => _handleApplyTap(job),
                                             ),
                                           if (_canEditJob(job))
                                             OutlinedButton.icon(
@@ -7435,10 +7560,7 @@ class _MyHomePageState extends State<MyHomePage> {
                 const SizedBox(height: 6),
                 Text(
                   'Applied ${_formatYmd(app.appliedAt.toLocal())}',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Colors.grey.shade600,
-                  ),
+                  style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
                 ),
                 // Feedback section
                 if (hasFeedback) ...[
@@ -7511,13 +7633,17 @@ class _MyHomePageState extends State<MyHomePage> {
       'interested': allApplications
           .where((app) => app.status == 'interested')
           .length,
-      'rejected': allApplications.where((app) => app.status == 'rejected').length,
+      'rejected': allApplications
+          .where((app) => app.status == 'rejected')
+          .length,
     };
-    final perfectCount =
-        allApplications.where((app) => app.isPerfectMatch).length;
+    final perfectCount = allApplications
+        .where((app) => app.isPerfectMatch)
+        .length;
     final goodCount = allApplications.where((app) => app.isGoodMatch).length;
-    final stretchCount =
-        allApplications.where((app) => app.isStretchMatch).length;
+    final stretchCount = allApplications
+        .where((app) => app.isStretchMatch)
+        .length;
 
     // Apply status filter
     final statusFiltered = _selectedEmployerApplicationFilter == 'all'
@@ -7528,15 +7654,9 @@ class _MyHomePageState extends State<MyHomePage> {
 
     // Apply match % filter
     final filteredApplications = switch (_selectedMatchFilter) {
-      'perfect' => statusFiltered
-          .where((app) => app.isPerfectMatch)
-          .toList(),
-      'good' => statusFiltered
-          .where((app) => app.isGoodMatch)
-          .toList(),
-      'stretch' => statusFiltered
-          .where((app) => app.isStretchMatch)
-          .toList(),
+      'perfect' => statusFiltered.where((app) => app.isPerfectMatch).toList(),
+      'good' => statusFiltered.where((app) => app.isGoodMatch).toList(),
+      'stretch' => statusFiltered.where((app) => app.isStretchMatch).toList(),
       _ => statusFiltered,
     };
 
@@ -7566,8 +7686,9 @@ class _MyHomePageState extends State<MyHomePage> {
             }
           }
 
-          final statusCompare =
-              statusRank(a.status).compareTo(statusRank(b.status));
+          final statusCompare = statusRank(
+            a.status,
+          ).compareTo(statusRank(b.status));
           if (statusCompare != 0) {
             return statusCompare;
           }
@@ -7766,10 +7887,14 @@ class _MyHomePageState extends State<MyHomePage> {
 
         final appFeedback = _getFeedbackForApplication(app.id);
         final hasFeedback = appFeedback != null;
+        final rejectedByThreshold =
+            job.autoRejectThreshold > 0 &&
+            app.matchPercentage < job.autoRejectThreshold;
+        final rejectedByAutoFeedback =
+            hasFeedback && appFeedback.isAutoGenerated;
         final isAutoRejected =
             app.status == 'rejected' &&
-            hasFeedback &&
-            appFeedback.isAutoGenerated;
+            (rejectedByThreshold || rejectedByAutoFeedback);
         final metRequirements = _metRequirementsForApplicant(app, job);
         final lackingRequirements = _lackingRequirementsForApplicant(app, job);
 
@@ -7821,7 +7946,7 @@ class _MyHomePageState extends State<MyHomePage> {
                           borderRadius: BorderRadius.circular(10),
                         ),
                         child: const Text(
-                          '[✓] Auto-rejected',
+                          '[✓] Auto-Rejected (Threshold)',
                           style: TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.w600,
@@ -7936,9 +8061,7 @@ class _MyHomePageState extends State<MyHomePage> {
                                 (item) => Chip(
                                   label: Text(item),
                                   backgroundColor: Colors.red.shade50,
-                                  side: BorderSide(
-                                    color: Colors.red.shade200,
-                                  ),
+                                  side: BorderSide(color: Colors.red.shade200),
                                 ),
                               )
                               .toList(),
@@ -8002,7 +8125,7 @@ class _MyHomePageState extends State<MyHomePage> {
                 if (app.coverLetter.trim().isNotEmpty) ...[
                   const SizedBox(height: 8),
                   Text(
-                    'Cover Letter: ${app.coverLetter.trim()}',
+                    'Message to Hiring Team: ${app.coverLetter.trim()}',
                     style: TextStyle(color: Colors.grey.shade800),
                   ),
                 ],
@@ -8014,7 +8137,7 @@ class _MyHomePageState extends State<MyHomePage> {
                     OutlinedButton.icon(
                       onPressed: () => _openApplicantDetails(app, job),
                       icon: const Icon(Icons.person_outline),
-                      label: const Text('View & Send Feedback'),
+                      label: const Text('View Applicant'),
                     ),
                     OutlinedButton(
                       onPressed: app.status == 'reviewed'
@@ -8078,12 +8201,24 @@ class _MyHomePageState extends State<MyHomePage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    job.title,
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                    ),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          job.title,
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'Remove from Favorites',
+                        icon: const Icon(Icons.star),
+                        color: Colors.amber,
+                        onPressed: () => _toggleFavorite(job),
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 4),
                   Text('${job.company} • ${job.location}'),
@@ -8782,9 +8917,7 @@ class _MyHomePageState extends State<MyHomePage> {
                         onPressed: () =>
                             DefaultTabController.of(tabContext).animateTo(1),
                         icon: const Icon(Icons.list_alt_outlined),
-                        label: Text(
-                          'See All Listings ($companyListingCount)',
-                        ),
+                        label: Text('See All Listings ($companyListingCount)'),
                       ),
                     ),
                   ),
@@ -9633,10 +9766,7 @@ class _MyHomePageState extends State<MyHomePage> {
             ),
             Text(
               'Auto-reject applications below $_createAutoRejectThreshold% match',
-              style: TextStyle(
-                fontSize: 12,
-                color: Colors.grey.shade600,
-              ),
+              style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
             ),
           ],
           const SizedBox(height: 16),
@@ -10314,6 +10444,25 @@ class JobDetailsPage extends StatelessWidget {
     );
   }
 
+  Future<void> _openJobLocationInMaps(BuildContext context) async {
+    final trimmed = job.location.trim();
+    if (trimmed.isEmpty) {
+      return;
+    }
+
+    final uri = Uri.https('www.google.com', '/maps/search/', {
+      'api': '1',
+      'query': trimmed,
+    });
+    final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
+
+    if (!launched && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not open map for this location.')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final mediaQuery = MediaQuery.of(context);
@@ -10342,9 +10491,7 @@ class JobDetailsPage extends StatelessWidget {
         : 'Single Pilot';
 
     return Scaffold(
-      appBar: AppBar(
-        title: Text(job.title),
-      ),
+      appBar: AppBar(title: Text(job.title)),
       body: SafeArea(
         top: false,
         child: Container(
@@ -10367,293 +10514,331 @@ class JobDetailsPage extends StatelessWidget {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          border: Border.all(color: Colors.grey.shade300),
-                          borderRadius: BorderRadius.circular(14),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              job.title,
-                              style: Theme.of(context).textTheme.headlineSmall,
-                            ),
-                            const SizedBox(height: 6),
-                            Text(
-                              job.company,
-                              style: Theme.of(context).textTheme.titleMedium,
-                            ),
-                            const SizedBox(height: 4),
-                            TextButton.icon(
-                              onPressed: () => _openCompanyInfo(context),
-                              icon: const Icon(
-                                Icons.business_outlined,
-                                size: 18,
+                            Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.all(16),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                border: Border.all(color: Colors.grey.shade300),
+                                borderRadius: BorderRadius.circular(14),
                               ),
-                              label: const Text('View Company Info'),
-                              style: TextButton.styleFrom(
-                                padding: EdgeInsets.zero,
-                                minimumSize: const Size(0, 32),
-                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                                alignment: Alignment.centerLeft,
-                              ),
-                            ),
-                            const SizedBox(height: 6),
-                            Text(
-                              '${job.location} • ${job.type}',
-                              style: TextStyle(color: Colors.grey.shade700),
-                            ),
-                            if (applicationDeadlineText != null) ...[
-                              const SizedBox(height: 12),
-                              Container(
-                                width: double.infinity,
-                                padding: const EdgeInsets.all(14),
-                                decoration: BoxDecoration(
-                                  color: Colors.orange.shade50,
-                                  border: Border.all(
-                                    color: Colors.orange.shade200,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    job.title,
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.headlineSmall,
                                   ),
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                child: Row(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Icon(
-                                      Icons.event_available,
-                                      color: Colors.orange.shade800,
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    job.company,
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.titleMedium,
+                                  ),
+                                  const SizedBox(height: 4),
+                                  TextButton.icon(
+                                    onPressed: () => _openCompanyInfo(context),
+                                    icon: const Icon(
+                                      Icons.business_outlined,
+                                      size: 18,
                                     ),
-                                    const SizedBox(width: 10),
-                                    Expanded(
-                                      child: Column(
+                                    label: const Text('View Company Info'),
+                                    style: TextButton.styleFrom(
+                                      padding: EdgeInsets.zero,
+                                      minimumSize: const Size(0, 32),
+                                      tapTargetSize:
+                                          MaterialTapTargetSize.shrinkWrap,
+                                      alignment: Alignment.centerLeft,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    '${job.location} • ${job.type}',
+                                    style: TextStyle(
+                                      color: Colors.grey.shade700,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  TextButton.icon(
+                                    onPressed: () =>
+                                        _openJobLocationInMaps(context),
+                                    icon: const Icon(
+                                      Icons.map_outlined,
+                                      size: 18,
+                                    ),
+                                    label: const Text('View map'),
+                                    style: TextButton.styleFrom(
+                                      padding: EdgeInsets.zero,
+                                      minimumSize: const Size(0, 30),
+                                      tapTargetSize:
+                                          MaterialTapTargetSize.shrinkWrap,
+                                      alignment: Alignment.centerLeft,
+                                    ),
+                                  ),
+                                  if (applicationDeadlineText != null) ...[
+                                    const SizedBox(height: 12),
+                                    Container(
+                                      width: double.infinity,
+                                      padding: const EdgeInsets.all(14),
+                                      decoration: BoxDecoration(
+                                        color: Colors.orange.shade50,
+                                        border: Border.all(
+                                          color: Colors.orange.shade200,
+                                        ),
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                      child: Row(
                                         crossAxisAlignment:
                                             CrossAxisAlignment.start,
                                         children: [
-                                          Text(
-                                            'Application Deadline',
-                                            style: TextStyle(
-                                              fontSize: 12,
-                                              fontWeight: FontWeight.w700,
-                                              color: Colors.orange.shade900,
-                                            ),
+                                          Icon(
+                                            Icons.event_available,
+                                            color: Colors.orange.shade800,
                                           ),
-                                          const SizedBox(height: 4),
-                                          Text(
-                                            applicationDeadlineText,
-                                            style: Theme.of(context)
-                                                .textTheme
-                                                .titleLarge
-                                                ?.copyWith(
-                                                  fontWeight: FontWeight.w700,
-                                                  color: Colors.orange.shade900,
+                                          const SizedBox(width: 10),
+                                          Expanded(
+                                            child: Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  'Application Deadline',
+                                                  style: TextStyle(
+                                                    fontSize: 12,
+                                                    fontWeight: FontWeight.w700,
+                                                    color:
+                                                        Colors.orange.shade900,
+                                                  ),
                                                 ),
+                                                const SizedBox(height: 4),
+                                                Text(
+                                                  applicationDeadlineText,
+                                                  style: Theme.of(context)
+                                                      .textTheme
+                                                      .titleLarge
+                                                      ?.copyWith(
+                                                        fontWeight:
+                                                            FontWeight.w700,
+                                                        color: Colors
+                                                            .orange
+                                                            .shade900,
+                                                      ),
+                                                ),
+                                              ],
+                                            ),
                                           ),
                                         ],
                                       ),
                                     ),
                                   ],
+                                  const SizedBox(height: 12),
+                                  Wrap(
+                                    spacing: 8,
+                                    runSpacing: 8,
+                                    children: [
+                                      if (job.salaryRange != null)
+                                        Chip(
+                                          label: Text(
+                                            'Salary: ${job.salaryRange}',
+                                          ),
+                                        ),
+                                      Chip(label: Text(crewLabel)),
+                                    ],
+                                  ),
+                                  if (timelineLabels.isNotEmpty) ...[
+                                    const SizedBox(height: 10),
+                                    Wrap(
+                                      spacing: 8,
+                                      runSpacing: 8,
+                                      children: timelineLabels
+                                          .map(
+                                            (label) => Container(
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                    horizontal: 10,
+                                                    vertical: 6,
+                                                  ),
+                                              decoration: BoxDecoration(
+                                                color: Colors.grey.shade100,
+                                                borderRadius:
+                                                    BorderRadius.circular(999),
+                                              ),
+                                              child: Text(
+                                                label,
+                                                style: TextStyle(
+                                                  fontSize: 12,
+                                                  color: Colors.grey.shade700,
+                                                ),
+                                              ),
+                                            ),
+                                          )
+                                          .toList(),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            _buildDetailSection(
+                              context: context,
+                              title: 'Job Description',
+                              icon: Icons.description_outlined,
+                              child: Text(
+                                job.description,
+                                style: Theme.of(context).textTheme.bodyLarge,
+                              ),
+                            ),
+                            if (job.benefits.isNotEmpty)
+                              _buildDetailSection(
+                                context: context,
+                                title: 'Benefits',
+                                icon: Icons.card_giftcard,
+                                child: _buildChipWrap(
+                                  job.benefits
+                                      .map(
+                                        (benefit) => Chip(label: Text(benefit)),
+                                      )
+                                      .toList(),
                                 ),
                               ),
-                            ],
-                            const SizedBox(height: 12),
-                            Wrap(
-                              spacing: 8,
-                              runSpacing: 8,
-                              children: [
-                                if (job.salaryRange != null)
-                                  Chip(
-                                    label: Text('Salary: ${job.salaryRange}'),
-                                  ),
-                                Chip(label: Text(crewLabel)),
-                              ],
-                            ),
-                            if (timelineLabels.isNotEmpty) ...[
-                              const SizedBox(height: 10),
-                              Wrap(
-                                spacing: 8,
-                                runSpacing: 8,
-                                children: timelineLabels
-                                    .map(
-                                      (label) => Container(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 10,
-                                          vertical: 6,
-                                        ),
-                                        decoration: BoxDecoration(
-                                          color: Colors.grey.shade100,
-                                          borderRadius: BorderRadius.circular(
-                                            999,
+                            if (job.faaCertificates.isNotEmpty)
+                              _buildDetailSection(
+                                context: context,
+                                title: 'Required FAA Certificates',
+                                icon: Icons.badge_outlined,
+                                child: _buildChipWrap(
+                                  job.faaCertificates
+                                      .map(
+                                        (cert) => Chip(
+                                          label: Text(
+                                            canonicalCertificateLabel(cert),
                                           ),
                                         ),
-                                        child: Text(
-                                          label,
-                                          style: TextStyle(
-                                            fontSize: 12,
-                                            color: Colors.grey.shade700,
+                                      )
+                                      .toList(),
+                                ),
+                              ),
+                            if (job.typeRatingsRequired.isNotEmpty)
+                              _buildDetailSection(
+                                context: context,
+                                title: 'Required Type Ratings',
+                                icon: Icons.confirmation_number_outlined,
+                                child: _buildChipWrap(
+                                  job.typeRatingsRequired
+                                      .map(
+                                        (rating) => Chip(label: Text(rating)),
+                                      )
+                                      .toList(),
+                                ),
+                              ),
+                            if (job.faaRules.isNotEmpty)
+                              _buildDetailSection(
+                                context: context,
+                                title: 'FAA Rules',
+                                icon: Icons.rule,
+                                child: _buildChipWrap(
+                                  job.faaRules
+                                      .map((rule) => Chip(label: Text(rule)))
+                                      .toList(),
+                                ),
+                              ),
+                            if (standardFlightHourEntries.isNotEmpty)
+                              _buildDetailSection(
+                                context: context,
+                                title: 'Flight Hours',
+                                icon: Icons.schedule_outlined,
+                                child: _buildChipWrap(
+                                  standardFlightHourEntries
+                                      .map(
+                                        (entry) => _buildRequirementChip(
+                                          label: _formatHoursRequirementLabel(
+                                            entry.key,
+                                            entry.value,
+                                            job.preferredFlightHours.contains(
+                                              entry.key,
+                                            ),
                                           ),
+                                          isPreferred: job.preferredFlightHours
+                                              .contains(entry.key),
                                         ),
-                                      ),
-                                    )
-                                    .toList(),
+                                      )
+                                      .toList(),
+                                ),
+                              ),
+                            if (instructorHourEntries.isNotEmpty)
+                              _buildDetailSection(
+                                context: context,
+                                title: 'Instructor Hours',
+                                icon: Icons.school_outlined,
+                                child: _buildChipWrap(
+                                  instructorHourEntries
+                                      .map(
+                                        (entry) => _buildRequirementChip(
+                                          label: _formatHoursRequirementLabel(
+                                            entry.key,
+                                            entry.value,
+                                            job.preferredInstructorHours
+                                                .contains(entry.key),
+                                          ),
+                                          isPreferred: job
+                                              .preferredInstructorHours
+                                              .contains(entry.key),
+                                        ),
+                                      )
+                                      .toList(),
+                                ),
+                              ),
+                            if (job.specialtyHoursByType.isNotEmpty)
+                              _buildDetailSection(
+                                context: context,
+                                title: 'Specialty Hours',
+                                icon: Icons.workspace_premium_outlined,
+                                child: _buildChipWrap(
+                                  job.specialtyHoursByType.entries
+                                      .map(
+                                        (entry) => _buildRequirementChip(
+                                          label: _formatHoursRequirementLabel(
+                                            entry.key,
+                                            entry.value,
+                                            job.preferredSpecialtyHours
+                                                .contains(entry.key),
+                                          ),
+                                          isPreferred: job
+                                              .preferredSpecialtyHours
+                                              .contains(entry.key),
+                                        ),
+                                      )
+                                      .toList(),
+                                ),
+                              ),
+                            if (job.aircraftFlown.isNotEmpty)
+                              _buildDetailSection(
+                                context: context,
+                                title: 'Required Aircraft Experience',
+                                icon: Icons.flight_outlined,
+                                child: _buildChipWrap(
+                                  job.aircraftFlown
+                                      .map(
+                                        (aircraft) =>
+                                            Chip(label: Text(aircraft)),
+                                      )
+                                      .toList(),
+                                ),
+                              ),
+                            if (profile != null) ...[
+                              const SizedBox(height: 24),
+                              const Divider(),
+                              const SizedBox(height: 16),
+                              _buildDetailSection(
+                                context: context,
+                                title: 'Your Match',
+                                icon: Icons.analytics_outlined,
+                                child: _buildComparisonView(context),
                               ),
                             ],
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      _buildDetailSection(
-                        context: context,
-                        title: 'Job Description',
-                        icon: Icons.description_outlined,
-                        child: Text(
-                          job.description,
-                          style: Theme.of(context).textTheme.bodyLarge,
-                        ),
-                      ),
-                      if (job.benefits.isNotEmpty)
-                        _buildDetailSection(
-                          context: context,
-                          title: 'Benefits',
-                          icon: Icons.card_giftcard,
-                          child: _buildChipWrap(
-                            job.benefits
-                                .map((benefit) => Chip(label: Text(benefit)))
-                                .toList(),
-                          ),
-                        ),
-                      if (job.faaCertificates.isNotEmpty)
-                        _buildDetailSection(
-                          context: context,
-                          title: 'Required FAA Certificates',
-                          icon: Icons.badge_outlined,
-                          child: _buildChipWrap(
-                            job.faaCertificates
-                                .map(
-                                  (cert) => Chip(
-                                    label: Text(
-                                      canonicalCertificateLabel(cert),
-                                    ),
-                                  ),
-                                )
-                                .toList(),
-                          ),
-                        ),
-                      if (job.typeRatingsRequired.isNotEmpty)
-                        _buildDetailSection(
-                          context: context,
-                          title: 'Required Type Ratings',
-                          icon: Icons.confirmation_number_outlined,
-                          child: _buildChipWrap(
-                            job.typeRatingsRequired
-                                .map((rating) => Chip(label: Text(rating)))
-                                .toList(),
-                          ),
-                        ),
-                      if (job.faaRules.isNotEmpty)
-                        _buildDetailSection(
-                          context: context,
-                          title: 'FAA Rules',
-                          icon: Icons.rule,
-                          child: _buildChipWrap(
-                            job.faaRules
-                                .map((rule) => Chip(label: Text(rule)))
-                                .toList(),
-                          ),
-                        ),
-                      if (standardFlightHourEntries.isNotEmpty)
-                        _buildDetailSection(
-                          context: context,
-                          title: 'Flight Hours',
-                          icon: Icons.schedule_outlined,
-                          child: _buildChipWrap(
-                            standardFlightHourEntries
-                                .map(
-                                  (entry) => _buildRequirementChip(
-                                    label: _formatHoursRequirementLabel(
-                                      entry.key,
-                                      entry.value,
-                                      job.preferredFlightHours.contains(
-                                        entry.key,
-                                      ),
-                                    ),
-                                    isPreferred: job.preferredFlightHours
-                                        .contains(entry.key),
-                                  ),
-                                )
-                                .toList(),
-                          ),
-                        ),
-                      if (instructorHourEntries.isNotEmpty)
-                        _buildDetailSection(
-                          context: context,
-                          title: 'Instructor Hours',
-                          icon: Icons.school_outlined,
-                          child: _buildChipWrap(
-                            instructorHourEntries
-                                .map(
-                                  (entry) => _buildRequirementChip(
-                                    label: _formatHoursRequirementLabel(
-                                      entry.key,
-                                      entry.value,
-                                      job.preferredInstructorHours.contains(
-                                        entry.key,
-                                      ),
-                                    ),
-                                    isPreferred: job.preferredInstructorHours
-                                        .contains(entry.key),
-                                  ),
-                                )
-                                .toList(),
-                          ),
-                        ),
-                      if (job.specialtyHoursByType.isNotEmpty)
-                        _buildDetailSection(
-                          context: context,
-                          title: 'Specialty Hours',
-                          icon: Icons.workspace_premium_outlined,
-                          child: _buildChipWrap(
-                            job.specialtyHoursByType.entries
-                                .map(
-                                  (entry) => _buildRequirementChip(
-                                    label: _formatHoursRequirementLabel(
-                                      entry.key,
-                                      entry.value,
-                                      job.preferredSpecialtyHours.contains(
-                                        entry.key,
-                                      ),
-                                    ),
-                                    isPreferred: job.preferredSpecialtyHours
-                                        .contains(entry.key),
-                                  ),
-                                )
-                                .toList(),
-                          ),
-                        ),
-                      if (job.aircraftFlown.isNotEmpty)
-                        _buildDetailSection(
-                          context: context,
-                          title: 'Required Aircraft Experience',
-                          icon: Icons.flight_outlined,
-                          child: _buildChipWrap(
-                            job.aircraftFlown
-                                .map((aircraft) => Chip(label: Text(aircraft)))
-                                .toList(),
-                          ),
-                        ),
-                      if (profile != null) ...[
-                        const SizedBox(height: 24),
-                        const Divider(),
-                        const SizedBox(height: 16),
-                        _buildDetailSection(
-                          context: context,
-                          title: 'Your Match',
-                          icon: Icons.analytics_outlined,
-                          child: _buildComparisonView(context),
-                        ),
-                      ],
                           ],
                         ),
                       ),
@@ -10665,7 +10850,9 @@ class JobDetailsPage extends StatelessWidget {
                 Container(
                   decoration: BoxDecoration(
                     color: Theme.of(context).scaffoldBackgroundColor,
-                    border: Border(top: BorderSide(color: Colors.grey.shade300)),
+                    border: Border(
+                      top: BorderSide(color: Colors.grey.shade300),
+                    ),
                   ),
                   child: SafeArea(
                     top: false,
@@ -10711,7 +10898,6 @@ class JobDetailsPage extends StatelessWidget {
       ),
     );
   }
-
 
   Widget _buildApplyButton(BuildContext context) {
     if (hasApplied) {
@@ -11279,13 +11465,6 @@ class PublicCompanyInfoPage extends StatelessWidget {
                                     'Headquarters: $headquartersLabel',
                                   ),
                                 ),
-                              Chip(
-                                avatar: const Icon(
-                                  Icons.work_outline,
-                                  size: 18,
-                                ),
-                                label: Text('Current opening: ${job.title}'),
-                              ),
                             ],
                           ),
                           if (websiteValue.isNotEmpty ||

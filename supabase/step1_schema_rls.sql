@@ -116,6 +116,8 @@ create table if not exists public.job_listings (
   salary_range text null,
   minimum_hours integer null,
   benefits text[] not null default '{}',
+  auto_reject_threshold integer not null default 0,
+  reapply_window_days integer not null default 30,
   deadline_date timestamptz null,
   status text not null default 'active' check (status in ('active', 'draft', 'archived', 'closed')),
   created_at timestamptz not null default now(),
@@ -134,14 +136,15 @@ create table if not exists public.saved_jobs (
   primary key (user_id, job_listing_id)
 );
 
--- Future-ready applications table.
+-- Job applications table - stores full Application model data as JSONB.
 create table if not exists public.job_applications (
-  id uuid primary key default gen_random_uuid(),
+  id text primary key,
   job_listing_id text not null references public.job_listings(id) on delete cascade,
   employer_id text not null references public.employer_profiles(id) on delete cascade,
   applicant_user_id uuid not null references auth.users(id) on delete cascade,
-  status text not null default 'submitted' check (status in ('submitted', 'viewed', 'shortlisted', 'rejected', 'withdrawn')),
-  note text not null default '',
+  status text not null default 'applied' check (status in ('applied', 'reviewed', 'rejected', 'interested')),
+  match_percentage integer not null default 0,
+  data jsonb not null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique (job_listing_id, applicant_user_id)

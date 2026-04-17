@@ -6,6 +6,8 @@ import '../models/job_listing_template.dart';
 import '../models/job_load_result.dart';
 import '../models/job_seeker_profile.dart';
 
+enum FeedbackSaveDestination { remote, local }
+
 abstract class AppRepository {
   Future<Set<String>> loadFavoriteIds();
   Future<void> saveFavoriteIds(Set<String> favoriteIds);
@@ -40,7 +42,7 @@ abstract class AppRepository {
   );
 
   // Application feedback methods
-  Future<void> saveFeedback(ApplicationFeedback feedback);
+  Future<FeedbackSaveDestination> saveFeedback(ApplicationFeedback feedback);
   Future<List<ApplicationFeedback>> getAllFeedback();
   Future<ApplicationFeedback?> getFeedbackForApplication(String applicationId);
 }
