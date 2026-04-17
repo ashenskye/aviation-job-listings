@@ -1005,10 +1005,11 @@ class _UsersDataTabState extends State<_UsersDataTab> {
       children: [
         LayoutBuilder(
           builder: (context, constraints) {
-            final isNarrow = constraints.maxWidth < 620;
+            final isNarrow = constraints.maxWidth < 700;
             final sortDropdown = DropdownButtonFormField<String>(
               value: selectedSort,
               isDense: true,
+              isExpanded: true,
               decoration: const InputDecoration(
                 labelText: 'Sort',
                 border: OutlineInputBorder(),
@@ -1021,10 +1022,28 @@ class _UsersDataTabState extends State<_UsersDataTab> {
                   .map(
                     (option) => DropdownMenuItem<String>(
                       value: option.$1,
-                      child: Text(option.$2),
+                      child: Text(
+                        option.$2,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
                   )
                   .toList(),
+              selectedItemBuilder: (context) {
+                return sortOptions
+                    .map(
+                      (option) => Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          option.$2,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    )
+                    .toList();
+              },
               onChanged: onSortChanged,
             );
 
@@ -1058,10 +1077,12 @@ class _UsersDataTabState extends State<_UsersDataTab> {
                   child: Text(
                     title,
                     style: Theme.of(context).textTheme.titleMedium,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
                 const SizedBox(width: 12),
-                SizedBox(width: 170, child: sortDropdown),
+                SizedBox(width: 190, child: sortDropdown),
               ],
             );
           },
