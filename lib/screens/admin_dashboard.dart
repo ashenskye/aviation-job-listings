@@ -1087,6 +1087,8 @@ class _UsersDataTabState extends State<_UsersDataTab> {
                 title: Text(
                   '${entry.key} (${entry.value.length})',
                   style: const TextStyle(fontWeight: FontWeight.w700),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
                 subtitle: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -1097,6 +1099,8 @@ class _UsersDataTabState extends State<_UsersDataTab> {
                         fontSize: 12,
                         color: Colors.blueGrey.shade700,
                       ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
                     const SizedBox(height: 2),
                     Text(
@@ -1105,6 +1109,8 @@ class _UsersDataTabState extends State<_UsersDataTab> {
                         fontSize: 11,
                         color: Colors.grey.shade600,
                       ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
                   ],
                 ),
@@ -1117,12 +1123,24 @@ class _UsersDataTabState extends State<_UsersDataTab> {
   }
 
   Widget _buildAdminJobListingTile(JobListing listing) {
+    final isVeryNarrow = MediaQuery.sizeOf(context).width < 430;
+    final subtitleSegments = <String>[listing.location, listing.type];
+    if (!listing.isActive && isVeryNarrow) {
+      subtitleSegments.add('Archived');
+    }
+
     return ListTile(
       contentPadding: EdgeInsets.zero,
+      minLeadingWidth: 30,
+      horizontalTitleGap: 8,
       leading: const Icon(Icons.work_outline),
-      title: Text(listing.title),
-      subtitle: Text('${listing.location} • ${listing.type}'),
-      trailing: !listing.isActive
+      title: Text(listing.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+      subtitle: Text(
+        subtitleSegments.join(' • '),
+        maxLines: isVeryNarrow ? 2 : 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+      trailing: !listing.isActive && !isVeryNarrow
           ? Chip(
               label: const Text('Archived'),
               backgroundColor: Colors.grey.shade200,
@@ -1132,6 +1150,7 @@ class _UsersDataTabState extends State<_UsersDataTab> {
   }
 
   Widget _buildAdminApplicationTile(Application application) {
+    final isVeryNarrow = MediaQuery.sizeOf(context).width < 430;
     final locationParts = [
       application.applicantCity.trim(),
       application.applicantStateOrProvince.trim(),
@@ -1140,18 +1159,32 @@ class _UsersDataTabState extends State<_UsersDataTab> {
     final subtitleParts = <String>[
       'Status: ${application.status}',
       if (locationParts.isNotEmpty) locationParts.join(', '),
+      if (isVeryNarrow)
+        application.isArchived
+            ? 'Archived'
+            : 'Match: ${application.matchPercentage}%',
     ];
 
     return ListTile(
       contentPadding: EdgeInsets.zero,
+      minLeadingWidth: 30,
+      horizontalTitleGap: 8,
       leading: const Icon(Icons.assignment_ind_outlined),
       title: Text(
         application.applicantEmail.trim().isNotEmpty
             ? application.applicantEmail
             : application.jobId,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
       ),
-      subtitle: Text(subtitleParts.join(' • ')),
-      trailing: application.isArchived
+      subtitle: Text(
+        subtitleParts.join(' • '),
+        maxLines: isVeryNarrow ? 2 : 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+      trailing: isVeryNarrow
+          ? null
+          : application.isArchived
           ? const Icon(Icons.archive, color: Colors.grey)
           : Text(
               '${application.matchPercentage}%',
