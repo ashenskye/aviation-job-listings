@@ -36,6 +36,8 @@ class JobListing {
   final String? employerId;
   final int autoRejectThreshold; // 0 = disabled; >0 = auto-reject below this %
   final int reapplyWindowDays; // days a seeker must wait before re-applying
+  final bool isActive; // false = archived by employer
+  final DateTime? archivedAt; // set when archived
 
   const JobListing({
     required this.id,
@@ -67,6 +69,8 @@ class JobListing {
     this.employerId,
     this.autoRejectThreshold = 0,
     this.reapplyWindowDays = 30,
+    this.isActive = true,
+    this.archivedAt,
   });
 
   factory JobListing.fromJson(Map<String, dynamic> json) {
@@ -187,6 +191,10 @@ class JobListing {
           (json['autoRejectThreshold'] as num?)?.toInt() ?? 0,
       reapplyWindowDays:
           (json['reapplyWindowDays'] as num?)?.toInt() ?? 30,
+      isActive: (json['isActive'] as bool?) ?? true,
+      archivedAt: json['archivedAt'] != null
+          ? DateTime.tryParse(json['archivedAt'].toString())
+          : null,
     );
   }
 
@@ -220,6 +228,8 @@ class JobListing {
     'employerId': employerId,
     'autoRejectThreshold': autoRejectThreshold,
     'reapplyWindowDays': reapplyWindowDays,
+    'isActive': isActive,
+    'archivedAt': archivedAt?.toIso8601String(),
   };
 
   Map<String, int> get flightHoursByType {
@@ -248,4 +258,100 @@ class JobListing {
         if (_instructorHourKeys.contains(item)) item: 0,
     };
   }
+
+  bool get isExpired =>
+      deadlineDate != null && deadlineDate!.isBefore(DateTime.now());
+
+  /// True if the job should appear in public listings.
+  bool get shouldShow => isActive && !isExpired;
+
+  /// Days remaining until the deadline (negative if already passed).
+  int? get daysUntilDeadline {
+    if (deadlineDate == null) return null;
+    return deadlineDate!.difference(DateTime.now()).inDays;
+  }
+
+  JobListing copyWith({
+    String? id,
+    String? title,
+    String? company,
+    String? location,
+    String? type,
+    String? crewRole,
+    Object? crewPosition = _sentinel,
+    List<String>? faaRules,
+    String? description,
+    List<String>? faaCertificates,
+    List<String>? typeRatingsRequired,
+    List<String>? flightExperience,
+    Map<String, int>? flightHours,
+    List<String>? preferredFlightHours,
+    Map<String, int>? instructorHours,
+    List<String>? preferredInstructorHours,
+    List<String>? specialtyExperience,
+    Map<String, int>? specialtyHours,
+    List<String>? preferredSpecialtyHours,
+    List<String>? aircraftFlown,
+    Object? salaryRange = _sentinel,
+    Object? minimumHours = _sentinel,
+    List<String>? benefits,
+    Object? deadlineDate = _sentinel,
+    Object? createdAt = _sentinel,
+    Object? updatedAt = _sentinel,
+    Object? employerId = _sentinel,
+    int? autoRejectThreshold,
+    int? reapplyWindowDays,
+    bool? isActive,
+    Object? archivedAt = _sentinel,
+  }) {
+    return JobListing(
+      id: id ?? this.id,
+      title: title ?? this.title,
+      company: company ?? this.company,
+      location: location ?? this.location,
+      type: type ?? this.type,
+      crewRole: crewRole ?? this.crewRole,
+      crewPosition: crewPosition == _sentinel
+          ? this.crewPosition
+          : crewPosition as String?,
+      faaRules: faaRules ?? this.faaRules,
+      description: description ?? this.description,
+      faaCertificates: faaCertificates ?? this.faaCertificates,
+      typeRatingsRequired: typeRatingsRequired ?? this.typeRatingsRequired,
+      flightExperience: flightExperience ?? this.flightExperience,
+      flightHours: flightHours ?? this.flightHours,
+      preferredFlightHours: preferredFlightHours ?? this.preferredFlightHours,
+      instructorHours: instructorHours ?? this.instructorHours,
+      preferredInstructorHours:
+          preferredInstructorHours ?? this.preferredInstructorHours,
+      specialtyExperience: specialtyExperience ?? this.specialtyExperience,
+      specialtyHours: specialtyHours ?? this.specialtyHours,
+      preferredSpecialtyHours:
+          preferredSpecialtyHours ?? this.preferredSpecialtyHours,
+      aircraftFlown: aircraftFlown ?? this.aircraftFlown,
+      salaryRange:
+          salaryRange == _sentinel ? this.salaryRange : salaryRange as String?,
+      minimumHours:
+          minimumHours == _sentinel ? this.minimumHours : minimumHours as int?,
+      benefits: benefits ?? this.benefits,
+      deadlineDate: deadlineDate == _sentinel
+          ? this.deadlineDate
+          : deadlineDate as DateTime?,
+      createdAt:
+          createdAt == _sentinel ? this.createdAt : createdAt as DateTime?,
+      updatedAt:
+          updatedAt == _sentinel ? this.updatedAt : updatedAt as DateTime?,
+      employerId:
+          employerId == _sentinel ? this.employerId : employerId as String?,
+      autoRejectThreshold: autoRejectThreshold ?? this.autoRejectThreshold,
+      reapplyWindowDays: reapplyWindowDays ?? this.reapplyWindowDays,
+      isActive: isActive ?? this.isActive,
+      archivedAt:
+          archivedAt == _sentinel ? this.archivedAt : archivedAt as DateTime?,
+    );
+  }
 }
+
+// Private sentinel object used by JobListing.copyWith to distinguish
+// "not provided" from explicit null for nullable fields.
+const Object _sentinel = Object();

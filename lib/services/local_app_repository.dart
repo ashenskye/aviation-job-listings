@@ -267,6 +267,75 @@ class LocalAppRepository implements AppRepository {
   }
 
   @override
+  Future<void> updateApplicationArchived(
+    String applicationId,
+    bool isArchived,
+  ) async {
+    final prefs = await SharedPreferences.getInstance();
+    final stored = prefs.getString(_applicationsKey);
+    List<Map<String, dynamic>> applications;
+
+    if (stored == null) {
+      applications = [];
+    } else {
+      try {
+        final decoded = jsonDecode(stored) as List<dynamic>;
+        applications = decoded
+            .map((e) => Map<String, dynamic>.from(e as Map))
+            .toList();
+      } catch (_) {
+        applications = [];
+      }
+    }
+
+    final index = applications.indexWhere((e) => e['id'] == applicationId);
+    if (index < 0) {
+      return;
+    }
+
+    final current = Application.fromJson(applications[index]);
+    applications[index] = current
+        .copyWith(isArchived: isArchived, updatedAt: DateTime.now())
+        .toJson();
+
+    await prefs.setString(_applicationsKey, jsonEncode(applications));
+  }
+
+  @override
+  Future<void> deleteApplication(String applicationId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final stored = prefs.getString(_applicationsKey);
+    if (stored == null) return;
+
+    try {
+      final decoded = jsonDecode(stored) as List<dynamic>;
+      final applications = decoded
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .where((e) => e['id'] != applicationId)
+          .toList();
+      await prefs.setString(_applicationsKey, jsonEncode(applications));
+    } catch (_) {}
+  }
+
+  @override
+  Future<void> deleteApplications(List<String> applicationIds) async {
+    if (applicationIds.isEmpty) return;
+    final prefs = await SharedPreferences.getInstance();
+    final stored = prefs.getString(_applicationsKey);
+    if (stored == null) return;
+
+    try {
+      final idSet = applicationIds.toSet();
+      final decoded = jsonDecode(stored) as List<dynamic>;
+      final applications = decoded
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .where((e) => !idSet.contains(e['id']))
+          .toList();
+      await prefs.setString(_applicationsKey, jsonEncode(applications));
+    } catch (_) {}
+  }
+
+  @override
   Future<bool> hasApplied(String seekerId, String jobId) async {
     final apps = await getApplicationsBySeeker(seekerId);
     return apps.any((app) => app.jobId == jobId);

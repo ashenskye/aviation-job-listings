@@ -22,6 +22,7 @@ class Application {
   final String coverLetter;
   final DateTime appliedAt;
   final DateTime updatedAt;
+  final bool isArchived;
 
   static const String statusApplied = 'applied';
   static const String statusReviewed = 'reviewed';
@@ -52,6 +53,7 @@ class Application {
     required this.coverLetter,
     required this.appliedAt,
     required this.updatedAt,
+    this.isArchived = false,
   }) : applicantName = applicantName ?? '',
        applicantEmail = applicantEmail ?? '',
        applicantPhone = applicantPhone ?? '',
@@ -187,6 +189,10 @@ class Application {
           : json['updatedAt'] != null
           ? DateTime.tryParse(json['updatedAt'].toString()) ?? DateTime.now()
           : DateTime.now(),
+      isArchived:
+          (json['is_archived'] as bool?) ??
+          (json['isArchived'] as bool?) ??
+          false,
     );
   }
 
@@ -214,6 +220,7 @@ class Application {
     'cover_letter': coverLetter,
     'applied_at': appliedAt.toIso8601String(),
     'updated_at': updatedAt.toIso8601String(),
+    'is_archived': isArchived,
   };
 
   Application copyWith({
@@ -233,6 +240,7 @@ class Application {
     List<String>? applicantFlightHoursTypes,
     List<String>? applicantSpecialtyFlightHours,
     Map<String, int>? applicantSpecialtyFlightHoursMap,
+    bool? isArchived,
   }) {
     return Application(
       id: id,
@@ -266,6 +274,7 @@ class Application {
       coverLetter: coverLetter,
       appliedAt: appliedAt,
       updatedAt: updatedAt ?? this.updatedAt,
+      isArchived: isArchived ?? this.isArchived,
     );
   }
 }

@@ -423,6 +423,51 @@ class SupabaseAppRepository implements AppRepository {
   }
 
   @override
+  Future<void> updateApplicationArchived(
+    String applicationId,
+    bool isArchived,
+  ) async {
+    await localFallback.updateApplicationArchived(applicationId, isArchived);
+  }
+
+  @override
+  Future<void> deleteApplication(String applicationId) async {
+    final userId = _currentUserId;
+    if (!SupabaseBootstrap.isConfigured || userId == null) {
+      await localFallback.deleteApplication(applicationId);
+      return;
+    }
+
+    try {
+      await _client
+          .from('job_applications')
+          .delete()
+          .eq('id', applicationId);
+    } catch (_) {
+      await localFallback.deleteApplication(applicationId);
+    }
+  }
+
+  @override
+  Future<void> deleteApplications(List<String> applicationIds) async {
+    if (applicationIds.isEmpty) return;
+    final userId = _currentUserId;
+    if (!SupabaseBootstrap.isConfigured || userId == null) {
+      await localFallback.deleteApplications(applicationIds);
+      return;
+    }
+
+    try {
+      await _client
+          .from('job_applications')
+          .delete()
+          .inFilter('id', applicationIds);
+    } catch (_) {
+      await localFallback.deleteApplications(applicationIds);
+    }
+  }
+
+  @override
   Future<bool> hasApplied(String seekerId, String jobId) async {
     final userId = _currentUserId;
     if (!SupabaseBootstrap.isConfigured || userId == null) {

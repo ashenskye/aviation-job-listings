@@ -35,6 +35,9 @@ abstract class AppRepository {
   Future<List<Application>> getApplicationsBySeeker(String seekerId);
   Future<List<Application>> loadApplicationsForEmployer(String employerId);
   Future<void> updateApplicationStatus(String applicationId, String status);
+  Future<void> updateApplicationArchived(String applicationId, bool isArchived);
+  Future<void> deleteApplication(String applicationId);
+  Future<void> deleteApplications(List<String> applicationIds);
   Future<bool> hasApplied(String seekerId, String jobId);
   Future<Application?> getLatestApplicationForJob(
     String seekerId,
