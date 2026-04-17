@@ -427,7 +427,37 @@ class SupabaseAppRepository implements AppRepository {
     String applicationId,
     bool isArchived,
   ) async {
-    await localFallback.updateApplicationArchived(applicationId, isArchived);
+    final userId = _currentUserId;
+    if (!SupabaseBootstrap.isConfigured || userId == null) {
+      await localFallback.updateApplicationArchived(applicationId, isArchived);
+      return;
+    }
+
+    try {
+      final existingRow = await _client
+          .from('job_applications')
+          .select()
+          .eq('id', applicationId)
+          .maybeSingle();
+
+      if (existingRow == null) {
+        throw StateError('Application not found: $applicationId');
+      }
+
+      final updatedAt = DateTime.now().toIso8601String();
+      final existingData = Map<String, dynamic>.from(
+        (existingRow['data'] as Map?) ?? const {},
+      );
+      existingData['is_archived'] = isArchived;
+      existingData['updated_at'] = updatedAt;
+
+      await _client
+          .from('job_applications')
+          .update({'data': existingData, 'updated_at': updatedAt})
+          .eq('id', applicationId);
+    } catch (_) {
+      await localFallback.updateApplicationArchived(applicationId, isArchived);
+    }
   }
 
   @override

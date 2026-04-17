@@ -8280,6 +8280,7 @@ class _MyHomePageState extends State<MyHomePage> {
           ),
         );
 
+        // Match tiers: perfect=90%+, good=70-89%, stretch=<70%
         final groupPerfect = groupApps.where((a) => a.isPerfectMatch).length;
         final groupGood = groupApps.where((a) => a.isGoodMatch).length;
         final groupStretch = groupApps.where((a) => a.isStretchMatch).length;
