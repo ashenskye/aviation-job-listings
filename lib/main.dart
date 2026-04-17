@@ -65,18 +65,56 @@ ProfileType _profileTypeFromMetadata(Object? value) {
   return ProfileType.jobSeeker;
 }
 
+ProfileType _profileTypeFromAdminInterfaceView(AdminInterfaceView value) {
+  switch (value) {
+    case AdminInterfaceView.employer:
+      return ProfileType.employer;
+    case AdminInterfaceView.jobSeeker:
+    case AdminInterfaceView.admin:
+      return ProfileType.jobSeeker;
+  }
+}
+
 bool _isAdminUser(User user) {
-  return user.userMetadata?['role'] == 'admin';
+  final userRole = user.userMetadata?['role']?.toString().trim();
+  final appRole = user.appMetadata['role']?.toString().trim();
+  return userRole == 'admin' || appRole == 'admin';
+}
+
+String _resolvedAccountRole(User user) {
+  final userRole = user.userMetadata?['role']?.toString().trim();
+  if (userRole != null && userRole.isNotEmpty) {
+    return userRole;
+  }
+
+  final appRole = user.appMetadata['role']?.toString().trim();
+  if (appRole != null && appRole.isNotEmpty) {
+    return appRole;
+  }
+
+  final profileType = user.userMetadata?['profile_type']?.toString().trim();
+  if (profileType != null && profileType.isNotEmpty) {
+    return profileType;
+  }
+
+  return 'job_seeker';
 }
 
 AdminRepository _buildAdminRepository(SupabaseClient client, String userId) {
   return SupabaseAdminRepository(client, userId);
 }
 
-class _AuthGate extends StatelessWidget {
+class _AuthGate extends StatefulWidget {
   const _AuthGate({required this.repository});
 
   final AppRepository repository;
+
+  @override
+  State<_AuthGate> createState() => _AuthGateState();
+}
+
+class _AuthGateState extends State<_AuthGate> {
+  AdminInterfaceView _adminInterfaceView = AdminInterfaceView.admin;
 
   @override
   Widget build(BuildContext context) {
@@ -86,15 +124,41 @@ class _AuthGate extends StatelessWidget {
         final session = snapshot.data?.session;
         if (session != null) {
           final user = session.user;
+          final accountRoleLabel = _resolvedAccountRole(user);
           if (_isAdminUser(user)) {
             final adminRepo = _buildAdminRepository(
               Supabase.instance.client,
               user.id,
             );
-            return AdminDashboard(
-              adminRepository: adminRepo,
-              appRepository: repository,
-              adminEmail: user.email ?? user.id,
+            if (_adminInterfaceView == AdminInterfaceView.admin) {
+              return AdminDashboard(
+                adminRepository: adminRepo,
+                appRepository: widget.repository,
+                adminEmail: user.email ?? user.id,
+                adminRoleLabel: accountRoleLabel,
+                currentView: _adminInterfaceView,
+                onSwitchView: (view) {
+                  setState(() {
+                    _adminInterfaceView = view;
+                  });
+                },
+              );
+            }
+
+            return MyHomePage(
+              title: 'Aviation Job Listings',
+              repository: widget.repository,
+              initialProfileType: _profileTypeFromAdminInterfaceView(
+                _adminInterfaceView,
+              ),
+              accountRoleLabel: accountRoleLabel,
+              showAdminInterfaceOption: true,
+              currentAdminInterfaceView: _adminInterfaceView,
+              onAdminInterfaceSelected: (view) {
+                setState(() {
+                  _adminInterfaceView = view;
+                });
+              },
             );
           }
           final initialType = _profileTypeFromMetadata(
@@ -102,8 +166,9 @@ class _AuthGate extends StatelessWidget {
           );
           return MyHomePage(
             title: 'Aviation Job Listings',
-            repository: repository,
+            repository: widget.repository,
             initialProfileType: initialType,
+            accountRoleLabel: accountRoleLabel,
           );
         }
         return const SignInScreen();
@@ -118,11 +183,19 @@ class MyHomePage extends StatefulWidget {
     required this.title,
     required this.repository,
     this.initialProfileType,
+    this.accountRoleLabel,
+    this.showAdminInterfaceOption = false,
+    this.currentAdminInterfaceView,
+    this.onAdminInterfaceSelected,
   });
 
   final String title;
   final AppRepository repository;
   final ProfileType? initialProfileType;
+  final String? accountRoleLabel;
+  final bool showAdminInterfaceOption;
+  final AdminInterfaceView? currentAdminInterfaceView;
+  final ValueChanged<AdminInterfaceView>? onAdminInterfaceSelected;
 
   @override
   State<MyHomePage> createState() => _MyHomePageState();
@@ -4868,9 +4941,9 @@ class _MyHomePageState extends State<MyHomePage> {
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not update applicant: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Could not update applicant: $e')));
     }
   }
 
@@ -4906,9 +4979,9 @@ class _MyHomePageState extends State<MyHomePage> {
         _employerApplications.removeWhere((app) => app.id == application.id);
         _selectedApplicationIds.remove(application.id);
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Application deleted.')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Application deleted.')));
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -4959,9 +5032,7 @@ class _MyHomePageState extends State<MyHomePage> {
       });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(
-            'Deleted $count application${count == 1 ? '' : 's'}.',
-          ),
+          content: Text('Deleted $count application${count == 1 ? '' : 's'}.'),
         ),
       );
     } catch (e) {
@@ -5464,10 +5535,7 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Future<void> _archiveJob(JobListing job) async {
-    final updated = job.copyWith(
-      isActive: false,
-      archivedAt: DateTime.now(),
-    );
+    final updated = job.copyWith(isActive: false, archivedAt: DateTime.now());
     try {
       await _appRepository.updateJob(updated);
       if (!mounted) return;
@@ -5476,14 +5544,14 @@ class _MyHomePageState extends State<MyHomePage> {
             .map((j) => j.id == updated.id ? updated : j)
             .toList();
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Archived "${job.title}".')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Archived "${job.title}".')));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not archive job: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Could not archive job: $e')));
     }
   }
 
@@ -5517,18 +5585,19 @@ class _MyHomePageState extends State<MyHomePage> {
             .map((j) => j.id == updated.id ? updated : j)
             .toList();
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Reopened "${job.title}".')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Reopened "${job.title}".')));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not reopen job: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Could not reopen job: $e')));
     }
   }
 
   Future<void> _editJob(JobListing job) async {
+    final titleController = TextEditingController(text: job.title);
     final locationController = TextEditingController(text: job.location);
     String? selectedEmploymentType = _availableJobTypes.contains(job.type)
         ? job.type
@@ -7352,28 +7421,31 @@ class _MyHomePageState extends State<MyHomePage> {
                                                             statusLabel;
                                                             if (!job.isActive) {
                                                               statusIcon = '📦';
-                                                              statusColor = Colors
-                                                                  .grey
-                                                                  .shade200;
+                                                              statusColor =
+                                                                  Colors
+                                                                      .grey
+                                                                      .shade200;
                                                               statusLabel =
                                                                   'Archived';
                                                             } else if (job
                                                                 .isExpired) {
                                                               statusIcon = '⏳';
-                                                              statusColor = Colors
-                                                                  .orange
-                                                                  .shade100;
+                                                              statusColor =
+                                                                  Colors
+                                                                      .orange
+                                                                      .shade100;
                                                               statusLabel =
                                                                   'Expired';
                                                             } else {
                                                               statusIcon = '✅';
-                                                              statusColor = Colors
-                                                                  .green
-                                                                  .shade100;
-                                                              final days =
-                                                                  job.daysUntilDeadline;
-                                                              statusLabel = days !=
-                                                                      null
+                                                              statusColor =
+                                                                  Colors
+                                                                      .green
+                                                                      .shade100;
+                                                              final days = job
+                                                                  .daysUntilDeadline;
+                                                              statusLabel =
+                                                                  days != null
                                                                   ? 'Active · $days day${days == 1 ? '' : 's'} left'
                                                                   : 'Active';
                                                             }
@@ -7675,14 +7747,11 @@ class _MyHomePageState extends State<MyHomePage> {
                                             ),
                                           if (_profileType ==
                                               ProfileType.employer) ...[
-                                            if (!job.isActive ||
-                                                job.isExpired)
+                                            if (!job.isActive || job.isExpired)
                                               OutlinedButton.icon(
                                                 onPressed: () =>
                                                     _reopenJob(job),
-                                                icon: const Icon(
-                                                  Icons.refresh,
-                                                ),
+                                                icon: const Icon(Icons.refresh),
                                                 label: const Text('Reopen'),
                                               ),
                                             if (job.isActive)
@@ -7952,16 +8021,15 @@ class _MyHomePageState extends State<MyHomePage> {
     final archiveFiltered = switch (_selectedArchiveFilter) {
       'active' => allApplications.where((app) => !app.isArchived).toList(),
       'archived' => allApplications.where((app) => app.isArchived).toList(),
-      'rejected' => allApplications
-          .where((app) => app.status == Application.statusRejected)
-          .toList(),
+      'rejected' =>
+        allApplications
+            .where((app) => app.status == Application.statusRejected)
+            .toList(),
       _ => allApplications,
     };
 
     final countsByStatus = {
-      'applied': archiveFiltered
-          .where((app) => app.status == 'applied')
-          .length,
+      'applied': archiveFiltered.where((app) => app.status == 'applied').length,
       'reviewed': archiveFiltered
           .where((app) => app.status == 'reviewed')
           .length,
@@ -7984,9 +8052,7 @@ class _MyHomePageState extends State<MyHomePage> {
     final statusFiltered = _selectedEmployerApplicationFilter == 'all'
         ? archiveFiltered
         : archiveFiltered
-              .where(
-                (app) => app.status == _selectedEmployerApplicationFilter,
-              )
+              .where((app) => app.status == _selectedEmployerApplicationFilter)
               .toList();
 
     // Apply match % filter
@@ -8013,8 +8079,9 @@ class _MyHomePageState extends State<MyHomePage> {
             'rejected' => 3,
             _ => 4,
           };
-          final statusCompare =
-              statusRank(a.status).compareTo(statusRank(b.status));
+          final statusCompare = statusRank(
+            a.status,
+          ).compareTo(statusRank(b.status));
           if (statusCompare != 0) return statusCompare;
           return b.appliedAt.compareTo(a.appliedAt);
         }
@@ -8205,9 +8272,7 @@ class _MyHomePageState extends State<MyHomePage> {
                         ? Icons.check_box
                         : Icons.check_box_outline_blank,
                   ),
-                  label: Text(
-                    _bulkSelectMode ? 'Cancel Select' : 'Select',
-                  ),
+                  label: Text(_bulkSelectMode ? 'Cancel Select' : 'Select'),
                 ),
                 if (_bulkSelectMode) ...[
                   const SizedBox(width: 4),
@@ -10888,26 +10953,56 @@ class _MyHomePageState extends State<MyHomePage> {
           backgroundColor: Theme.of(context).colorScheme.inversePrimary,
           title: Text(widget.title),
           actions: [
-            PopupMenuButton<ProfileType>(
+            PopupMenuButton<String>(
               icon: const Icon(Icons.person),
               onSelected: (value) {
+                if (value == 'admin' &&
+                    widget.showAdminInterfaceOption &&
+                    widget.onAdminInterfaceSelected != null) {
+                  widget.onAdminInterfaceSelected!(AdminInterfaceView.admin);
+                  return;
+                }
+
+                final selectedProfileType = value == 'employer'
+                    ? ProfileType.employer
+                    : ProfileType.jobSeeker;
+
+                if (widget.showAdminInterfaceOption &&
+                    widget.onAdminInterfaceSelected != null) {
+                  widget.onAdminInterfaceSelected!(
+                    selectedProfileType == ProfileType.employer
+                        ? AdminInterfaceView.employer
+                        : AdminInterfaceView.jobSeeker,
+                  );
+                }
+
                 setState(() {
-                  _profileType = value;
+                  _profileType = selectedProfileType;
                   _query = '';
                   _page = 1;
                 });
               },
               itemBuilder: (context) => [
                 const PopupMenuItem(
-                  value: ProfileType.jobSeeker,
+                  value: 'job_seeker',
                   child: Text('Job Seeker'),
                 ),
-                const PopupMenuItem(
-                  value: ProfileType.employer,
-                  child: Text('Employer'),
-                ),
+                const PopupMenuItem(value: 'employer', child: Text('Employer')),
+                if (widget.showAdminInterfaceOption)
+                  const PopupMenuItem(value: 'admin', child: Text('Admin')),
               ],
             ),
+            if (kDebugMode &&
+                widget.accountRoleLabel != null &&
+                widget.accountRoleLabel!.trim().isNotEmpty)
+              Container(
+                margin: const EdgeInsets.only(right: 8),
+                alignment: Alignment.center,
+                child: Chip(
+                  visualDensity: VisualDensity.compact,
+                  label: Text('acct: ${widget.accountRoleLabel}'),
+                ),
+              ),
             if (_profileType == ProfileType.jobSeeker)
               Container(
                 margin: const EdgeInsets.only(right: 16),

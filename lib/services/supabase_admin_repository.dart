@@ -5,7 +5,7 @@ import '../models/application.dart';
 import '../models/employer_profile.dart';
 import '../models/job_listing.dart';
 import '../models/job_seeker_profile.dart';
-import 'admin_repository.dart';
+import '../repositories/admin_repository.dart';
 
 class SupabaseAdminRepository implements AdminRepository {
   const SupabaseAdminRepository(this._client, this._adminUserId);
@@ -35,10 +35,7 @@ class SupabaseAdminRepository implements AdminRepository {
     String? actionType,
     String? resourceType,
   }) async {
-    var query = _client
-        .from('admin_action_logs')
-        .select()
-        .order('timestamp', ascending: false);
+    var query = _client.from('admin_action_logs').select();
 
     if (startDate != null) {
       query = query.gte('timestamp', startDate.toIso8601String());
@@ -53,7 +50,7 @@ class SupabaseAdminRepository implements AdminRepository {
       query = query.eq('resource_type', resourceType);
     }
 
-    final rows = await query;
+    final rows = await query.order('timestamp', ascending: false);
     return rows
         .map((r) => AdminActionLog.fromJson(Map<String, dynamic>.from(r)))
         .toList();
@@ -71,7 +68,7 @@ class SupabaseAdminRepository implements AdminRepository {
     if (row == null) {
       return null;
     }
-    return JobSeekerProfile.fromJson(Map<String, dynamic>.from(row));
+    return JobSeekerProfile.fromJson(_fromJobSeekerRow(row));
   }
 
   @override
@@ -84,7 +81,7 @@ class SupabaseAdminRepository implements AdminRepository {
     if (row == null) {
       return null;
     }
-    return EmployerProfile.fromJson(Map<String, dynamic>.from(row));
+    return EmployerProfile.fromJson(_fromEmployerRow(row));
   }
 
   @override
@@ -93,9 +90,9 @@ class SupabaseAdminRepository implements AdminRepository {
         .from('job_applications')
         .select()
         .eq('job_listing_id', jobId)
-        .order('applied_at', ascending: false);
+        .order('updated_at', ascending: false);
     return rows
-        .map((r) => Application.fromJson(Map<String, dynamic>.from(r)))
+        .map((r) => _fromApplicationRow(Map<String, dynamic>.from(r)))
         .toList();
   }
 
@@ -105,9 +102,7 @@ class SupabaseAdminRepository implements AdminRepository {
         .from('job_listings')
         .select()
         .order('created_at', ascending: false);
-    return rows
-        .map((r) => JobListing.fromJson(Map<String, dynamic>.from(r)))
-        .toList();
+    return rows.map((r) => JobListing.fromJson(_fromJobListingRow(r))).toList();
   }
 
   @override
@@ -115,9 +110,9 @@ class SupabaseAdminRepository implements AdminRepository {
     final rows = await _client
         .from('job_applications')
         .select()
-        .order('applied_at', ascending: false);
+        .order('updated_at', ascending: false);
     return rows
-        .map((r) => Application.fromJson(Map<String, dynamic>.from(r)))
+        .map((r) => _fromApplicationRow(Map<String, dynamic>.from(r)))
         .toList();
   }
 
@@ -135,10 +130,7 @@ class SupabaseAdminRepository implements AdminRepository {
         .eq('id', jobId)
         .maybeSingle();
 
-    await _client
-        .from('job_listings')
-        .update(updated.toJson())
-        .eq('id', jobId);
+    await _client.from('job_listings').update(updated.toJson()).eq('id', jobId);
 
     await logAdminAction(
       AdminActionLog(
@@ -344,4 +336,131 @@ class SupabaseAdminRepository implements AdminRepository {
     return rows.length;
   }
 
+  Application _fromApplicationRow(Map<String, dynamic> row) {
+    final data = Map<String, dynamic>.from((row['data'] as Map?) ?? const {});
+    data['id'] = row['id'] ?? data['id'];
+    data['job_listing_id'] = row['job_listing_id'] ?? data['job_listing_id'];
+    data['employer_id'] = row['employer_id'] ?? data['employer_id'];
+    data['status'] = row['status'] ?? data['status'];
+    data['matchPercentage'] =
+        row['match_percentage'] ?? data['matchPercentage'];
+    data['updated_at'] = row['updated_at'] ?? data['updated_at'];
+    data['applied_at'] = row['created_at'] ?? data['applied_at'];
+    return Application.fromJson(data);
+  }
+
+  Map<String, dynamic> _fromJobListingRow(Map<String, dynamic> row) {
+    return {
+      'id': row['id'],
+      'employerId': row['employer_id'],
+      'title': row['title'],
+      'company': row['company'],
+      'location': row['location'],
+      'type': row['employment_type'],
+      'crewRole': row['crew_role'],
+      'crewPosition': row['crew_position'],
+      'faaRules': List<String>.from((row['faa_rules'] as List?) ?? const []),
+      'description': row['description'],
+      'faaCertificates': List<String>.from(
+        (row['faa_certificates'] as List?) ?? const [],
+      ),
+      'typeRatingsRequired': List<String>.from(
+        (row['type_ratings_required'] as List?) ?? const [],
+      ),
+      'flightExperience': List<String>.from(
+        (row['flight_experience'] as List?) ?? const [],
+      ),
+      'flightHours': Map<String, dynamic>.from(
+        (row['flight_hours'] as Map?) ?? const {},
+      ),
+      'preferredFlightHours': List<String>.from(
+        (row['preferred_flight_hours'] as List?) ?? const [],
+      ),
+      'instructorHours': Map<String, dynamic>.from(
+        (row['instructor_hours'] as Map?) ?? const {},
+      ),
+      'preferredInstructorHours': List<String>.from(
+        (row['preferred_instructor_hours'] as List?) ?? const [],
+      ),
+      'specialtyExperience': List<String>.from(
+        (row['specialty_experience'] as List?) ?? const [],
+      ),
+      'specialtyHours': Map<String, dynamic>.from(
+        (row['specialty_hours'] as Map?) ?? const {},
+      ),
+      'preferredSpecialtyHours': List<String>.from(
+        (row['preferred_specialty_hours'] as List?) ?? const [],
+      ),
+      'aircraftFlown': List<String>.from(
+        (row['aircraft_flown'] as List?) ?? const [],
+      ),
+      'salaryRange': row['salary_range'],
+      'minimumHours': row['minimum_hours'],
+      'benefits': List<String>.from((row['benefits'] as List?) ?? const []),
+      'deadlineDate': row['deadline_date'],
+      'createdAt': row['created_at'],
+      'updatedAt': row['updated_at'],
+      'autoRejectThreshold':
+          (row['auto_reject_threshold'] as num?)?.toInt() ?? 0,
+      'reapplyWindowDays': (row['reapply_window_days'] as num?)?.toInt() ?? 30,
+      'isActive': row['status'] == 'active',
+      'archivedAt': row['status'] == 'archived' ? row['updated_at'] : null,
+    };
+  }
+
+  Map<String, dynamic> _fromJobSeekerRow(Map<String, dynamic> row) {
+    return {
+      'fullName': row['full_name'],
+      'email': row['email'],
+      'phone': row['phone'],
+      'city': row['city'],
+      'stateOrProvince': row['state_or_province'],
+      'country': row['country'],
+      'faaCertificates': List<String>.from(
+        (row['faa_certificates'] as List?) ?? const [],
+      ),
+      'typeRatings': List<String>.from(
+        (row['type_ratings'] as List?) ?? const [],
+      ),
+      'flightHours': Map<String, dynamic>.from(
+        (row['flight_hours'] as Map?) ?? const {},
+      ),
+      'flightHoursTypes': List<String>.from(
+        (row['flight_hours_types'] as List?) ?? const [],
+      ),
+      'specialtyFlightHours': List<String>.from(
+        (row['specialty_flight_hours'] as List?) ?? const [],
+      ),
+      'specialtyFlightHoursMap': Map<String, dynamic>.from(
+        (row['specialty_flight_hours_map'] as Map?) ?? const {},
+      ),
+      'aircraftFlown': List<String>.from(
+        (row['aircraft_flown'] as List?) ?? const [],
+      ),
+      'totalFlightHours': row['total_flight_hours'] ?? 0,
+    };
+  }
+
+  Map<String, dynamic> _fromEmployerRow(Map<String, dynamic> row) {
+    return {
+      'id': row['id'],
+      'companyName': row['company_name'],
+      'headquartersAddressLine1': row['headquarters_address_line1'],
+      'headquartersAddressLine2': row['headquarters_address_line2'],
+      'headquartersCity': row['headquarters_city'],
+      'headquartersState': row['headquarters_state'],
+      'headquartersPostalCode': row['headquarters_postal_code'],
+      'headquartersCountry': row['headquarters_country'],
+      'companyBannerUrl': row['company_banner_url'],
+      'companyLogoUrl': row['company_logo_url'],
+      'website': row['website'],
+      'contactName': row['contact_name'],
+      'contactEmail': row['contact_email'],
+      'contactPhone': row['contact_phone'],
+      'companyDescription': row['company_description'],
+      'companyBenefits': List<String>.from(
+        (row['company_benefits'] as List?) ?? const [],
+      ),
+    };
+  }
 }

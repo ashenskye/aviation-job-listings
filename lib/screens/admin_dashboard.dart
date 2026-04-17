@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -7,6 +8,8 @@ import '../models/job_listing.dart';
 import '../repositories/admin_repository.dart';
 import '../repositories/app_repository.dart';
 
+enum AdminInterfaceView { admin, employer, jobSeeker }
+
 /// Full-screen admin dashboard shown to users with role='admin'.
 class AdminDashboard extends StatefulWidget {
   const AdminDashboard({
@@ -14,11 +17,17 @@ class AdminDashboard extends StatefulWidget {
     required this.adminRepository,
     required this.appRepository,
     required this.adminEmail,
+    required this.adminRoleLabel,
+    required this.currentView,
+    required this.onSwitchView,
   });
 
   final AdminRepository adminRepository;
   final AppRepository appRepository;
   final String adminEmail;
+  final String adminRoleLabel;
+  final AdminInterfaceView currentView;
+  final ValueChanged<AdminInterfaceView> onSwitchView;
 
   @override
   State<AdminDashboard> createState() => _AdminDashboardState();
@@ -60,7 +69,13 @@ class _AdminDashboardState extends State<AdminDashboard>
       final seekers = await widget.adminRepository.getTotalJobSeekerCount();
       final employers = await widget.adminRepository.getTotalEmployerCount();
       final apps = await widget.adminRepository.getAllApplications();
-      final logs = await widget.adminRepository.getAdminActionLogs();
+
+      List<AdminActionLog> logs = const [];
+      try {
+        logs = await widget.adminRepository.getAdminActionLogs();
+      } catch (_) {
+        // Audit log support may not be initialized yet; still show counts.
+      }
 
       if (!mounted) {
         return;
@@ -117,6 +132,35 @@ class _AdminDashboardState extends State<AdminDashboard>
         foregroundColor: Colors.white,
         title: const Text('Admin Dashboard'),
         actions: [
+          PopupMenuButton<AdminInterfaceView>(
+            icon: const Icon(Icons.person),
+            initialValue: widget.currentView,
+            onSelected: widget.onSwitchView,
+            itemBuilder: (context) => const [
+              PopupMenuItem(
+                value: AdminInterfaceView.jobSeeker,
+                child: Text('Job Seeker'),
+              ),
+              PopupMenuItem(
+                value: AdminInterfaceView.employer,
+                child: Text('Employer'),
+              ),
+              PopupMenuItem(
+                value: AdminInterfaceView.admin,
+                child: Text('Admin'),
+              ),
+            ],
+          ),
+          if (kDebugMode && widget.adminRoleLabel.trim().isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: Center(
+                child: Chip(
+                  visualDensity: VisualDensity.compact,
+                  label: Text('acct: ${widget.adminRoleLabel}'),
+                ),
+              ),
+            ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8),
             child: Center(
@@ -232,10 +276,7 @@ class _DashboardTab extends StatelessWidget {
           ),
           const SizedBox(height: 16),
           // Quick stats
-          Text(
-            'Quick Stats',
-            style: Theme.of(context).textTheme.titleMedium,
-          ),
+          Text('Quick Stats', style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 8),
           if (statsLoading)
             const Center(child: CircularProgressIndicator())
@@ -283,9 +324,7 @@ class _DashboardTab extends StatelessWidget {
               style: TextStyle(color: Colors.grey),
             )
           else
-            ...recentLogs.map(
-              (log) => _LogSummaryTile(log: log, onTap: null),
-            ),
+            ...recentLogs.map((log) => _LogSummaryTile(log: log, onTap: null)),
         ],
       ),
     );
@@ -319,14 +358,11 @@ class _StatCard extends StatelessWidget {
           const SizedBox(height: 4),
           Text(
             value,
-            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-              fontWeight: FontWeight.bold,
-            ),
+            style: Theme.of(
+              context,
+            ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold),
           ),
-          Text(
-            label,
-            style: const TextStyle(fontSize: 12, color: Colors.grey),
-          ),
+          Text(label, style: const TextStyle(fontSize: 12, color: Colors.grey)),
         ],
       ),
     );
@@ -375,9 +411,9 @@ class _UsersDataTabState extends State<_UsersDataTab> {
       });
     } catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Could not load data.')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Could not load data.')));
       }
     } finally {
       if (mounted) {
@@ -403,7 +439,10 @@ class _UsersDataTabState extends State<_UsersDataTab> {
           ),
           const SizedBox(height: 8),
           if (_jobListings.isEmpty)
-            const Text('No job listings found.', style: TextStyle(color: Colors.grey))
+            const Text(
+              'No job listings found.',
+              style: TextStyle(color: Colors.grey),
+            )
           else
             ..._jobListings.take(20).map((j) {
               return ListTile(
@@ -500,8 +539,10 @@ class _AuditLogsTab extends StatelessWidget {
                   decoration: const InputDecoration(
                     labelText: 'Action',
                     border: OutlineInputBorder(),
-                    contentPadding:
-                        EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    contentPadding: EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
                     isDense: true,
                   ),
                   items: _actionOptions
@@ -522,8 +563,10 @@ class _AuditLogsTab extends StatelessWidget {
                   decoration: const InputDecoration(
                     labelText: 'Resource',
                     border: OutlineInputBorder(),
-                    contentPadding:
-                        EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    contentPadding: EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
                     isDense: true,
                   ),
                   items: _resourceOptions

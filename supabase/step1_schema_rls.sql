@@ -444,15 +444,22 @@ create policy job_applications_delete_applicant
 -- ============================================================================
 
 -- Helper: returns true when the calling user's JWT contains role = 'admin'
--- in user_metadata (set via Supabase admin SDK or dashboard).
+-- in either app_metadata or user_metadata.
 create or replace function public.is_admin()
 returns boolean
 language sql
 stable
+security definer
+set search_path = public, auth
 as $$
-  select coalesce(
-    (auth.jwt() -> 'user_metadata' ->> 'role') = 'admin',
-    false
+  select exists (
+    select 1
+    from auth.users u
+    where u.id = auth.uid()
+      and (
+        coalesce(u.raw_app_meta_data ->> 'role', '') = 'admin'
+        or coalesce(u.raw_user_meta_data ->> 'role', '') = 'admin'
+      )
   );
 $$;
 
@@ -484,6 +491,22 @@ create policy job_seeker_profiles_admin_all
 drop policy if exists employer_profiles_admin_all on public.employer_profiles;
 create policy employer_profiles_admin_all
   on public.employer_profiles
+  for all
+  using (public.is_admin())
+  with check (public.is_admin());
+
+-- user_preferences: admins may read/update all preferences.
+drop policy if exists user_preferences_admin_all on public.user_preferences;
+create policy user_preferences_admin_all
+  on public.user_preferences
+  for all
+  using (public.is_admin())
+  with check (public.is_admin());
+
+-- saved_jobs: admins may read/update all saved jobs.
+drop policy if exists saved_jobs_admin_all on public.saved_jobs;
+create policy saved_jobs_admin_all
+  on public.saved_jobs
   for all
   using (public.is_admin())
   with check (public.is_admin());
@@ -533,6 +556,13 @@ drop policy if exists admin_action_logs_admin_insert on public.admin_action_logs
 create policy admin_action_logs_admin_insert
   on public.admin_action_logs
   for insert
+  with check (public.is_admin());
+
+drop policy if exists admin_action_logs_admin_all on public.admin_action_logs;
+create policy admin_action_logs_admin_all
+  on public.admin_action_logs
+  for all
+  using (public.is_admin())
   with check (public.is_admin());
 
 -- ============================================================================
