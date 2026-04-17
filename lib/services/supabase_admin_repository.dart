@@ -313,6 +313,73 @@ class SupabaseAdminRepository implements AdminRepository {
     );
   }
 
+  @override
+  Future<JobListing> createExternalJobListing({
+    required String title,
+    required String company,
+    required String location,
+    required String employmentType,
+    required String description,
+    String? externalApplyUrl,
+    String? reason,
+  }) async {
+    final now = DateTime.now();
+    final listingId = 'external-${now.microsecondsSinceEpoch}';
+    final payload = <String, dynamic>{
+      'id': listingId,
+      'employer_id': null,
+      'title': title,
+      'company': company,
+      'location': location,
+      'employment_type': employmentType,
+      'crew_role': 'Single Pilot',
+      'crew_position': null,
+      'faa_rules': const <String>[],
+      'description': description,
+      'faa_certificates': const <String>[],
+      'type_ratings_required': const <String>[],
+      'flight_experience': const <String>[],
+      'flight_hours': const <String, int>{},
+      'preferred_flight_hours': const <String>[],
+      'instructor_hours': const <String, int>{},
+      'preferred_instructor_hours': const <String>[],
+      'specialty_experience': const <String>[],
+      'specialty_hours': const <String, int>{},
+      'preferred_specialty_hours': const <String>[],
+      'aircraft_flown': const <String>[],
+      'salary_range': null,
+      'minimum_hours': null,
+      'benefits': const <String>[],
+      'auto_reject_threshold': 0,
+      'reapply_window_days': 30,
+      'is_external': true,
+      'external_apply_url': externalApplyUrl,
+      'deadline_date': null,
+      'status': 'active',
+    };
+
+    final inserted = await _client
+        .from('job_listings')
+        .insert(payload)
+        .select()
+        .single();
+
+    await logAdminAction(
+      AdminActionLog(
+        id: _pendingId,
+        adminUserId: _adminUserId,
+        actionType: AdminActionLog.actionCreate,
+        resourceType: AdminActionLog.resourceJobListing,
+        resourceId: listingId,
+        changesAfter: Map<String, dynamic>.from(inserted),
+        reason: reason,
+        timestamp: now,
+      ),
+    );
+
+    return JobListing.fromJson(_fromJobListingRow(inserted));
+  }
+
   // ── Delete ────────────────────────────────────────────────────────────────
 
   @override
@@ -766,6 +833,8 @@ class SupabaseAdminRepository implements AdminRepository {
       'autoRejectThreshold':
           (row['auto_reject_threshold'] as num?)?.toInt() ?? 0,
       'reapplyWindowDays': (row['reapply_window_days'] as num?)?.toInt() ?? 30,
+      'isExternal': (row['is_external'] as bool?) ?? false,
+      'externalApplyUrl': row['external_apply_url'],
       'isActive': row['status'] == 'active',
       'archivedAt': row['status'] == 'archived' ? row['updated_at'] : null,
     };

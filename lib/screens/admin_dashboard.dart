@@ -1,4 +1,4 @@
-is mport 'package:flutter/foundation.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -59,7 +59,7 @@ class _AdminDashboardState extends State<AdminDashboard>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 4, vsync: this);
+    _tabController = TabController(length: 5, vsync: this);
     _loadStats();
   }
 
@@ -194,6 +194,7 @@ class _AdminDashboardState extends State<AdminDashboard>
           tabs: const [
             Tab(icon: Icon(Icons.dashboard), text: 'Dashboard'),
             Tab(icon: Icon(Icons.gavel), text: 'Moderation'),
+            Tab(icon: Icon(Icons.post_add), text: 'External Posts'),
             Tab(icon: Icon(Icons.people), text: 'Users & Data'),
             Tab(icon: Icon(Icons.history), text: 'Audit Logs'),
           ],
@@ -214,6 +215,10 @@ class _AdminDashboardState extends State<AdminDashboard>
           _ModerationTab(
             adminRepository: widget.adminRepository,
             onDataChanged: _loadStats,
+          ),
+          _ExternalPostingsTab(
+            adminRepository: widget.adminRepository,
+            onCreated: _loadStats,
           ),
           _UsersDataTab(
             adminRepository: widget.adminRepository,
@@ -236,6 +241,255 @@ class _AdminDashboardState extends State<AdminDashboard>
           ),
         ],
       ),
+    );
+  }
+}
+
+class _ExternalPostingsTab extends StatefulWidget {
+  const _ExternalPostingsTab({
+    required this.adminRepository,
+    required this.onCreated,
+  });
+
+  final AdminRepository adminRepository;
+  final Future<void> Function() onCreated;
+
+  @override
+  State<_ExternalPostingsTab> createState() => _ExternalPostingsTabState();
+}
+
+class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
+  final _titleController = TextEditingController();
+  final _companyController = TextEditingController();
+  final _locationController = TextEditingController();
+  final _employmentTypeController = TextEditingController(text: 'External');
+  final _summaryController = TextEditingController();
+  final _sourceNameController = TextEditingController();
+  final _sourceUrlController = TextEditingController();
+  final _reasonController = TextEditingController();
+
+  bool _isSubmitting = false;
+
+  @override
+  void dispose() {
+    _titleController.dispose();
+    _companyController.dispose();
+    _locationController.dispose();
+    _employmentTypeController.dispose();
+    _summaryController.dispose();
+    _sourceNameController.dispose();
+    _sourceUrlController.dispose();
+    _reasonController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submitExternalListing() async {
+    if (_isSubmitting) {
+      return;
+    }
+
+    final title = _titleController.text.trim();
+    final company = _companyController.text.trim();
+    final location = _locationController.text.trim();
+    final employmentType = _employmentTypeController.text.trim();
+    final sourceName = _sourceNameController.text.trim();
+    final sourceUrl = _sourceUrlController.text.trim();
+    final reason = _reasonController.text.trim();
+
+    if (title.isEmpty && company.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Provide at least a title or company name.'),
+        ),
+      );
+      return;
+    }
+
+    if (sourceUrl.isNotEmpty) {
+      final parsed = Uri.tryParse(sourceUrl);
+      final looksValid =
+          parsed != null &&
+          (parsed.scheme == 'http' || parsed.scheme == 'https') &&
+          (parsed.host.isNotEmpty);
+      if (!looksValid) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Source URL must be a valid http/https URL.'),
+          ),
+        );
+        return;
+      }
+    }
+
+    final summary = _summaryController.text.trim();
+    final descriptionLines = <String>[
+      if (summary.isNotEmpty) summary,
+      if (summary.isEmpty) 'Externally sourced listing posted by admin.',
+      '',
+      'External listing details:',
+      if (sourceName.isNotEmpty) 'Source: $sourceName',
+      if (sourceUrl.isNotEmpty) 'Source URL: $sourceUrl',
+      'Apply externally. Do not use in-app apply.',
+    ];
+    final description = descriptionLines.join('\n').trim();
+
+    setState(() => _isSubmitting = true);
+    try {
+      final created = await widget.adminRepository.createExternalJobListing(
+        title: title.isEmpty ? 'External Opportunity' : title,
+        company: company.isEmpty ? 'External Company' : company,
+        location: location.isEmpty ? 'Location not specified' : location,
+        employmentType: employmentType.isEmpty ? 'External' : employmentType,
+        description: description,
+        externalApplyUrl: sourceUrl.isEmpty ? null : sourceUrl,
+        reason: reason.isEmpty ? 'Admin posted external listing' : reason,
+      );
+
+      if (!mounted) {
+        return;
+      }
+
+      _titleController.clear();
+      _companyController.clear();
+      _locationController.clear();
+      _employmentTypeController.text = 'External';
+      _summaryController.clear();
+      _sourceNameController.clear();
+      _sourceUrlController.clear();
+      _reasonController.clear();
+
+      await widget.onCreated();
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('External listing posted: ${created.title}')),
+      );
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not post external listing: $e')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isSubmitting = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            color: Colors.orange.shade50,
+            border: Border.all(color: Colors.orange.shade300),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Row(
+            children: [
+              Icon(Icons.public, color: Colors.orange.shade700),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Post externally sourced roles without requiring a linked employer profile.',
+                  style: TextStyle(
+                    color: Colors.orange.shade800,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        TextField(
+          controller: _titleController,
+          decoration: const InputDecoration(
+            labelText: 'Listing Title',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _companyController,
+          decoration: const InputDecoration(
+            labelText: 'Company',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _locationController,
+          decoration: const InputDecoration(
+            labelText: 'Location',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _employmentTypeController,
+          decoration: const InputDecoration(
+            labelText: 'Employment Type',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _summaryController,
+          maxLines: 4,
+          decoration: const InputDecoration(
+            labelText: 'Summary / Notes',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _sourceNameController,
+          decoration: const InputDecoration(
+            labelText: 'Source Name (optional)',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _sourceUrlController,
+          decoration: const InputDecoration(
+            labelText: 'Source URL (optional)',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _reasonController,
+          maxLines: 2,
+          decoration: const InputDecoration(
+            labelText: 'Admin Reason (audit log)',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        const SizedBox(height: 16),
+        SizedBox(
+          height: 44,
+          child: ElevatedButton.icon(
+            onPressed: _isSubmitting ? null : _submitExternalListing,
+            icon: _isSubmitting
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.post_add),
+            label: Text(_isSubmitting ? 'Posting...' : 'Post External Listing'),
+          ),
+        ),
+      ],
     );
   }
 }

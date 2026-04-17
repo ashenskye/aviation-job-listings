@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:aviation_job_listings/main.dart';
 import 'package:aviation_job_listings/models/job_listing.dart';
+import 'package:aviation_job_listings/models/job_seeker_profile.dart';
 
 import 'helpers/fake_app_repository.dart';
 
@@ -180,6 +181,54 @@ void main() {
       expect(find.text('Details Apply Role'), findsOneWidget);
       expect(find.text('SkyBridge Air • Denver, CO'), findsOneWidget);
       expect(find.text('Submitted'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'external listing shows external apply and skips in-app apply flow',
+    (WidgetTester tester) async {
+      var applyTapped = false;
+      final externalJob = JobListing.fromJson({
+        'id': 'external-apply-role',
+        'title': 'External Captain Opportunity',
+        'company': 'Mountain Air Charter',
+        'location': 'Boise, ID',
+        'type': 'External',
+        'crewRole': 'Single Pilot',
+        'faaRules': const <String>[],
+        'description': 'Externally sourced posting for apply gating test.',
+        'faaCertificates': const <String>[],
+        'flightExperience': const <String>[],
+        'aircraftFlown': const <String>[],
+        'isExternal': true,
+        'externalApplyUrl': 'https://example.com/apply',
+      });
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: JobDetailsPage(
+            job: externalJob,
+            isFavorite: false,
+            onFavorite: () {},
+            onApply: () => applyTapped = true,
+            profile: const JobSeekerProfile(),
+            isExternalListing: true,
+            hasApplied: false,
+            matchPercentage: 95,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('External posting'), findsOneWidget);
+      expect(find.text('Apply Externally'), findsOneWidget);
+      expect(find.text('Apply Anyway'), findsNothing);
+      expect(find.text('Quick Apply'), findsNothing);
+      expect(find.text('Apply Now'), findsNothing);
+
+      await tester.tap(find.text('Apply Externally'));
+      await tester.pumpAndSettle();
+      expect(applyTapped, isTrue);
     },
   );
 }

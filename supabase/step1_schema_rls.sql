@@ -118,6 +118,8 @@ create table if not exists public.job_listings (
   benefits text[] not null default '{}',
   auto_reject_threshold integer not null default 0,
   reapply_window_days integer not null default 30,
+  is_external boolean not null default false,
+  external_apply_url text null,
   deadline_date timestamptz null,
   status text not null default 'active' check (status in ('active', 'draft', 'archived', 'closed')),
   created_at timestamptz not null default now(),

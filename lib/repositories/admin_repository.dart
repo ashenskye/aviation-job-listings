@@ -46,6 +46,15 @@ abstract class AdminRepository {
     EmployerProfile updated,
     String reason,
   );
+  Future<JobListing> createExternalJobListing({
+    required String title,
+    required String company,
+    required String location,
+    required String employmentType,
+    required String description,
+    String? externalApplyUrl,
+    String? reason,
+  });
 
   // Delete (soft delete recommended)
   Future<void> deleteApplication(String appId, String reason);

@@ -36,6 +36,8 @@ class JobListing {
   final String? employerId;
   final int autoRejectThreshold; // 0 = disabled; >0 = auto-reject below this %
   final int reapplyWindowDays; // days a seeker must wait before re-applying
+  final bool isExternal; // true when listing is sourced externally
+  final String? externalApplyUrl; // optional external application URL
   final bool isActive; // false = archived by employer
   final DateTime? archivedAt; // set when archived
 
@@ -69,6 +71,8 @@ class JobListing {
     this.employerId,
     this.autoRejectThreshold = 0,
     this.reapplyWindowDays = 30,
+    this.isExternal = false,
+    this.externalApplyUrl,
     this.isActive = true,
     this.archivedAt,
   });
@@ -187,10 +191,10 @@ class JobListing {
           ? DateTime.tryParse(json['updatedAt'].toString())
           : null,
       employerId: json['employerId']?.toString(),
-      autoRejectThreshold:
-          (json['autoRejectThreshold'] as num?)?.toInt() ?? 0,
-      reapplyWindowDays:
-          (json['reapplyWindowDays'] as num?)?.toInt() ?? 30,
+      autoRejectThreshold: (json['autoRejectThreshold'] as num?)?.toInt() ?? 0,
+      reapplyWindowDays: (json['reapplyWindowDays'] as num?)?.toInt() ?? 30,
+      isExternal: (json['isExternal'] as bool?) ?? false,
+      externalApplyUrl: json['externalApplyUrl']?.toString(),
       isActive: (json['isActive'] as bool?) ?? true,
       archivedAt: json['archivedAt'] != null
           ? DateTime.tryParse(json['archivedAt'].toString())
@@ -228,6 +232,8 @@ class JobListing {
     'employerId': employerId,
     'autoRejectThreshold': autoRejectThreshold,
     'reapplyWindowDays': reapplyWindowDays,
+    'isExternal': isExternal,
+    'externalApplyUrl': externalApplyUrl,
     'isActive': isActive,
     'archivedAt': archivedAt?.toIso8601String(),
   };
@@ -301,6 +307,8 @@ class JobListing {
     Object? employerId = _sentinel,
     int? autoRejectThreshold,
     int? reapplyWindowDays,
+    bool? isExternal,
+    Object? externalApplyUrl = _sentinel,
     bool? isActive,
     Object? archivedAt = _sentinel,
   }) {
@@ -329,25 +337,35 @@ class JobListing {
       preferredSpecialtyHours:
           preferredSpecialtyHours ?? this.preferredSpecialtyHours,
       aircraftFlown: aircraftFlown ?? this.aircraftFlown,
-      salaryRange:
-          salaryRange == _sentinel ? this.salaryRange : salaryRange as String?,
-      minimumHours:
-          minimumHours == _sentinel ? this.minimumHours : minimumHours as int?,
+      salaryRange: salaryRange == _sentinel
+          ? this.salaryRange
+          : salaryRange as String?,
+      minimumHours: minimumHours == _sentinel
+          ? this.minimumHours
+          : minimumHours as int?,
       benefits: benefits ?? this.benefits,
       deadlineDate: deadlineDate == _sentinel
           ? this.deadlineDate
           : deadlineDate as DateTime?,
-      createdAt:
-          createdAt == _sentinel ? this.createdAt : createdAt as DateTime?,
-      updatedAt:
-          updatedAt == _sentinel ? this.updatedAt : updatedAt as DateTime?,
-      employerId:
-          employerId == _sentinel ? this.employerId : employerId as String?,
+      createdAt: createdAt == _sentinel
+          ? this.createdAt
+          : createdAt as DateTime?,
+      updatedAt: updatedAt == _sentinel
+          ? this.updatedAt
+          : updatedAt as DateTime?,
+      employerId: employerId == _sentinel
+          ? this.employerId
+          : employerId as String?,
       autoRejectThreshold: autoRejectThreshold ?? this.autoRejectThreshold,
       reapplyWindowDays: reapplyWindowDays ?? this.reapplyWindowDays,
+      isExternal: isExternal ?? this.isExternal,
+      externalApplyUrl: externalApplyUrl == _sentinel
+          ? this.externalApplyUrl
+          : externalApplyUrl as String?,
       isActive: isActive ?? this.isActive,
-      archivedAt:
-          archivedAt == _sentinel ? this.archivedAt : archivedAt as DateTime?,
+      archivedAt: archivedAt == _sentinel
+          ? this.archivedAt
+          : archivedAt as DateTime?,
     );
   }
 }

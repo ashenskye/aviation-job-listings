@@ -4630,13 +4630,18 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   void _openDetails(JobListing job) {
+    final isExternalListing = job.isExternal;
+    final hasApplied = isExternalListing ? false : _hasApplied(job.id);
+
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => JobDetailsPage(
           job: job,
           isFavorite: _favoriteIds.contains(job.id),
           onFavorite: () => _toggleFavorite(job),
-          onApply: _hasApplied(job.id) ? null : () => _handleApplyTap(job),
+          onApply: isExternalListing
+              ? () => _openExternalApply(job)
+              : (hasApplied ? null : () => _handleApplyTap(job)),
           onShare: () => _shareJobListing(job),
           onReport: _profileType == ProfileType.jobSeeker
               ? () => _reportJobListing(job)
@@ -4644,7 +4649,8 @@ class _MyHomePageState extends State<MyHomePage> {
           companyProfile: _findEmployerProfileForJob(job),
           openRoleCount: _countOpenRolesForJob(job),
           onSeeAllListings: () => _seeAllListingsForCompany(job),
-          hasApplied: _hasApplied(job.id),
+          hasApplied: hasApplied,
+          isExternalListing: isExternalListing,
           matchPercentage: _profileType == ProfileType.jobSeeker
               ? _evaluateJobMatch(job).matchPercentage
               : null,
@@ -4732,6 +4738,11 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Future<void> _applyToJob(JobListing job, {String? coverLetter}) async {
+    if (job.isExternal) {
+      await _openExternalApply(job);
+      return;
+    }
+
     if (_hasApplied(job.id)) {
       // Check reapply window
       final existing = await _getLatestApplicationForCurrentSeeker(job.id);
@@ -4877,7 +4888,56 @@ class _MyHomePageState extends State<MyHomePage> {
     }
   }
 
+  Future<void> _openExternalApply(JobListing job) async {
+    final rawUrl = job.externalApplyUrl?.trim() ?? '';
+    if (rawUrl.isEmpty) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'This external listing does not have an application link yet.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final uri = Uri.tryParse(rawUrl);
+    final isValidHttp =
+        uri != null &&
+        (uri.scheme == 'http' || uri.scheme == 'https') &&
+        uri.host.isNotEmpty;
+
+    if (!isValidHttp) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('The external application URL is not valid.'),
+        ),
+      );
+      return;
+    }
+
+    final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!launched && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not open the external application page.'),
+        ),
+      );
+    }
+  }
+
   void _handleApplyTap(JobListing job) {
+    if (job.isExternal) {
+      _openExternalApply(job);
+      return;
+    }
+
     final match = _evaluateJobMatch(job);
     if (match.matchPercentage >= 90) {
       _applyToJob(job);
@@ -7456,6 +7516,7 @@ class _MyHomePageState extends State<MyHomePage> {
                           final actionButtonPadding = EdgeInsets.all(
                             isNarrowCard ? 6 : 8,
                           );
+                          final hasApplied = _hasApplied(job.id);
                           return Card(
                             margin: const EdgeInsets.symmetric(vertical: 8),
                             child: InkWell(
@@ -7620,6 +7681,44 @@ class _MyHomePageState extends State<MyHomePage> {
                                                         ),
                                                       ],
                                                       const SizedBox(height: 4),
+                                                      if (job.isExternal) ...[
+                                                        const SizedBox(
+                                                          height: 4,
+                                                        ),
+                                                        Container(
+                                                          padding:
+                                                              const EdgeInsets.symmetric(
+                                                                horizontal: 8,
+                                                                vertical: 2,
+                                                              ),
+                                                          decoration: BoxDecoration(
+                                                            color: Colors
+                                                                .teal
+                                                                .shade50,
+                                                            border: Border.all(
+                                                              color: Colors
+                                                                  .teal
+                                                                  .shade200,
+                                                            ),
+                                                            borderRadius:
+                                                                BorderRadius.circular(
+                                                                  12,
+                                                                ),
+                                                          ),
+                                                          child: Text(
+                                                            'External posting • Apply off-platform',
+                                                            style: TextStyle(
+                                                              fontSize: 11,
+                                                              color: Colors
+                                                                  .teal
+                                                                  .shade800,
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .w600,
+                                                            ),
+                                                          ),
+                                                        ),
+                                                      ],
                                                       Text(
                                                         '${job.company} • ${job.location}',
                                                       ),
@@ -7860,17 +7959,26 @@ class _MyHomePageState extends State<MyHomePage> {
                                                   ? VisualDensity.compact
                                                   : VisualDensity.standard,
                                               icon: Icon(
-                                                _hasApplied(job.id)
+                                                job.isExternal
+                                                    ? Icons.open_in_new
+                                                    : hasApplied
                                                     ? Icons.check_circle
                                                     : Icons.send,
-                                                color: _hasApplied(job.id)
+                                                color: job.isExternal
+                                                    ? Colors.blue
+                                                    : hasApplied
                                                     ? Colors.green
                                                     : null,
                                               ),
-                                              tooltip: _hasApplied(job.id)
+                                              tooltip: job.isExternal
+                                                  ? 'Apply Externally'
+                                                  : hasApplied
                                                   ? 'Applied'
                                                   : 'Apply',
-                                              onPressed: _hasApplied(job.id)
+                                              onPressed: job.isExternal
+                                                  ? () =>
+                                                        _openExternalApply(job)
+                                                  : hasApplied
                                                   ? null
                                                   : () => _handleApplyTap(job),
                                             ),
@@ -11291,6 +11399,7 @@ class JobDetailsPage extends StatelessWidget {
   final EmployerProfile? companyProfile;
   final int openRoleCount;
   final bool hasApplied;
+  final bool isExternalListing;
   final int? matchPercentage;
 
   const JobDetailsPage({
@@ -11306,6 +11415,7 @@ class JobDetailsPage extends StatelessWidget {
     this.companyProfile,
     this.openRoleCount = 0,
     this.hasApplied = false,
+    this.isExternalListing = false,
     this.matchPercentage,
   });
 
@@ -11517,6 +11627,14 @@ class JobDetailsPage extends StatelessWidget {
                                     spacing: 8,
                                     runSpacing: 8,
                                     children: [
+                                      if (isExternalListing)
+                                        Chip(
+                                          avatar: const Icon(
+                                            Icons.public,
+                                            size: 16,
+                                          ),
+                                          label: const Text('External posting'),
+                                        ),
                                       if (job.salaryRange != null)
                                         Chip(
                                           label: Text(
@@ -11784,6 +11902,14 @@ class JobDetailsPage extends StatelessWidget {
   }
 
   Widget _buildApplyButton(BuildContext context) {
+    if (isExternalListing) {
+      return FilledButton.icon(
+        onPressed: onApply,
+        icon: const Icon(Icons.open_in_new),
+        label: const Text('Apply Externally'),
+      );
+    }
+
     if (hasApplied) {
       return OutlinedButton.icon(
         onPressed: null,

@@ -673,6 +673,8 @@ class SupabaseAppRepository implements AppRepository {
       'deadline_date': job.deadlineDate?.toIso8601String(),
       'auto_reject_threshold': job.autoRejectThreshold,
       'reapply_window_days': job.reapplyWindowDays,
+      'is_external': job.isExternal,
+      'external_apply_url': job.externalApplyUrl,
       'status': 'active',
     };
   }
@@ -731,6 +733,8 @@ class SupabaseAppRepository implements AppRepository {
       'autoRejectThreshold':
           (row['auto_reject_threshold'] as num?)?.toInt() ?? 0,
       'reapplyWindowDays': (row['reapply_window_days'] as num?)?.toInt() ?? 30,
+      'isExternal': (row['is_external'] as bool?) ?? false,
+      'externalApplyUrl': row['external_apply_url'],
     };
   }
 
