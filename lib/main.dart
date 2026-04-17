@@ -17,9 +17,12 @@ import 'models/employer_profiles_data.dart';
 import 'models/job_listing.dart';
 import 'models/job_listing_template.dart';
 import 'models/job_seeker_profile.dart';
+import 'repositories/admin_repository.dart';
 import 'repositories/app_repository.dart';
+import 'screens/admin_dashboard.dart';
 import 'screens/sign_in_screen.dart';
 import 'services/app_repository_factory.dart';
+import 'services/supabase_admin_repository.dart';
 import 'services/supabase_bootstrap.dart';
 import 'services/web_image_file_picker.dart';
 
@@ -62,6 +65,14 @@ ProfileType _profileTypeFromMetadata(Object? value) {
   return ProfileType.jobSeeker;
 }
 
+bool _isAdminUser(User user) {
+  return user.userMetadata?['role'] == 'admin';
+}
+
+AdminRepository _buildAdminRepository(SupabaseClient client, String userId) {
+  return SupabaseAdminRepository(client, userId);
+}
+
 class _AuthGate extends StatelessWidget {
   const _AuthGate({required this.repository});
 
@@ -74,8 +85,20 @@ class _AuthGate extends StatelessWidget {
       builder: (context, snapshot) {
         final session = snapshot.data?.session;
         if (session != null) {
+          final user = session.user;
+          if (_isAdminUser(user)) {
+            final adminRepo = _buildAdminRepository(
+              Supabase.instance.client,
+              user.id,
+            );
+            return AdminDashboard(
+              adminRepository: adminRepo,
+              appRepository: repository,
+              adminEmail: user.email ?? user.id,
+            );
+          }
           final initialType = _profileTypeFromMetadata(
-            session.user.userMetadata?['profile_type'],
+            user.userMetadata?['profile_type'],
           );
           return MyHomePage(
             title: 'Aviation Job Listings',

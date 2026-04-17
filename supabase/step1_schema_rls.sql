@@ -440,6 +440,102 @@ create policy job_applications_delete_applicant
   using (auth.uid() = applicant_user_id);
 
 -- ============================================================================
+-- Admin Access Policies
+-- ============================================================================
+
+-- Helper: returns true when the calling user's JWT contains role = 'admin'
+-- in user_metadata (set via Supabase admin SDK or dashboard).
+create or replace function public.is_admin()
+returns boolean
+language sql
+stable
+as $$
+  select coalesce(
+    (auth.jwt() -> 'user_metadata' ->> 'role') = 'admin',
+    false
+  );
+$$;
+
+-- job_listings: admins may read/update/delete all listings (including inactive).
+drop policy if exists job_listings_admin_all on public.job_listings;
+create policy job_listings_admin_all
+  on public.job_listings
+  for all
+  using (public.is_admin())
+  with check (public.is_admin());
+
+-- job_applications: admins may read/update/delete all applications.
+drop policy if exists job_applications_admin_all on public.job_applications;
+create policy job_applications_admin_all
+  on public.job_applications
+  for all
+  using (public.is_admin())
+  with check (public.is_admin());
+
+-- job_seeker_profiles: admins may read/update all profiles.
+drop policy if exists job_seeker_profiles_admin_all on public.job_seeker_profiles;
+create policy job_seeker_profiles_admin_all
+  on public.job_seeker_profiles
+  for all
+  using (public.is_admin())
+  with check (public.is_admin());
+
+-- employer_profiles: admins may read/update all employer profiles.
+drop policy if exists employer_profiles_admin_all on public.employer_profiles;
+create policy employer_profiles_admin_all
+  on public.employer_profiles
+  for all
+  using (public.is_admin())
+  with check (public.is_admin());
+
+-- ============================================================================
+-- Admin Action Logs Table
+-- ============================================================================
+
+create table if not exists public.admin_action_logs (
+  id                text primary key default gen_random_uuid()::text,
+  admin_user_id     uuid not null references auth.users(id),
+  action_type       text not null,
+  resource_type     text not null,
+  resource_id       text not null,
+  changes_before    jsonb,
+  changes_after     jsonb,
+  reason            text,
+  timestamp         timestamp with time zone default now(),
+  ip_address        text,
+  created_at        timestamp with time zone default now(),
+
+  constraint valid_action_type check (
+    action_type in ('create', 'update', 'delete', 'view')
+  )
+);
+
+-- Indexes for efficient queries
+create index if not exists idx_admin_action_logs_admin_user_id
+  on public.admin_action_logs(admin_user_id);
+
+create index if not exists idx_admin_action_logs_resource
+  on public.admin_action_logs(resource_type, resource_id);
+
+create index if not exists idx_admin_action_logs_timestamp
+  on public.admin_action_logs(timestamp);
+
+-- RLS: only admins can read logs; inserts allowed for admin users.
+alter table public.admin_action_logs enable row level security;
+
+drop policy if exists admin_action_logs_admin_select on public.admin_action_logs;
+create policy admin_action_logs_admin_select
+  on public.admin_action_logs
+  for select
+  using (public.is_admin());
+
+drop policy if exists admin_action_logs_admin_insert on public.admin_action_logs;
+create policy admin_action_logs_admin_insert
+  on public.admin_action_logs
+  for insert
+  with check (public.is_admin());
+
+-- ============================================================================
 -- Notes for Step 2 repository integration
 -- ============================================================================
 -- 1) Keep Dart model key naming in repository mapping layer:
