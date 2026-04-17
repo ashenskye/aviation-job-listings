@@ -7,6 +7,7 @@ import '../models/application.dart';
 import '../models/application_feedback.dart';
 import '../models/employer_profiles_data.dart';
 import '../models/job_listing.dart';
+import '../models/job_listing_report.dart';
 import '../models/job_listing_template.dart';
 import '../models/job_load_result.dart';
 import '../models/job_seeker_profile.dart';
@@ -19,6 +20,7 @@ class LocalAppRepository implements AppRepository {
   static const String _jobTemplatesKey = 'job_templates';
   static const String _applicationsKey = 'job_applications';
   static const String _feedbackKey = 'application_feedback';
+  static const String _jobListingReportsKey = 'job_listing_reports';
 
   @override
   Future<Set<String>> loadFavoriteIds() async {
@@ -212,7 +214,9 @@ class LocalAppRepository implements AppRepository {
   }
 
   @override
-  Future<List<Application>> loadApplicationsForEmployer(String employerId) async {
+  Future<List<Application>> loadApplicationsForEmployer(
+    String employerId,
+  ) async {
     final prefs = await SharedPreferences.getInstance();
     final stored = prefs.getString(_applicationsKey);
 
@@ -232,7 +236,10 @@ class LocalAppRepository implements AppRepository {
   }
 
   @override
-  Future<void> updateApplicationStatus(String applicationId, String status) async {
+  Future<void> updateApplicationStatus(
+    String applicationId,
+    String status,
+  ) async {
     final prefs = await SharedPreferences.getInstance();
     final stored = prefs.getString(_applicationsKey);
     List<Map<String, dynamic>> applications;
@@ -257,10 +264,7 @@ class LocalAppRepository implements AppRepository {
 
     final current = Application.fromJson(applications[index]);
     applications[index] = current
-        .copyWith(
-          status: status,
-          updatedAt: DateTime.now(),
-        )
+        .copyWith(status: status, updatedAt: DateTime.now())
         .toJson();
 
     await prefs.setString(_applicationsKey, jsonEncode(applications));
@@ -347,11 +351,32 @@ class LocalAppRepository implements AppRepository {
     String jobId,
   ) async {
     final apps = await getApplicationsBySeeker(seekerId);
-    final matching = apps
-        .where((app) => app.jobId == jobId)
-        .toList()
+    final matching = apps.where((app) => app.jobId == jobId).toList()
       ..sort((a, b) => b.appliedAt.compareTo(a.appliedAt));
     return matching.isEmpty ? null : matching.first;
+  }
+
+  @override
+  Future<void> reportJobListing(JobListingReport report) async {
+    final prefs = await SharedPreferences.getInstance();
+    final stored = prefs.getString(_jobListingReportsKey);
+    List<Map<String, dynamic>> reports;
+
+    if (stored == null) {
+      reports = [];
+    } else {
+      try {
+        final decoded = jsonDecode(stored) as List<dynamic>;
+        reports = decoded
+            .map((e) => Map<String, dynamic>.from(e as Map))
+            .toList();
+      } catch (_) {
+        reports = [];
+      }
+    }
+
+    reports.add(report.toJson());
+    await prefs.setString(_jobListingReportsKey, jsonEncode(reports));
   }
 
   @override

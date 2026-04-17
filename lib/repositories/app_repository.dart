@@ -2,6 +2,7 @@ import '../models/application.dart';
 import '../models/application_feedback.dart';
 import '../models/employer_profiles_data.dart';
 import '../models/job_listing.dart';
+import '../models/job_listing_report.dart';
 import '../models/job_listing_template.dart';
 import '../models/job_load_result.dart';
 import '../models/job_seeker_profile.dart';
@@ -43,6 +44,7 @@ abstract class AppRepository {
     String seekerId,
     String jobId,
   );
+  Future<void> reportJobListing(JobListingReport report);
 
   // Application feedback methods
   Future<FeedbackSaveDestination> saveFeedback(ApplicationFeedback feedback);

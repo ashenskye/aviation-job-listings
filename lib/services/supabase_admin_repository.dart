@@ -2,8 +2,11 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/admin_action_log.dart';
 import '../models/application.dart';
+import '../models/employer_moderation.dart';
 import '../models/employer_profile.dart';
 import '../models/job_listing.dart';
+import '../models/job_listing_report.dart';
+import '../models/job_seeker_moderation.dart';
 import '../models/job_seeker_profile.dart';
 import '../repositories/admin_repository.dart';
 
@@ -114,6 +117,65 @@ class SupabaseAdminRepository implements AdminRepository {
     return rows
         .map((r) => _fromApplicationRow(Map<String, dynamic>.from(r)))
         .toList();
+  }
+
+  @override
+  Future<List<JobListingReport>> getJobListingReports({String? status}) async {
+    var query = _client.from('job_listing_reports').select();
+    if (status != null && status.isNotEmpty) {
+      query = query.eq('status', status);
+    }
+    final rows = await query.order('created_at', ascending: false);
+    return rows
+        .map((row) => JobListingReport.fromJson(Map<String, dynamic>.from(row)))
+        .toList();
+  }
+
+  @override
+  Future<List<EmployerModeration>> getEmployerModerationSummaries() async {
+    final profileRows = await _client
+        .from('employer_profiles')
+        .select('id, company_name');
+    final moderationRows = await _client.from('employer_moderation').select();
+    final moderationById = {
+      for (final row in moderationRows)
+        row['employer_id']?.toString() ?? '': Map<String, dynamic>.from(row),
+    };
+
+    return profileRows.map((row) {
+      final profile = Map<String, dynamic>.from(row);
+      final moderation =
+          moderationById[profile['id']?.toString() ?? ''] ?? const {};
+      return EmployerModeration.fromJson({
+        'employer_id': profile['id'],
+        'company_name': profile['company_name'],
+        ...moderation,
+      });
+    }).toList();
+  }
+
+  @override
+  Future<List<JobSeekerModeration>> getJobSeekerModerationSummaries() async {
+    final profileRows = await _client
+        .from('job_seeker_profiles')
+        .select('user_id, full_name, email');
+    final moderationRows = await _client.from('job_seeker_moderation').select();
+    final moderationById = {
+      for (final row in moderationRows)
+        row['user_id']?.toString() ?? '': Map<String, dynamic>.from(row),
+    };
+
+    return profileRows.map((row) {
+      final profile = Map<String, dynamic>.from(row);
+      final moderation =
+          moderationById[profile['user_id']?.toString() ?? ''] ?? const {};
+      return JobSeekerModeration.fromJson({
+        'user_id': profile['user_id'],
+        'display_name': profile['full_name'],
+        'email': profile['email'],
+        ...moderation,
+      });
+    }).toList();
   }
 
   // ── Edit Data ─────────────────────────────────────────────────────────────
@@ -261,11 +323,28 @@ class SupabaseAdminRepository implements AdminRepository {
         .eq('id', appId)
         .maybeSingle();
 
-    // Soft delete: mark archived
+    final currentData = Map<String, dynamic>.from(
+      (beforeRow?['data'] as Map?) ?? const {},
+    );
+    currentData['is_archived'] = true;
+    currentData['updated_at'] = DateTime.now().toIso8601String();
+
     await _client
         .from('job_applications')
-        .update({'is_archived': true})
+        .update({
+          'data': currentData,
+          'updated_at': DateTime.now().toIso8601String(),
+        })
         .eq('id', appId);
+
+    final seekerId = beforeRow?['applicant_user_id']?.toString();
+    if (seekerId != null && seekerId.isNotEmpty) {
+      await _incrementJobSeekerDeletedApplicationCount(
+        userId: seekerId,
+        displayName: currentData['applicant_name']?.toString() ?? '',
+        email: currentData['applicant_email']?.toString() ?? '',
+      );
+    }
 
     await logAdminAction(
       AdminActionLog(
@@ -296,6 +375,25 @@ class SupabaseAdminRepository implements AdminRepository {
         .from('job_listings')
         .update({'status': 'archived'})
         .eq('id', jobId);
+
+    final employerId = beforeRow?['employer_id']?.toString();
+    if (employerId != null && employerId.isNotEmpty) {
+      await _incrementEmployerDeletedJobCount(
+        employerId: employerId,
+        companyName: beforeRow?['company']?.toString() ?? '',
+      );
+    }
+
+    await _client
+        .from('job_listing_reports')
+        .update({
+          'status': JobListingReport.statusDeleted,
+          'reviewed_at': DateTime.now().toIso8601String(),
+          'reviewed_by_admin_user_id': _adminUserId,
+          'admin_notes': reason,
+        })
+        .eq('job_listing_id', jobId)
+        .eq('status', JobListingReport.statusOpen);
 
     await logAdminAction(
       AdminActionLog(
@@ -334,6 +432,109 @@ class SupabaseAdminRepository implements AdminRepository {
   Future<int> getTotalEmployerCount() async {
     final rows = await _client.from('employer_profiles').select('id');
     return rows.length;
+  }
+
+  @override
+  Future<void> resolveJobListingReport(
+    String reportId, {
+    required String status,
+    String? adminNotes,
+  }) async {
+    await _client
+        .from('job_listing_reports')
+        .update({
+          'status': status,
+          'admin_notes': adminNotes,
+          'reviewed_at': DateTime.now().toIso8601String(),
+          'reviewed_by_admin_user_id': _adminUserId,
+        })
+        .eq('id', reportId);
+  }
+
+  @override
+  Future<void> setEmployerBan(
+    String employerId, {
+    required bool isBanned,
+    String? reason,
+    String? companyName,
+  }) async {
+    final beforeRow = await _client
+        .from('employer_moderation')
+        .select()
+        .eq('employer_id', employerId)
+        .maybeSingle();
+
+    final nextRow = {
+      'employer_id': employerId,
+      if (companyName != null) 'company_name': companyName,
+      'is_banned': isBanned,
+      'banned_at': isBanned ? DateTime.now().toIso8601String() : null,
+      'ban_reason': isBanned ? (reason ?? '') : '',
+    };
+
+    await _client.from('employer_moderation').upsert(nextRow);
+
+    await logAdminAction(
+      AdminActionLog(
+        id: _pendingId,
+        adminUserId: _adminUserId,
+        actionType: AdminActionLog.actionUpdate,
+        resourceType: AdminActionLog.resourceEmployerProfile,
+        resourceId: employerId,
+        changesBefore: beforeRow == null
+            ? null
+            : Map<String, dynamic>.from(beforeRow),
+        changesAfter: nextRow,
+        reason: isBanned
+            ? 'Employer banned${(reason ?? '').trim().isEmpty ? '' : ': $reason'}'
+            : 'Employer unbanned',
+        timestamp: DateTime.now(),
+      ),
+    );
+  }
+
+  @override
+  Future<void> setJobSeekerBan(
+    String userId, {
+    required bool isBanned,
+    String? reason,
+    String? displayName,
+    String? email,
+  }) async {
+    final beforeRow = await _client
+        .from('job_seeker_moderation')
+        .select()
+        .eq('user_id', userId)
+        .maybeSingle();
+
+    final nextRow = {
+      'user_id': userId,
+      if (displayName != null) 'display_name': displayName,
+      if (email != null) 'email': email,
+      'is_banned': isBanned,
+      'banned_at': isBanned ? DateTime.now().toIso8601String() : null,
+      'ban_reason': isBanned ? (reason ?? '') : '',
+    };
+
+    await _client.from('job_seeker_moderation').upsert(nextRow);
+
+    await logAdminAction(
+      AdminActionLog(
+        id: _pendingId,
+        adminUserId: _adminUserId,
+        actionType: AdminActionLog.actionUpdate,
+        resourceType: AdminActionLog.resourceJobSeekerProfile,
+        resourceId: userId,
+        changesBefore: beforeRow == null
+            ? null
+            : Map<String, dynamic>.from(beforeRow),
+        changesAfter: nextRow,
+        reason: isBanned
+            ? 'Job seeker banned${(reason ?? '').trim().isEmpty ? '' : ': $reason'}'
+            : 'Job seeker unbanned',
+        timestamp: DateTime.now(),
+      ),
+    );
   }
 
   Application _fromApplicationRow(Map<String, dynamic> row) {
@@ -462,5 +663,50 @@ class SupabaseAdminRepository implements AdminRepository {
         (row['company_benefits'] as List?) ?? const [],
       ),
     };
+  }
+
+  Future<void> _incrementEmployerDeletedJobCount({
+    required String employerId,
+    required String companyName,
+  }) async {
+    final existing = await _client
+        .from('employer_moderation')
+        .select()
+        .eq('employer_id', employerId)
+        .maybeSingle();
+    final count =
+        ((existing?['admin_deleted_job_count'] as num?)?.toInt() ?? 0) + 1;
+    await _client.from('employer_moderation').upsert({
+      'employer_id': employerId,
+      'company_name': companyName,
+      'admin_deleted_job_count': count,
+      'is_banned': existing?['is_banned'] ?? false,
+      'ban_reason': existing?['ban_reason'] ?? '',
+      'banned_at': existing?['banned_at'],
+    });
+  }
+
+  Future<void> _incrementJobSeekerDeletedApplicationCount({
+    required String userId,
+    required String displayName,
+    required String email,
+  }) async {
+    final existing = await _client
+        .from('job_seeker_moderation')
+        .select()
+        .eq('user_id', userId)
+        .maybeSingle();
+    final count =
+        ((existing?['admin_deleted_application_count'] as num?)?.toInt() ?? 0) +
+        1;
+    await _client.from('job_seeker_moderation').upsert({
+      'user_id': userId,
+      'display_name': displayName,
+      'email': email,
+      'admin_deleted_application_count': count,
+      'is_banned': existing?['is_banned'] ?? false,
+      'ban_reason': existing?['ban_reason'] ?? '',
+      'banned_at': existing?['banned_at'],
+    });
   }
 }

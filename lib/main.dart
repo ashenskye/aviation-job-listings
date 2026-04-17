@@ -15,6 +15,7 @@ import 'models/aviation_certificate_utils.dart';
 import 'models/employer_profile.dart';
 import 'models/employer_profiles_data.dart';
 import 'models/job_listing.dart';
+import 'models/job_listing_report.dart';
 import 'models/job_listing_template.dart';
 import 'models/job_seeker_profile.dart';
 import 'repositories/admin_repository.dart';
@@ -792,6 +793,14 @@ class _MyHomePageState extends State<MyHomePage> {
 
   static const String _legacyLocalJobSeekerId = 'local_seeker';
   static const int _maxReapplyWindowDays = 365;
+  static const List<String> _jobListingReportReasons = [
+    'Fake or misleading listing',
+    'Scam or payment request',
+    'Wrong company or identity misuse',
+    'Inappropriate content',
+    'Duplicate or spam posting',
+    'Other',
+  ];
 
   List<Application> _myApplications = const [];
   List<Application> _employerApplications = const [];
@@ -814,6 +823,9 @@ class _MyHomePageState extends State<MyHomePage> {
       DateTime.now().millisecondsSinceEpoch.toString();
 
   String _generateFeedbackId() => 'fb_${DateTime.now().millisecondsSinceEpoch}';
+
+  String _generateJobListingReportId() =>
+      'rpt_${DateTime.now().millisecondsSinceEpoch}';
 
   String _currentJobSeekerId() {
     if (SupabaseBootstrap.isConfigured) {
@@ -4626,6 +4638,9 @@ class _MyHomePageState extends State<MyHomePage> {
           onFavorite: () => _toggleFavorite(job),
           onApply: _hasApplied(job.id) ? null : () => _handleApplyTap(job),
           onShare: () => _shareJobListing(job),
+          onReport: _profileType == ProfileType.jobSeeker
+              ? () => _reportJobListing(job)
+              : null,
           companyProfile: _findEmployerProfileForJob(job),
           openRoleCount: _countOpenRolesForJob(job),
           onSeeAllListings: () => _seeAllListingsForCompany(job),
@@ -4868,6 +4883,134 @@ class _MyHomePageState extends State<MyHomePage> {
       _applyToJob(job);
     } else {
       _showQuickApplyDialog(job, match);
+    }
+  }
+
+  Future<void> _reportJobListing(JobListing job) async {
+    final detailsController = TextEditingController();
+    String selectedReason = _jobListingReportReasons.first;
+    String? errorText;
+
+    final report = await showDialog<JobListingReport>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) => AlertDialog(
+            title: const Text('Report job listing'),
+            content: SingleChildScrollView(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 520),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '${job.title} • ${job.company}',
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 12),
+                    DropdownButtonFormField<String>(
+                      initialValue: selectedReason,
+                      decoration: const InputDecoration(
+                        labelText: 'Reason',
+                        border: OutlineInputBorder(),
+                      ),
+                      items: _jobListingReportReasons
+                          .map(
+                            (reason) => DropdownMenuItem<String>(
+                              value: reason,
+                              child: Text(reason),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (value) {
+                        if (value == null) {
+                          return;
+                        }
+                        setDialogState(() {
+                          selectedReason = value;
+                          errorText = null;
+                        });
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: detailsController,
+                      maxLines: 4,
+                      decoration: InputDecoration(
+                        labelText: 'Details (optional)',
+                        hintText:
+                            'Add any context that helps admin review this listing.',
+                        border: const OutlineInputBorder(),
+                        errorText: errorText,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton.icon(
+                onPressed: () {
+                  final reporterUserId = SupabaseBootstrap.isConfigured
+                      ? (Supabase.instance.client.auth.currentUser?.id ?? '')
+                      : _currentJobSeekerId();
+                  if (reporterUserId.trim().isEmpty) {
+                    setDialogState(() {
+                      errorText = 'You must be signed in to report a listing.';
+                    });
+                    return;
+                  }
+
+                  Navigator.of(dialogContext).pop(
+                    JobListingReport(
+                      id: _generateJobListingReportId(),
+                      jobListingId: job.id,
+                      reporterUserId: reporterUserId,
+                      employerId: job.employerId,
+                      reason: selectedReason,
+                      details: detailsController.text.trim(),
+                      jobTitle: job.title,
+                      company: job.company,
+                      location: job.location,
+                      createdAt: DateTime.now(),
+                    ),
+                  );
+                },
+                icon: const Icon(Icons.flag_outlined),
+                label: const Text('Submit Report'),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+
+    if (report == null) {
+      return;
+    }
+
+    try {
+      await _appRepository.reportJobListing(report);
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Report submitted. Admin will review the listing.'),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Could not submit report: $e')));
     }
   }
 
@@ -7730,6 +7873,25 @@ class _MyHomePageState extends State<MyHomePage> {
                                               onPressed: _hasApplied(job.id)
                                                   ? null
                                                   : () => _handleApplyTap(job),
+                                            ),
+                                          if (_profileType ==
+                                              ProfileType.jobSeeker)
+                                            IconButton(
+                                              constraints:
+                                                  BoxConstraints.tightFor(
+                                                    width: actionButtonSize,
+                                                    height: actionButtonSize,
+                                                  ),
+                                              padding: actionButtonPadding,
+                                              visualDensity: isNarrowCard
+                                                  ? VisualDensity.compact
+                                                  : VisualDensity.standard,
+                                              icon: const Icon(
+                                                Icons.flag_outlined,
+                                              ),
+                                              tooltip: 'Report listing',
+                                              onPressed: () =>
+                                                  _reportJobListing(job),
                                             ),
                                           if (_canEditJob(job))
                                             OutlinedButton.icon(
@@ -11062,6 +11224,7 @@ class JobDetailsPage extends StatelessWidget {
   final VoidCallback onFavorite;
   final VoidCallback? onApply;
   final VoidCallback? onShare;
+  final VoidCallback? onReport;
   final VoidCallback? onSeeAllListings;
   final JobSeekerProfile? profile;
   final EmployerProfile? companyProfile;
@@ -11076,6 +11239,7 @@ class JobDetailsPage extends StatelessWidget {
     required this.onFavorite,
     this.onApply,
     this.onShare,
+    this.onReport,
     this.onSeeAllListings,
     this.profile,
     this.companyProfile,
@@ -11538,6 +11702,12 @@ class JobDetailsPage extends StatelessWidget {
                                   isFavorite ? 'Favorited' : 'Favorite',
                                 ),
                               ),
+                              if (onReport != null)
+                                OutlinedButton.icon(
+                                  onPressed: onReport,
+                                  icon: const Icon(Icons.flag_outlined),
+                                  label: const Text('Report Listing'),
+                                ),
                             ],
                           ),
                         ),

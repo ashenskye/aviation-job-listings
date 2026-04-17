@@ -1,7 +1,10 @@
 import '../models/admin_action_log.dart';
 import '../models/application.dart';
+import '../models/employer_moderation.dart';
 import '../models/employer_profile.dart';
 import '../models/job_listing.dart';
+import '../models/job_listing_report.dart';
+import '../models/job_seeker_moderation.dart';
 import '../models/job_seeker_profile.dart';
 
 abstract class AdminRepository {
@@ -18,6 +21,9 @@ abstract class AdminRepository {
   Future<JobSeekerProfile?> getJobSeekerProfile(String userId);
   Future<EmployerProfile?> getEmployerProfile(String employerId);
   Future<List<Application>> getApplicationsForJob(String jobId);
+  Future<List<JobListingReport>> getJobListingReports({String? status});
+  Future<List<EmployerModeration>> getEmployerModerationSummaries();
+  Future<List<JobSeekerModeration>> getJobSeekerModerationSummaries();
 
   // Edit/Fix Data
   Future<void> updateJobListing(
@@ -44,6 +50,24 @@ abstract class AdminRepository {
   // Delete (soft delete recommended)
   Future<void> deleteApplication(String appId, String reason);
   Future<void> deleteJobListing(String jobId, String reason);
+  Future<void> resolveJobListingReport(
+    String reportId, {
+    required String status,
+    String? adminNotes,
+  });
+  Future<void> setEmployerBan(
+    String employerId, {
+    required bool isBanned,
+    String? reason,
+    String? companyName,
+  });
+  Future<void> setJobSeekerBan(
+    String userId, {
+    required bool isBanned,
+    String? reason,
+    String? displayName,
+    String? email,
+  });
 
   // Analytics / Support
   Future<int> getApplicationCountForJob(String jobId);

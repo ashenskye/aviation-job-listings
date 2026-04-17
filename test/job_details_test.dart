@@ -33,6 +33,7 @@ void main() {
           job: job,
           isFavorite: false,
           onFavorite: _noop,
+          onReport: _noop,
           profile: profile,
         ),
       ),

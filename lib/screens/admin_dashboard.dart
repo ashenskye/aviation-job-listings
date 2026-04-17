@@ -4,7 +4,10 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/admin_action_log.dart';
 import '../models/application.dart';
+import '../models/employer_moderation.dart';
 import '../models/job_listing.dart';
+import '../models/job_listing_report.dart';
+import '../models/job_seeker_moderation.dart';
 import '../repositories/admin_repository.dart';
 import '../repositories/app_repository.dart';
 
@@ -39,6 +42,7 @@ class _AdminDashboardState extends State<AdminDashboard>
 
   int _totalJobSeekers = 0;
   int _totalEmployers = 0;
+  int _activeJobListings = 0;
   int _totalApplications = 0;
   List<AdminActionLog> _recentLogs = [];
 
@@ -53,7 +57,7 @@ class _AdminDashboardState extends State<AdminDashboard>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    _tabController = TabController(length: 4, vsync: this);
     _loadStats();
   }
 
@@ -68,6 +72,7 @@ class _AdminDashboardState extends State<AdminDashboard>
     try {
       final seekers = await widget.adminRepository.getTotalJobSeekerCount();
       final employers = await widget.adminRepository.getTotalEmployerCount();
+      final listings = await widget.adminRepository.getAllJobListings();
       final apps = await widget.adminRepository.getAllApplications();
 
       List<AdminActionLog> logs = const [];
@@ -83,6 +88,9 @@ class _AdminDashboardState extends State<AdminDashboard>
       setState(() {
         _totalJobSeekers = seekers;
         _totalEmployers = employers;
+        _activeJobListings = listings
+            .where((listing) => listing.isActive)
+            .length;
         _totalApplications = apps.length;
         _recentLogs = logs.take(10).toList();
         _allLogs = logs;
@@ -183,6 +191,7 @@ class _AdminDashboardState extends State<AdminDashboard>
           indicatorColor: Colors.white,
           tabs: const [
             Tab(icon: Icon(Icons.dashboard), text: 'Dashboard'),
+            Tab(icon: Icon(Icons.gavel), text: 'Moderation'),
             Tab(icon: Icon(Icons.people), text: 'Users & Data'),
             Tab(icon: Icon(Icons.history), text: 'Audit Logs'),
           ],
@@ -195,10 +204,12 @@ class _AdminDashboardState extends State<AdminDashboard>
             statsLoading: _statsLoading,
             totalJobSeekers: _totalJobSeekers,
             totalEmployers: _totalEmployers,
+            activeJobListings: _activeJobListings,
             totalApplications: _totalApplications,
             recentLogs: _recentLogs,
             onRefresh: _loadStats,
           ),
+          _ModerationTab(adminRepository: widget.adminRepository),
           _UsersDataTab(
             adminRepository: widget.adminRepository,
             appRepository: widget.appRepository,
@@ -233,6 +244,7 @@ class _DashboardTab extends StatelessWidget {
     required this.statsLoading,
     required this.totalJobSeekers,
     required this.totalEmployers,
+    required this.activeJobListings,
     required this.totalApplications,
     required this.recentLogs,
     required this.onRefresh,
@@ -241,6 +253,7 @@ class _DashboardTab extends StatelessWidget {
   final bool statsLoading;
   final int totalJobSeekers;
   final int totalEmployers;
+  final int activeJobListings;
   final int totalApplications;
   final List<AdminActionLog> recentLogs;
   final VoidCallback onRefresh;
@@ -281,9 +294,12 @@ class _DashboardTab extends StatelessWidget {
           if (statsLoading)
             const Center(child: CircularProgressIndicator())
           else
-            Row(
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
               children: [
-                Expanded(
+                SizedBox(
+                  width: 160,
                   child: _StatCard(
                     label: 'Job Seekers',
                     value: '$totalJobSeekers',
@@ -291,8 +307,8 @@ class _DashboardTab extends StatelessWidget {
                     color: Colors.blue,
                   ),
                 ),
-                const SizedBox(width: 8),
-                Expanded(
+                SizedBox(
+                  width: 160,
                   child: _StatCard(
                     label: 'Employers',
                     value: '$totalEmployers',
@@ -300,8 +316,17 @@ class _DashboardTab extends StatelessWidget {
                     color: Colors.green,
                   ),
                 ),
-                const SizedBox(width: 8),
-                Expanded(
+                SizedBox(
+                  width: 160,
+                  child: _StatCard(
+                    label: 'Active Job Listings',
+                    value: '$activeJobListings',
+                    icon: Icons.work_outline,
+                    color: Colors.teal,
+                  ),
+                ),
+                SizedBox(
+                  width: 160,
                   child: _StatCard(
                     label: 'Applications',
                     value: '$totalApplications',
@@ -369,6 +394,484 @@ class _StatCard extends StatelessWidget {
   }
 }
 
+class _ModerationTab extends StatefulWidget {
+  const _ModerationTab({required this.adminRepository});
+
+  final AdminRepository adminRepository;
+
+  @override
+  State<_ModerationTab> createState() => _ModerationTabState();
+}
+
+class _ModerationTabState extends State<_ModerationTab> {
+  bool _loading = false;
+  List<JobListingReport> _reports = const [];
+  List<EmployerModeration> _employers = const [];
+  List<JobSeekerModeration> _jobSeekers = const [];
+  String _reportStatusFilter = JobListingReport.statusOpen;
+
+  static const List<(String, String)> _reportStatusOptions = [
+    (JobListingReport.statusOpen, 'Open'),
+    (JobListingReport.statusDeleted, 'Deleted'),
+    (JobListingReport.statusDismissed, 'Dismissed'),
+    ('all', 'All'),
+  ];
+
+  List<JobListingReport> get _filteredReports {
+    if (_reportStatusFilter == 'all') {
+      return _reports;
+    }
+    return _reports
+        .where((report) => report.status == _reportStatusFilter)
+        .toList();
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _loadData();
+  }
+
+  Future<void> _loadData() async {
+    setState(() => _loading = true);
+    try {
+      final reports = await widget.adminRepository.getJobListingReports();
+      final employers = await widget.adminRepository
+          .getEmployerModerationSummaries();
+      final jobSeekers = await widget.adminRepository
+          .getJobSeekerModerationSummaries();
+
+      if (!mounted) {
+        return;
+      }
+
+      employers.sort((a, b) {
+        final bannedCompare = (b.isBanned ? 1 : 0).compareTo(
+          a.isBanned ? 1 : 0,
+        );
+        if (bannedCompare != 0) {
+          return bannedCompare;
+        }
+        final deletedCompare = b.adminDeletedJobCount.compareTo(
+          a.adminDeletedJobCount,
+        );
+        if (deletedCompare != 0) {
+          return deletedCompare;
+        }
+        return a.companyName.toLowerCase().compareTo(
+          b.companyName.toLowerCase(),
+        );
+      });
+
+      jobSeekers.sort((a, b) {
+        final bannedCompare = (b.isBanned ? 1 : 0).compareTo(
+          a.isBanned ? 1 : 0,
+        );
+        if (bannedCompare != 0) {
+          return bannedCompare;
+        }
+        final deletedCompare = b.adminDeletedApplicationCount.compareTo(
+          a.adminDeletedApplicationCount,
+        );
+        if (deletedCompare != 0) {
+          return deletedCompare;
+        }
+        return a.displayName.toLowerCase().compareTo(
+          b.displayName.toLowerCase(),
+        );
+      });
+
+      setState(() {
+        _reports = reports;
+        _employers = employers;
+        _jobSeekers = jobSeekers;
+      });
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not load moderation data.')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _loading = false);
+      }
+    }
+  }
+
+  Future<String?> _promptForReason({
+    required String title,
+    required String hintText,
+    bool allowBlank = false,
+  }) async {
+    final controller = TextEditingController();
+    String? errorText;
+    return showDialog<String>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text(title),
+          content: TextField(
+            controller: controller,
+            maxLines: 4,
+            decoration: InputDecoration(
+              hintText: hintText,
+              border: const OutlineInputBorder(),
+              errorText: errorText,
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                final value = controller.text.trim();
+                if (!allowBlank && value.isEmpty) {
+                  setDialogState(() {
+                    errorText = 'Reason is required.';
+                  });
+                  return;
+                }
+                Navigator.of(dialogContext).pop(value);
+              },
+              child: const Text('Confirm'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _deleteReportedListing(JobListingReport report) async {
+    final reason = await _promptForReason(
+      title: 'Delete reported listing',
+      hintText: 'Explain why this listing is being removed.',
+    );
+    if (reason == null) {
+      return;
+    }
+
+    await widget.adminRepository.deleteJobListing(report.jobListingId, reason);
+    await widget.adminRepository.resolveJobListingReport(
+      report.id,
+      status: JobListingReport.statusDeleted,
+      adminNotes: reason,
+    );
+    await _loadData();
+
+    if (!mounted) {
+      return;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Deleted reported listing "${report.jobTitle}".')),
+    );
+  }
+
+  Future<void> _dismissReport(JobListingReport report) async {
+    final note = await _promptForReason(
+      title: 'Dismiss report',
+      hintText: 'Optional note for audit history.',
+      allowBlank: true,
+    );
+    if (note == null) {
+      return;
+    }
+
+    await widget.adminRepository.resolveJobListingReport(
+      report.id,
+      status: JobListingReport.statusDismissed,
+      adminNotes: note,
+    );
+    await _loadData();
+  }
+
+  Future<void> _toggleEmployerBan(EmployerModeration employer) async {
+    final nextIsBanned = !employer.isBanned;
+    final reason = nextIsBanned
+        ? await _promptForReason(
+            title: 'Ban employer',
+            hintText: 'Explain why this employer is being banned.',
+          )
+        : '';
+    if (nextIsBanned && reason == null) {
+      return;
+    }
+
+    await widget.adminRepository.setEmployerBan(
+      employer.employerId,
+      isBanned: nextIsBanned,
+      reason: nextIsBanned ? reason : '',
+      companyName: employer.companyName,
+    );
+    await _loadData();
+  }
+
+  Future<void> _toggleJobSeekerBan(JobSeekerModeration jobSeeker) async {
+    final nextIsBanned = !jobSeeker.isBanned;
+    final reason = nextIsBanned
+        ? await _promptForReason(
+            title: 'Ban job seeker',
+            hintText: 'Explain why this job seeker is being banned.',
+          )
+        : '';
+    if (nextIsBanned && reason == null) {
+      return;
+    }
+
+    await widget.adminRepository.setJobSeekerBan(
+      jobSeeker.userId,
+      isBanned: nextIsBanned,
+      reason: nextIsBanned ? reason : '',
+      displayName: jobSeeker.displayName,
+      email: jobSeeker.email,
+    );
+    await _loadData();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    final bannedEmployerCount = _employers
+        .where((item) => item.isBanned)
+        .length;
+    final bannedJobSeekerCount = _jobSeekers
+        .where((item) => item.isBanned)
+        .length;
+    final openReportCount = _reports
+        .where((item) => item.status == JobListingReport.statusOpen)
+        .length;
+
+    return RefreshIndicator(
+      onRefresh: _loadData,
+      child: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              SizedBox(
+                width: 180,
+                child: _StatCard(
+                  label: 'Open Reports',
+                  value: '$openReportCount',
+                  icon: Icons.flag_outlined,
+                  color: Colors.red,
+                ),
+              ),
+              SizedBox(
+                width: 180,
+                child: _StatCard(
+                  label: 'Banned Employers',
+                  value: '$bannedEmployerCount',
+                  icon: Icons.business_center,
+                  color: Colors.deepOrange,
+                ),
+              ),
+              SizedBox(
+                width: 180,
+                child: _StatCard(
+                  label: 'Banned Job Seekers',
+                  value: '$bannedJobSeekerCount',
+                  icon: Icons.person_off_outlined,
+                  color: Colors.purple,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 24),
+          Text(
+            'Reported Listings',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              Text(
+                'View:',
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  color: Colors.grey.shade700,
+                ),
+              ),
+              ..._reportStatusOptions.map((option) {
+                final key = option.$1;
+                final label = option.$2;
+                return ChoiceChip(
+                  label: Text(label),
+                  selected: _reportStatusFilter == key,
+                  onSelected: (_) {
+                    setState(() {
+                      _reportStatusFilter = key;
+                    });
+                  },
+                );
+              }),
+            ],
+          ),
+          const SizedBox(height: 8),
+          if (_filteredReports.isEmpty)
+            const Text(
+              'No reports match the selected filter.',
+              style: TextStyle(color: Colors.grey),
+            )
+          else
+            ..._filteredReports.map((report) {
+              return Card(
+                margin: const EdgeInsets.only(bottom: 10),
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        report.jobTitle,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w700,
+                          fontSize: 15,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text('${report.company} • ${report.location}'),
+                      const SizedBox(height: 8),
+                      Text('Reason: ${report.reason}'),
+                      const SizedBox(height: 4),
+                      Text('Status: ${report.status}'),
+                      if (report.details.trim().isNotEmpty) ...[
+                        const SizedBox(height: 4),
+                        Text(report.details.trim()),
+                      ],
+                      const SizedBox(height: 6),
+                      Text(
+                        'Reported ${report.createdAt.toLocal().toString().substring(0, 19)}',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey.shade600,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          if (report.status == JobListingReport.statusOpen) ...[
+                            ElevatedButton.icon(
+                              onPressed: () => _deleteReportedListing(report),
+                              icon: const Icon(Icons.delete_outline),
+                              label: const Text('Delete Listing'),
+                            ),
+                            if ((report.employerId ?? '').isNotEmpty)
+                              OutlinedButton.icon(
+                                onPressed: () {
+                                  final match = _employers.where(
+                                    (item) =>
+                                        item.employerId == report.employerId,
+                                  );
+                                  final employer = match.isEmpty
+                                      ? EmployerModeration(
+                                          employerId: report.employerId!,
+                                          companyName: report.company,
+                                        )
+                                      : match.first;
+                                  _toggleEmployerBan(employer);
+                                },
+                                icon: const Icon(Icons.gavel_outlined),
+                                label: const Text('Ban Employer'),
+                              ),
+                            OutlinedButton.icon(
+                              onPressed: () => _dismissReport(report),
+                              icon: const Icon(Icons.check_circle_outline),
+                              label: const Text('Dismiss'),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }),
+          const SizedBox(height: 24),
+          Text(
+            'Employer Moderation',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 8),
+          ..._employers.map((employer) {
+            final summary =
+                '${employer.adminDeletedJobCount} admin-deleted listing${employer.adminDeletedJobCount == 1 ? '' : 's'}';
+            return ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(
+                employer.isBanned ? Icons.block : Icons.business_outlined,
+                color: employer.isBanned ? Colors.red : null,
+              ),
+              title: Text(
+                employer.companyName.trim().isEmpty
+                    ? employer.employerId
+                    : employer.companyName,
+              ),
+              subtitle: Text(
+                employer.isBanned && employer.banReason.trim().isNotEmpty
+                    ? '$summary • Banned: ${employer.banReason}'
+                    : summary,
+              ),
+              trailing: TextButton(
+                onPressed: () => _toggleEmployerBan(employer),
+                child: Text(employer.isBanned ? 'Unban' : 'Ban'),
+              ),
+            );
+          }),
+          const SizedBox(height: 24),
+          Text(
+            'Job Seeker Moderation',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 8),
+          ..._jobSeekers.map((jobSeeker) {
+            final displayName = jobSeeker.displayName.trim().isNotEmpty
+                ? jobSeeker.displayName
+                : jobSeeker.email.trim().isNotEmpty
+                ? jobSeeker.email
+                : jobSeeker.userId;
+            final summary =
+                '${jobSeeker.adminDeletedApplicationCount} admin-deleted application${jobSeeker.adminDeletedApplicationCount == 1 ? '' : 's'}';
+            return ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(
+                jobSeeker.isBanned
+                    ? Icons.person_off_outlined
+                    : Icons.person_outline,
+                color: jobSeeker.isBanned ? Colors.red : null,
+              ),
+              title: Text(displayName),
+              subtitle: Text(
+                jobSeeker.isBanned && jobSeeker.banReason.trim().isNotEmpty
+                    ? '$summary • Banned: ${jobSeeker.banReason}'
+                    : summary,
+              ),
+              trailing: TextButton(
+                onPressed: () => _toggleJobSeekerBan(jobSeeker),
+                child: Text(jobSeeker.isBanned ? 'Unban' : 'Ban'),
+              ),
+            );
+          }),
+        ],
+      ),
+    );
+  }
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 // Users & Data Tab
 // ──────────────────────────────────────────────────────────────────────────────
@@ -390,6 +893,272 @@ class _UsersDataTabState extends State<_UsersDataTab> {
   bool _loading = false;
   List<JobListing> _jobListings = [];
   List<Application> _applications = [];
+  String _jobListingSort = 'recent';
+  String _applicationSort = 'recent';
+
+  static const List<(String, String)> _jobListingSortOptions = [
+    ('recent', 'Most Recent'),
+    ('count', 'Most Listings'),
+    ('name', 'Employer Name'),
+  ];
+
+  static const List<(String, String)> _applicationSortOptions = [
+    ('recent', 'Most Recent'),
+    ('count', 'Most Applications'),
+    ('name', 'Job Seeker Name'),
+  ];
+
+  String _employerGroupLabel(JobListing listing) {
+    final company = listing.company.trim();
+    return company.isNotEmpty ? company : 'Unknown Employer';
+  }
+
+  String _jobSeekerGroupLabel(Application application) {
+    final applicantName = application.applicantName.trim();
+    if (applicantName.isNotEmpty) {
+      return applicantName;
+    }
+
+    final applicantEmail = application.applicantEmail.trim();
+    if (applicantEmail.isNotEmpty) {
+      return applicantEmail;
+    }
+
+    final seekerId = application.jobSeekerId.trim();
+    return seekerId.isNotEmpty ? seekerId : 'Unknown Job Seeker';
+  }
+
+  DateTime _jobListingRecency(JobListing listing) {
+    return listing.updatedAt ??
+        listing.createdAt ??
+        DateTime.fromMillisecondsSinceEpoch(0);
+  }
+
+  DateTime _applicationRecency(Application application) {
+    return application.updatedAt.isAfter(application.appliedAt)
+        ? application.updatedAt
+        : application.appliedAt;
+  }
+
+  String _formatGroupRecency(DateTime value) {
+    final local = value.toLocal();
+    final month = local.month.toString().padLeft(2, '0');
+    final day = local.day.toString().padLeft(2, '0');
+    final year = local.year.toString();
+    final hour = (local.hour % 12 == 0 ? 12 : local.hour % 12)
+        .toString()
+        .padLeft(2, '0');
+    final minute = local.minute.toString().padLeft(2, '0');
+    final meridiem = local.hour >= 12 ? 'PM' : 'AM';
+    return '$month/$day/$year $hour:$minute $meridiem';
+  }
+
+  Widget _buildGroupedSection<T>({
+    required BuildContext context,
+    required String title,
+    required IconData icon,
+    required List<T> items,
+    required String emptyText,
+    required String Function(T item) groupLabel,
+    required String Function(List<T> items) groupSummary,
+    required DateTime Function(T item) itemRecency,
+    required String selectedSort,
+    required List<(String, String)> sortOptions,
+    required ValueChanged<String?> onSortChanged,
+    required Widget Function(T item) itemBuilder,
+  }) {
+    final groupedItems = <String, List<T>>{};
+    for (final item in items) {
+      groupedItems.putIfAbsent(groupLabel(item), () => []).add(item);
+    }
+
+    final groupEntries =
+        groupedItems.entries.map((entry) {
+          final sortedItems = [...entry.value]
+            ..sort((a, b) => itemRecency(b).compareTo(itemRecency(a)));
+          return MapEntry(entry.key, sortedItems);
+        }).toList()..sort((a, b) {
+          switch (selectedSort) {
+            case 'count':
+              final countCompare = b.value.length.compareTo(a.value.length);
+              if (countCompare != 0) {
+                return countCompare;
+              }
+              break;
+            case 'name':
+              return a.key.toLowerCase().compareTo(b.key.toLowerCase());
+            case 'recent':
+            default:
+              final recentCompare = itemRecency(
+                b.value.first,
+              ).compareTo(itemRecency(a.value.first));
+              if (recentCompare != 0) {
+                return recentCompare;
+              }
+              break;
+          }
+          return a.key.toLowerCase().compareTo(b.key.toLowerCase());
+        });
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final isNarrow = constraints.maxWidth < 620;
+            final sortDropdown = DropdownButtonFormField<String>(
+              value: selectedSort,
+              isDense: true,
+              decoration: const InputDecoration(
+                labelText: 'Sort',
+                border: OutlineInputBorder(),
+                contentPadding: EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 10,
+                ),
+              ),
+              items: sortOptions
+                  .map(
+                    (option) => DropdownMenuItem<String>(
+                      value: option.$1,
+                      child: Text(option.$2),
+                    ),
+                  )
+                  .toList(),
+              onChanged: onSortChanged,
+            );
+
+            if (isNarrow) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(icon, size: 20, color: Colors.blueGrey.shade700),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          title,
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  SizedBox(width: double.infinity, child: sortDropdown),
+                ],
+              );
+            }
+
+            return Row(
+              children: [
+                Icon(icon, size: 20, color: Colors.blueGrey.shade700),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    title,
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                SizedBox(width: 170, child: sortDropdown),
+              ],
+            );
+          },
+        ),
+        const SizedBox(height: 8),
+        if (items.isEmpty)
+          Text(emptyText, style: const TextStyle(color: Colors.grey))
+        else
+          ...groupEntries.map((entry) {
+            return Container(
+              margin: const EdgeInsets.only(bottom: 10),
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.grey.shade300),
+                borderRadius: BorderRadius.circular(10),
+                color: Colors.white,
+              ),
+              child: ExpansionTile(
+                tilePadding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 2,
+                ),
+                childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                title: Text(
+                  '${entry.key} (${entry.value.length})',
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+                subtitle: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      groupSummary(entry.value),
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.blueGrey.shade700,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'Last updated ${_formatGroupRecency(itemRecency(entry.value.first))}',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: Colors.grey.shade600,
+                      ),
+                    ),
+                  ],
+                ),
+                children: entry.value.map(itemBuilder).toList(),
+              ),
+            );
+          }),
+      ],
+    );
+  }
+
+  Widget _buildAdminJobListingTile(JobListing listing) {
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: const Icon(Icons.work_outline),
+      title: Text(listing.title),
+      subtitle: Text('${listing.location} • ${listing.type}'),
+      trailing: !listing.isActive
+          ? Chip(
+              label: const Text('Archived'),
+              backgroundColor: Colors.grey.shade200,
+            )
+          : null,
+    );
+  }
+
+  Widget _buildAdminApplicationTile(Application application) {
+    final locationParts = [
+      application.applicantCity.trim(),
+      application.applicantStateOrProvince.trim(),
+      application.applicantCountry.trim(),
+    ].where((part) => part.isNotEmpty).toList();
+    final subtitleParts = <String>[
+      'Status: ${application.status}',
+      if (locationParts.isNotEmpty) locationParts.join(', '),
+    ];
+
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: const Icon(Icons.assignment_ind_outlined),
+      title: Text(
+        application.applicantEmail.trim().isNotEmpty
+            ? application.applicantEmail
+            : application.jobId,
+      ),
+      subtitle: Text(subtitleParts.join(' • ')),
+      trailing: application.isArchived
+          ? const Icon(Icons.archive, color: Colors.grey)
+          : Text(
+              '${application.matchPercentage}%',
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+    );
+  }
 
   @override
   void initState() {
@@ -433,52 +1202,70 @@ class _UsersDataTabState extends State<_UsersDataTab> {
       child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          Text(
-            'Job Listings (${_jobListings.length})',
-            style: Theme.of(context).textTheme.titleMedium,
+          _buildGroupedSection<JobListing>(
+            context: context,
+            title: 'Job Listings (${_jobListings.length})',
+            icon: Icons.business_center_outlined,
+            items: _jobListings,
+            emptyText: 'No job listings found.',
+            groupLabel: _employerGroupLabel,
+            groupSummary: (items) {
+              final activeCount = items.where((item) => item.isActive).length;
+              final archivedCount = items.length - activeCount;
+              if (archivedCount <= 0) {
+                return '$activeCount active listing${activeCount == 1 ? '' : 's'}';
+              }
+              return '$activeCount active • $archivedCount archived';
+            },
+            itemRecency: _jobListingRecency,
+            selectedSort: _jobListingSort,
+            sortOptions: _jobListingSortOptions,
+            onSortChanged: (value) {
+              if (value == null) {
+                return;
+              }
+              setState(() {
+                _jobListingSort = value;
+              });
+            },
+            itemBuilder: _buildAdminJobListingTile,
           ),
-          const SizedBox(height: 8),
-          if (_jobListings.isEmpty)
-            const Text(
-              'No job listings found.',
-              style: TextStyle(color: Colors.grey),
-            )
-          else
-            ..._jobListings.take(20).map((j) {
-              return ListTile(
-                leading: const Icon(Icons.work_outline),
-                title: Text(j.title),
-                subtitle: Text(j.company),
-                trailing: !j.isActive
-                    ? Chip(
-                        label: const Text('Archived'),
-                        backgroundColor: Colors.grey.shade200,
-                      )
-                    : null,
-              );
-            }),
           const SizedBox(height: 24),
-          Text(
-            'Applications (${_applications.length})',
-            style: Theme.of(context).textTheme.titleMedium,
+          _buildGroupedSection<Application>(
+            context: context,
+            title: 'Applications (${_applications.length})',
+            icon: Icons.groups_outlined,
+            items: _applications,
+            emptyText: 'No applications found.',
+            groupLabel: _jobSeekerGroupLabel,
+            groupSummary: (items) {
+              final activeCount = items
+                  .where((item) => !item.isArchived)
+                  .length;
+              final archivedCount = items.length - activeCount;
+              final highestMatch = items.isEmpty
+                  ? 0
+                  : items
+                        .map((item) => item.matchPercentage)
+                        .reduce((a, b) => a > b ? a : b);
+              if (archivedCount <= 0) {
+                return '$activeCount active • best match $highestMatch%';
+              }
+              return '$activeCount active • $archivedCount archived • best match $highestMatch%';
+            },
+            itemRecency: _applicationRecency,
+            selectedSort: _applicationSort,
+            sortOptions: _applicationSortOptions,
+            onSortChanged: (value) {
+              if (value == null) {
+                return;
+              }
+              setState(() {
+                _applicationSort = value;
+              });
+            },
+            itemBuilder: _buildAdminApplicationTile,
           ),
-          const SizedBox(height: 8),
-          if (_applications.isEmpty)
-            const Text(
-              'No applications found.',
-              style: TextStyle(color: Colors.grey),
-            )
-          else
-            ..._applications.take(20).map((a) {
-              return ListTile(
-                leading: const Icon(Icons.assignment_ind_outlined),
-                title: Text(a.applicantName),
-                subtitle: Text('Status: ${a.status}'),
-                trailing: a.isArchived
-                    ? const Icon(Icons.archive, color: Colors.grey)
-                    : null,
-              );
-            }),
         ],
       ),
     );

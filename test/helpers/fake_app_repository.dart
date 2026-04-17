@@ -2,6 +2,7 @@ import 'package:aviation_job_listings/models/application.dart';
 import 'package:aviation_job_listings/models/application_feedback.dart';
 import 'package:aviation_job_listings/models/employer_profiles_data.dart';
 import 'package:aviation_job_listings/models/job_listing.dart';
+import 'package:aviation_job_listings/models/job_listing_report.dart';
 import 'package:aviation_job_listings/models/job_listing_template.dart';
 import 'package:aviation_job_listings/models/job_load_result.dart';
 import 'package:aviation_job_listings/models/job_seeker_profile.dart';
@@ -15,6 +16,7 @@ class FakeAppRepository implements AppRepository {
   final List<JobListingTemplate> _templates = <JobListingTemplate>[];
   final List<Application> _applications = <Application>[];
   final List<ApplicationFeedback> _feedback = <ApplicationFeedback>[];
+  final List<JobListingReport> _reports = <JobListingReport>[];
 
   @override
   Future<Set<String>> loadFavoriteIds() async => _favoriteIds;
@@ -93,18 +95,21 @@ class FakeAppRepository implements AppRepository {
 
   @override
   Future<List<Application>> getApplicationsBySeeker(String seekerId) async {
-    return _applications
-        .where((app) => app.jobSeekerId == seekerId)
-        .toList();
+    return _applications.where((app) => app.jobSeekerId == seekerId).toList();
   }
 
   @override
-  Future<List<Application>> loadApplicationsForEmployer(String employerId) async {
+  Future<List<Application>> loadApplicationsForEmployer(
+    String employerId,
+  ) async {
     return _applications.where((app) => app.employerId == employerId).toList();
   }
 
   @override
-  Future<void> updateApplicationStatus(String applicationId, String status) async {
+  Future<void> updateApplicationStatus(
+    String applicationId,
+    String status,
+  ) async {
     final index = _applications.indexWhere((app) => app.id == applicationId);
     if (index < 0) {
       return;
@@ -152,11 +157,17 @@ class FakeAppRepository implements AppRepository {
     String seekerId,
     String jobId,
   ) async {
-    final matching = _applications
-        .where((app) => app.jobSeekerId == seekerId && app.jobId == jobId)
-        .toList()
-      ..sort((a, b) => b.appliedAt.compareTo(a.appliedAt));
+    final matching =
+        _applications
+            .where((app) => app.jobSeekerId == seekerId && app.jobId == jobId)
+            .toList()
+          ..sort((a, b) => b.appliedAt.compareTo(a.appliedAt));
     return matching.isEmpty ? null : matching.first;
+  }
+
+  @override
+  Future<void> reportJobListing(JobListingReport report) async {
+    _reports.add(report);
   }
 
   @override
