@@ -113,7 +113,7 @@ void main() {
 
       // For an empty profile, the match is <70% (stretch), so tapping Apply
       // opens the "Apply Anyway" quick-apply dialog.
-      await tester.tap(find.byTooltip('Apply').hitTestable().first);
+      await tester.tap(find.text('Apply').hitTestable().first);
       await tester.pumpAndSettle();
 
       // The quick apply dialog should now be visible.
@@ -185,7 +185,7 @@ void main() {
   );
 
   testWidgets(
-    'external listing shows external apply and skips in-app apply flow',
+    'external listing still triggers apply callback from details page',
     (WidgetTester tester) async {
       var applyTapped = false;
       final externalJob = JobListing.fromJson({
@@ -212,7 +212,6 @@ void main() {
             onFavorite: () {},
             onApply: () => applyTapped = true,
             profile: const JobSeekerProfile(),
-            isExternalListing: true,
             hasApplied: false,
             matchPercentage: 95,
           ),
@@ -220,7 +219,6 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.text('External posting'), findsOneWidget);
       expect(find.text('Apply Externally'), findsOneWidget);
       expect(find.text('Apply Anyway'), findsNothing);
       expect(find.text('Quick Apply'), findsNothing);
@@ -229,6 +227,64 @@ void main() {
       await tester.tap(find.text('Apply Externally'));
       await tester.pumpAndSettle();
       expect(applyTapped, isTrue);
+    },
+  );
+
+  testWidgets(
+    'external listing shows EXTERNAL JOB label on jobs and search cards',
+    (WidgetTester tester) async {
+      final repository = FakeAppRepository();
+      await repository.createJob(
+        JobListing.fromJson({
+          'id': 'external-label-regression',
+          'title': 'External Label Regression Role',
+          'company': 'Mountain Air Charter',
+          'location': 'Boise, ID',
+          'type': 'Full-Time',
+          'crewRole': 'Single Pilot',
+          'faaRules': const <String>['Part 91'],
+          'description':
+              'Regression test listing to verify external badge text rendering.',
+          'faaCertificates': const <String>[],
+          'flightExperience': const <String>[],
+          'aircraftFlown': const <String>[],
+          'isExternal': true,
+          'externalApplyUrl': 'https://example.com/apply',
+        }),
+      );
+
+      await repository.createJob(
+        const JobListing(
+          id: 'internal-label-control',
+          title: 'Internal Control Role',
+          company: 'SkyBridge Air',
+          location: 'Denver, CO',
+          type: 'Full-Time',
+          crewRole: 'Single Pilot',
+          faaRules: ['Part 91'],
+          description: 'Control listing without external marker.',
+          faaCertificates: ['Airline Transport Pilot (ATP)'],
+          flightExperience: ['Total Time'],
+          flightHours: {'Total Time': 1500},
+          aircraftFlown: ['Pilatus PC-12'],
+          employerId: 'emp-skybridge',
+        ),
+      );
+
+      await tester.pumpWidget(MyApp(repository: repository));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Jobs'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('External Label Regression Role'), findsOneWidget);
+      expect(find.text('EXTERNAL JOB'), findsOneWidget);
+
+      await tester.tap(find.text('Search').last);
+      await tester.pumpAndSettle();
+
+      expect(find.text('External Label Regression Role'), findsOneWidget);
+      expect(find.text('EXTERNAL JOB'), findsOneWidget);
     },
   );
 }

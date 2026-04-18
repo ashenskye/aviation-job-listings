@@ -517,6 +517,51 @@ class SupabaseAdminRepository implements AdminRepository {
   }
 
   @override
+  Future<void> hardDeleteJobListing(String jobId, String reason) async {
+    final beforeRow = await _client
+        .from('job_listings')
+        .select()
+        .eq('id', jobId)
+        .maybeSingle();
+
+    await _client.from('job_listings').delete().eq('id', jobId);
+
+    final employerId = beforeRow?['employer_id']?.toString();
+    if (employerId != null && employerId.isNotEmpty) {
+      await _incrementEmployerDeletedJobCount(
+        employerId: employerId,
+        companyName: beforeRow?['company']?.toString() ?? '',
+      );
+    }
+
+    await _client
+        .from('job_listing_reports')
+        .update({
+          'status': JobListingReport.statusDeleted,
+          'reviewed_at': DateTime.now().toIso8601String(),
+          'reviewed_by_admin_user_id': _adminUserId,
+          'admin_notes': reason,
+        })
+        .eq('job_listing_id', jobId)
+        .eq('status', JobListingReport.statusOpen);
+
+    await logAdminAction(
+      AdminActionLog(
+        id: _pendingId,
+        adminUserId: _adminUserId,
+        actionType: AdminActionLog.actionDelete,
+        resourceType: AdminActionLog.resourceJobListing,
+        resourceId: jobId,
+        changesBefore: beforeRow != null
+            ? Map<String, dynamic>.from(beforeRow)
+            : null,
+        reason: reason,
+        timestamp: DateTime.now(),
+      ),
+    );
+  }
+
+  @override
   Future<void> deleteEmployerProfile(String employerId, String reason) async {
     final isAdminOwnedEmployer = await _isAdminOwnedEmployer(employerId);
     if (isAdminOwnedEmployer) {
@@ -699,7 +744,8 @@ class SupabaseAdminRepository implements AdminRepository {
 
     final nextRow = {
       'employer_id': employerId,
-      'company_name': ?companyName,
+      'company_name':
+        companyName ?? beforeRow?['company_name']?.toString() ?? '',
       'admin_deleted_job_count':
           previousDeletedJobCount + deletedJobListingCount,
       'is_banned': isBanned,
@@ -767,8 +813,9 @@ class SupabaseAdminRepository implements AdminRepository {
 
     final nextRow = {
       'user_id': userId,
-      'display_name': ?displayName,
-      'email': ?email,
+      'display_name':
+          displayName ?? beforeRow?['display_name']?.toString() ?? '',
+      'email': email ?? beforeRow?['email']?.toString() ?? '',
       'admin_deleted_application_count':
           previousDeletedApplicationCount + deletedApplicationCount,
       'is_banned': isBanned,

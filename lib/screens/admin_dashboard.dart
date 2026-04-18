@@ -4,6 +4,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/admin_action_log.dart';
 import '../models/application.dart';
+import '../models/aviation_location_catalogs.dart';
+import '../models/aviation_option_catalogs.dart';
 import '../models/employer_moderation.dart';
 import '../models/job_listing.dart';
 import '../models/job_listing_report.dart';
@@ -30,7 +32,8 @@ class AdminDashboard extends StatefulWidget {
   final String adminEmail;
   final String adminRoleLabel;
   final AdminInterfaceView currentView;
-  final ValueChanged<AdminInterfaceView> onSwitchView;
+  final void Function(BuildContext context, AdminInterfaceView view)
+  onSwitchView;
 
   @override
   State<AdminDashboard> createState() => _AdminDashboardState();
@@ -39,6 +42,15 @@ class AdminDashboard extends StatefulWidget {
 class _AdminDashboardState extends State<AdminDashboard>
     with SingleTickerProviderStateMixin {
   late final TabController _tabController;
+
+  String get _displayAdminRoleLabel {
+    final trimmed = widget.adminRoleLabel.trim();
+    if (trimmed.isEmpty) {
+      return trimmed;
+    }
+
+    return '${trimmed[0].toUpperCase()}${trimmed.substring(1).toLowerCase()}';
+  }
 
   int _totalJobSeekers = 0;
   int _totalEmployers = 0;
@@ -141,9 +153,10 @@ class _AdminDashboardState extends State<AdminDashboard>
         title: const Text('Admin Dashboard'),
         actions: [
           PopupMenuButton<AdminInterfaceView>(
+            key: const ValueKey('admin-dashboard-profile-switcher'),
             icon: const Icon(Icons.person),
             initialValue: widget.currentView,
-            onSelected: widget.onSwitchView,
+            onSelected: (value) => widget.onSwitchView(context, value),
             itemBuilder: (context) => const [
               PopupMenuItem(
                 value: AdminInterfaceView.jobSeeker,
@@ -165,7 +178,7 @@ class _AdminDashboardState extends State<AdminDashboard>
               child: Center(
                 child: Chip(
                   visualDensity: VisualDensity.compact,
-                  label: Text('acct: ${widget.adminRoleLabel}'),
+                  label: Text('acct: $_displayAdminRoleLabel'),
                 ),
               ),
             ),
@@ -259,90 +272,36 @@ class _ExternalPostingsTab extends StatefulWidget {
 enum _ExternalPostsView { create, view }
 
 class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
-  static const List<String> _availableFaaCertificates = [
-    'Airline Transport Pilot (ATP)',
-    'Commercial Pilot (CPL)',
-    'Instrument Rating (IFR)',
-    'Private Pilot (PPL)',
-    'Airframe & Powerplant (A&P)',
-    'Inspection Authorization (IA)',
-    'Dispatcher (DSP)',
-  ];
+  static const List<String> _availableFaaCertificates =
+      availableFaaCertificateOptions;
 
-  static const List<String> _availableInstructorCertificates = [
-    'Flight Instructor (CFI)',
-    'Instrument Instructor (CFII)',
-    'Multi-Engine Instructor (MEI)',
-  ];
+  static const List<String> _availableInstructorCertificates =
+      availableInstructorCertificateOptions;
 
-  static const List<String> _availableFaaRules = [
-    'Part 121',
-    'Part 135',
-    'Part 91',
-  ];
+  static const List<String> _availableFaaRules = availableFaaRuleOptions;
 
-  static const List<String> _availableEmployerFlightHours = [
-    'Total Time',
-    'PIC Jet',
-    'SIC Jet',
-    'PIC Turbine',
-    'SIC Turbine',
-    'PIC',
-    'SIC',
-    'Multi-engine',
-  ];
+  static const List<String> _availableEmployerFlightHours =
+      availableEmployerFlightHourOptions;
 
-  static const List<String> _availableInstructorHours = [
-    'Total Instructor Hours',
-    'Instrument (CFII)',
-    'Multi-Engine (MEI)',
-  ];
+  static const List<String> _availableInstructorHours =
+      availableInstructorHourOptions;
 
-  static const List<String> _availableSpecialtyExperience = [
-    'Fire Fighting',
-    'Aerobatic',
-    'Floatplane',
-    'Tailwheel',
-    'Off Airport',
-    'Banner Towing',
-    'Low Altitude',
-    'Aerial Survey',
-  ];
+  static const List<String> _availableSpecialtyExperience =
+      availableSpecialtyExperienceOptions;
 
-  static const List<String> _availableJobTypes = [
-    'Full-Time',
-    'Part-Time',
-    'Seasonal',
-    'Rotations',
-    'Contract',
-  ];
+  static const List<String> _availableJobTypes = availableJobTypeOptions;
 
-  static const List<String> _availablePayRateMetrics = [
-    'Flight Hour',
-    'Hourly Pay for Duty Time',
-    'Daily Rate',
-    'Weekly Salary',
-    'Monthly Salary',
-    'Annual Salary',
-    'Shift',
-    'Contract Completion',
-  ];
+  static const List<String> _availablePayRateMetrics =
+      availablePayRateMetricOptions;
 
-  static const List<String> _availableRatingSelections = [
-    'Multi-Engine Land',
-    'Single-Engine Land',
-    'Multi-Engine Sea',
-    'Single-Engine Sea',
-    'Tailwheel Endorsement',
-    'Rotorcraft',
-    'Gyroplane',
-    'Glider',
-    'Lighter-than-Air',
-  ];
+  static const List<String> _availableRatingSelections =
+      availableRatingSelectionOptions;
 
   final _titleController = TextEditingController();
   final _companyController = TextEditingController();
-  final _locationController = TextEditingController();
+  final _locationCityController = TextEditingController();
+  final _locationStateController = TextEditingController();
+  final _locationCountryController = TextEditingController(text: 'USA');
   final _employmentTypeController = TextEditingController();
   final _descriptionController = TextEditingController();
   final _startingPayController = TextEditingController();
@@ -378,6 +337,7 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
   @override
   void initState() {
     super.initState();
+    _locationCountryController.text = 'USA';
     _loadExternalListings();
   }
 
@@ -385,7 +345,9 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
   void dispose() {
     _titleController.dispose();
     _companyController.dispose();
-    _locationController.dispose();
+    _locationCityController.dispose();
+    _locationStateController.dispose();
+    _locationCountryController.dispose();
     _employmentTypeController.dispose();
     _descriptionController.dispose();
     _startingPayController.dispose();
@@ -427,7 +389,14 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
 
     final title = _titleController.text.trim();
     final company = _companyController.text.trim();
-    final location = _locationController.text.trim();
+    final locationError = _validateLocationInput();
+    if (locationError != null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(locationError)));
+      return;
+    }
+    final location = _buildListingLocation();
     final employmentType = _employmentTypeController.text.trim();
     final sourceName = _sourceNameController.text.trim();
     final rawSourceUrl = _sourceUrlController.text.trim();
@@ -446,7 +415,9 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
       if (!looksValid) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Source URL looks invalid. Please check and try again.'),
+            content: Text(
+              'Source URL looks invalid. Please check and try again.',
+            ),
           ),
         );
         return;
@@ -458,7 +429,9 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
     final selectedTypeRatings = _splitCommaSeparatedValues(
       _typeRatingsController.text,
     );
-    final selectedAircraft = _splitCommaSeparatedValues(_aircraftController.text);
+    final selectedAircraft = _splitCommaSeparatedValues(
+      _aircraftController.text,
+    );
 
     final selectedFlightHours = {
       for (final entry in _selectedFlightHours.entries)
@@ -491,7 +464,8 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
 
     final descriptionLines = <String>[
       if (descriptionInput.isNotEmpty) descriptionInput,
-      if (descriptionInput.isEmpty) 'Externally sourced listing posted by admin.',
+      if (descriptionInput.isEmpty)
+        'Externally sourced listing posted by admin.',
       '',
       'External listing details:',
       if (sourceName.isNotEmpty) 'Source: $sourceName',
@@ -511,7 +485,9 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
           location: location.isEmpty ? 'Location not specified' : location,
           employmentType: employmentType.isEmpty ? 'External' : employmentType,
           crewRole: _selectedCrewRole,
-          crewPosition: _selectedCrewRole == 'Crew' ? _selectedCrewPosition : null,
+          crewPosition: _selectedCrewRole == 'Crew'
+              ? _selectedCrewPosition
+              : null,
           faaRules: _selectedFaaRules.toList(),
           faaCertificates: _selectedFaaCertificates.toList(),
           typeRatingsRequired: selectedTypeRatings,
@@ -556,7 +532,9 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
           location: location.isEmpty ? 'Location not specified' : location,
           type: employmentType.isEmpty ? 'External' : employmentType,
           crewRole: _selectedCrewRole,
-          crewPosition: _selectedCrewRole == 'Crew' ? _selectedCrewPosition : null,
+          crewPosition: _selectedCrewRole == 'Crew'
+              ? _selectedCrewPosition
+              : null,
           faaRules: _selectedFaaRules.toList(),
           faaCertificates: _selectedFaaCertificates.toList(),
           typeRatingsRequired: selectedTypeRatings,
@@ -622,7 +600,9 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
   void _clearExternalListingForm() {
     _titleController.clear();
     _companyController.clear();
-    _locationController.clear();
+    _locationCityController.clear();
+    _locationStateController.clear();
+    _locationCountryController.text = 'USA';
     _employmentTypeController.clear();
     _descriptionController.clear();
     _startingPayController.clear();
@@ -656,6 +636,32 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
         .where((value) => value.isNotEmpty)
         .toSet()
         .toList();
+  }
+
+  String? _validateLocationInput() {
+    final city = _locationCityController.text.trim();
+    final state = _locationStateController.text.trim();
+
+    if (city.isEmpty && state.isEmpty) {
+      return null;
+    }
+    if (city.isEmpty || state.isEmpty) {
+      return 'Location must include both city and state / province.';
+    }
+    if (!isValidStateProvinceForCountry(
+      _locationCountryController.text,
+      state,
+    )) {
+      return 'Choose a valid state / province from the dropdown list.';
+    }
+    return null;
+  }
+
+  String _buildListingLocation() {
+    return formatCityStateLocation(
+      city: _locationCityController.text,
+      stateOrProvince: _locationStateController.text,
+    );
   }
 
   int? _parsePositiveInt(String raw) {
@@ -739,13 +745,16 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
         : (listing.crewPosition == 'Co-Pilot'
               ? 'Crew Member: Co-Pilot'
               : 'Crew Member: Captain');
+    final parsedLocation = parseCityStateLocation(listing.location);
 
     setState(() {
       _editingListing = listing;
       _selectedView = _ExternalPostsView.create;
       _titleController.text = listing.title;
       _companyController.text = listing.company;
-      _locationController.text = listing.location;
+      _locationCityController.text = parsedLocation.city;
+      _locationStateController.text = parsedLocation.stateOrProvince;
+      _locationCountryController.text = parsedLocation.country;
       _employmentTypeController.text = listing.type;
       _descriptionController.text = summary;
       _typeRatingsController.text = listing.typeRatingsRequired.join(', ');
@@ -789,6 +798,133 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
 
   void _cancelEditing() {
     setState(_clearExternalListingForm);
+  }
+
+  Widget _buildLocationCountryField() {
+    final normalizedCountry = normalizeCountryValue(
+      _locationCountryController.text,
+    );
+    return DropdownButtonFormField<String>(
+      key: ValueKey('admin-external-country-${normalizedCountry ?? 'none'}'),
+      initialValue: normalizedCountry,
+      decoration: const InputDecoration(
+        labelText: 'Country',
+        border: OutlineInputBorder(),
+      ),
+      items: countryOptions
+          .map(
+            (country) =>
+                DropdownMenuItem<String>(value: country, child: Text(country)),
+          )
+          .toList(),
+      onChanged: (value) {
+        if (value == null) {
+          return;
+        }
+        setState(() {
+          _locationCountryController.text = value;
+          if (!isValidStateProvinceForCountry(
+            value,
+            _locationStateController.text,
+          )) {
+            _locationStateController.clear();
+          }
+        });
+      },
+    );
+  }
+
+  Widget _buildLocationStateField() {
+    final countryKey =
+        normalizeCountryValue(_locationCountryController.text) ?? 'any';
+
+    return Autocomplete<String>(
+      key: ValueKey('admin-external-state-$countryKey'),
+      initialValue: TextEditingValue(text: _locationStateController.text),
+      optionsBuilder: (textEditingValue) {
+        final scopedOptions = stateProvinceOptionsForCountry(
+          _locationCountryController.text,
+        );
+        final query = textEditingValue.text.trim().toLowerCase();
+        if (query.isEmpty) {
+          return scopedOptions;
+        }
+
+        final exactAbbreviationMatches = stateProvinceAbbreviations.entries
+            .where(
+              (entry) =>
+                  entry.value.toLowerCase() == query &&
+                  scopedOptions.contains(entry.key),
+            )
+            .map((entry) => entry.key)
+            .toList();
+        if (exactAbbreviationMatches.isNotEmpty) {
+          return exactAbbreviationMatches;
+        }
+
+        return scopedOptions.where((option) {
+          final optionLower = option.toLowerCase();
+          final abbreviation = (stateProvinceAbbreviations[option] ?? '')
+              .toLowerCase();
+          final words = optionLower.split(RegExp(r'[\s-]+'));
+
+          return optionLower.startsWith(query) ||
+              words.any((word) => word.startsWith(query)) ||
+              abbreviation.startsWith(query);
+        });
+      },
+      onSelected: (selection) {
+        _locationStateController.text = selection;
+      },
+      optionsViewBuilder: (context, onSelected, options) {
+        final optionList = options.toList(growable: false);
+        return Align(
+          alignment: Alignment.topLeft,
+          child: Material(
+            elevation: 4,
+            borderRadius: BorderRadius.circular(8),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 240, minWidth: 280),
+              child: ListView.builder(
+                padding: EdgeInsets.zero,
+                shrinkWrap: true,
+                itemCount: optionList.length,
+                itemBuilder: (context, index) {
+                  final option = optionList[index];
+                  return ListTile(
+                    dense: true,
+                    title: Text(stateProvinceLabel(option)),
+                    onTap: () => onSelected(option),
+                  );
+                },
+              ),
+            ),
+          ),
+        );
+      },
+      fieldViewBuilder:
+          (context, textEditingController, focusNode, onFieldSubmitted) {
+            if (textEditingController.text != _locationStateController.text) {
+              textEditingController.value = TextEditingValue(
+                text: _locationStateController.text,
+                selection: TextSelection.collapsed(
+                  offset: _locationStateController.text.length,
+                ),
+              );
+            }
+            return TextField(
+              controller: textEditingController,
+              focusNode: focusNode,
+              decoration: const InputDecoration(
+                labelText: 'State / Province',
+                border: OutlineInputBorder(),
+              ),
+              onChanged: (value) {
+                _locationStateController.text = value;
+              },
+            );
+          },
+    );
   }
 
   Future<String?> _promptArchiveReason(JobListing listing) async {
@@ -891,9 +1027,9 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not archive listing: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Could not archive listing: $e')));
     } finally {
       if (mounted) {
         setState(() {
@@ -950,7 +1086,7 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
       builder: (dialogContext) => AlertDialog(
         title: const Text('Confirm delete'),
         content: Text(
-          'Delete external listing "${listing.title}" from ${listing.company}? This action archives the listing.',
+          'Delete external listing "${listing.title}" from ${listing.company}? This permanently deletes the listing and does not archive it.',
         ),
         actions: [
           TextButton(
@@ -987,7 +1123,7 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
     });
 
     try {
-      await widget.adminRepository.deleteJobListing(listing.id, reason);
+      await widget.adminRepository.hardDeleteJobListing(listing.id, reason);
       if (!mounted) {
         return;
       }
@@ -1003,9 +1139,9 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not delete listing: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Could not delete listing: $e')));
     } finally {
       if (mounted) {
         setState(() {
@@ -1083,9 +1219,7 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
                   'Type Ratings: ${_joinOrNone(listing.typeRatingsRequired)}',
                 ),
                 Text('Aircraft: ${_joinOrNone(listing.aircraftFlown)}'),
-                Text(
-                  'Flight Hours: ${_formatHoursMap(listing.flightHours)}',
-                ),
+                Text('Flight Hours: ${_formatHoursMap(listing.flightHours)}'),
                 Text(
                   'Preferred Flight Hours: ${_joinOrNone(listing.preferredFlightHours)}',
                 ),
@@ -1138,7 +1272,9 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
                 },
               ),
               ChoiceChip(
-                label: Text('View External Listings (${_externalListings.length})'),
+                label: Text(
+                  'View External Listings (${_externalListings.length})',
+                ),
                 selected: _selectedView == _ExternalPostsView.view,
                 onSelected: (_) {
                   setState(() {
@@ -1189,7 +1325,10 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
                     ),
                   ),
                 ),
-                TextButton(onPressed: _cancelEditing, child: const Text('Cancel')),
+                TextButton(
+                  onPressed: _cancelEditing,
+                  child: const Text('Cancel'),
+                ),
               ],
             ),
           ),
@@ -1197,405 +1336,423 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
           child: ListView(
             padding: const EdgeInsets.all(16),
             children: [
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          decoration: BoxDecoration(
-            color: Colors.orange.shade50,
-            border: Border.all(color: Colors.orange.shade300),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Row(
-            children: [
-              Icon(Icons.public, color: Colors.orange.shade700),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  'Mirror the standard Create New Listing flow for externally sourced jobs. All fields are optional for incomplete scraped data.',
-                  style: TextStyle(
-                    color: Colors.orange.shade800,
-                    fontWeight: FontWeight.w600,
-                  ),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.orange.shade50,
+                  border: Border.all(color: Colors.orange.shade300),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.public, color: Colors.orange.shade700),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Mirror the standard Create New Listing flow for externally sourced jobs. All fields are optional for incomplete scraped data.',
+                        style: TextStyle(
+                          color: Colors.orange.shade800,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 16),
-        TextField(
-          controller: _titleController,
-          decoration: const InputDecoration(
-            labelText: 'Title (optional)',
-            border: OutlineInputBorder(),
-          ),
-        ),
-        const SizedBox(height: 12),
-        TextField(
-          controller: _companyController,
-          decoration: const InputDecoration(
-            labelText: 'Company (optional)',
-            border: OutlineInputBorder(),
-          ),
-        ),
-        const SizedBox(height: 12),
-        TextField(
-          controller: _locationController,
-          decoration: const InputDecoration(
-            labelText: 'Location (optional)',
-            border: OutlineInputBorder(),
-          ),
-        ),
-        const SizedBox(height: 12),
-        DropdownButtonFormField<String>(
-          initialValue: _availableJobTypes.contains(_employmentTypeController.text)
-              ? _employmentTypeController.text
-              : null,
-          decoration: const InputDecoration(
-            labelText: 'Employment Type (optional)',
-            border: OutlineInputBorder(),
-          ),
-          items: _availableJobTypes
-              .map(
-                (type) => DropdownMenuItem<String>(
-                  value: type,
-                  child: Text(type),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _titleController,
+                decoration: const InputDecoration(
+                  labelText: 'Title (optional)',
+                  border: OutlineInputBorder(),
                 ),
-              )
-              .toList(),
-          onChanged: (value) {
-            setState(() {
-              _employmentTypeController.text = value ?? '';
-            });
-          },
-        ),
-        const SizedBox(height: 12),
-        DropdownButtonFormField<String>(
-          initialValue: _selectedPositionOption,
-          decoration: const InputDecoration(
-            labelText: 'Position Selection (optional)',
-            border: OutlineInputBorder(),
-          ),
-          items: const [
-            DropdownMenuItem(
-              value: 'Single Pilot',
-              child: Text('Single Pilot'),
-            ),
-            DropdownMenuItem(
-              value: 'Crew Member: Captain',
-              child: Text('Crew Member: Captain'),
-            ),
-            DropdownMenuItem(
-              value: 'Crew Member: Co-Pilot',
-              child: Text('Crew Member: Co-Pilot'),
-            ),
-          ],
-          onChanged: (value) {
-            setState(() {
-              _selectedPositionOption = value;
-              if (value == null || value == 'Single Pilot') {
-                _selectedCrewRole = 'Single Pilot';
-                _selectedCrewPosition = 'Captain';
-              } else if (value == 'Crew Member: Co-Pilot') {
-                _selectedCrewRole = 'Crew';
-                _selectedCrewPosition = 'Co-Pilot';
-              } else {
-                _selectedCrewRole = 'Crew';
-                _selectedCrewPosition = 'Captain';
-              }
-            });
-          },
-        ),
-        const SizedBox(height: 12),
-        Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            border: Border.all(color: Colors.grey.shade300),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'Salary Range (optional)',
-                style: TextStyle(fontWeight: FontWeight.w600),
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _companyController,
+                decoration: const InputDecoration(
+                  labelText: 'Company (optional)',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _locationCityController,
+                decoration: const InputDecoration(
+                  labelText: 'City (optional)',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
               Row(
                 children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _startingPayController,
-                      keyboardType: TextInputType.number,
-                      decoration: const InputDecoration(
-                        labelText: 'Starting Pay',
-                        prefixText: r'$',
-                        border: OutlineInputBorder(),
-                        isDense: true,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: TextField(
-                      controller: _payForExperienceController,
-                      keyboardType: TextInputType.number,
-                      decoration: const InputDecoration(
-                        labelText: 'Top End Starting Pay',
-                        prefixText: r'$',
-                        border: OutlineInputBorder(),
-                        isDense: true,
-                      ),
-                    ),
-                  ),
+                  Expanded(child: _buildLocationCountryField()),
+                  const SizedBox(width: 12),
+                  Expanded(child: _buildLocationStateField()),
                 ],
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 12),
               DropdownButtonFormField<String>(
-                initialValue: _selectedPayRateMetric,
+                initialValue:
+                    _availableJobTypes.contains(_employmentTypeController.text)
+                    ? _employmentTypeController.text
+                    : null,
                 decoration: const InputDecoration(
-                  labelText: 'Pay Metric',
+                  labelText: 'Employment Type (optional)',
                   border: OutlineInputBorder(),
-                  isDense: true,
                 ),
-                items: _availablePayRateMetrics
+                items: _availableJobTypes
                     .map(
-                      (metric) => DropdownMenuItem<String>(
-                        value: metric,
-                        child: Text(metric),
+                      (type) => DropdownMenuItem<String>(
+                        value: type,
+                        child: Text(type),
                       ),
                     )
                     .toList(),
                 onChanged: (value) {
                   setState(() {
-                    _selectedPayRateMetric = value;
+                    _employmentTypeController.text = value ?? '';
                   });
                 },
               ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 12),
-        TextField(
-          controller: _descriptionController,
-          maxLines: 4,
-          decoration: const InputDecoration(
-            labelText: 'Description / Notes (optional)',
-            border: OutlineInputBorder(),
-          ),
-        ),
-        const SizedBox(height: 12),
-        TextField(
-          controller: _sourceNameController,
-          decoration: const InputDecoration(
-            labelText: 'Source Name (optional)',
-            border: OutlineInputBorder(),
-          ),
-        ),
-        const SizedBox(height: 12),
-        TextField(
-          controller: _sourceUrlController,
-          decoration: const InputDecoration(
-            labelText: 'Source URL (optional)',
-            border: OutlineInputBorder(),
-          ),
-        ),
-        const SizedBox(height: 12),
-        TextField(
-          controller: _reasonController,
-          maxLines: 2,
-          decoration: const InputDecoration(
-            labelText: 'Admin Reason (audit log)',
-            border: OutlineInputBorder(),
-          ),
-        ),
-        const SizedBox(height: 12),
-        Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            border: Border.all(color: Colors.grey.shade300),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'Application Timeline (optional)',
-                style: TextStyle(fontWeight: FontWeight.w600),
-              ),
-              RadioGroup<bool>(
-                groupValue: _openListing,
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                initialValue: _selectedPositionOption,
+                decoration: const InputDecoration(
+                  labelText: 'Position Selection (optional)',
+                  border: OutlineInputBorder(),
+                ),
+                items: const [
+                  DropdownMenuItem(
+                    value: 'Single Pilot',
+                    child: Text('Single Pilot'),
+                  ),
+                  DropdownMenuItem(
+                    value: 'Crew Member: Captain',
+                    child: Text('Crew Member: Captain'),
+                  ),
+                  DropdownMenuItem(
+                    value: 'Crew Member: Co-Pilot',
+                    child: Text('Crew Member: Co-Pilot'),
+                  ),
+                ],
                 onChanged: (value) {
                   setState(() {
-                    _openListing = value ?? true;
-                    if (_openListing) {
-                      _deadlineDate = null;
+                    _selectedPositionOption = value;
+                    if (value == null || value == 'Single Pilot') {
+                      _selectedCrewRole = 'Single Pilot';
+                      _selectedCrewPosition = 'Captain';
+                    } else if (value == 'Crew Member: Co-Pilot') {
+                      _selectedCrewRole = 'Crew';
+                      _selectedCrewPosition = 'Co-Pilot';
+                    } else {
+                      _selectedCrewRole = 'Crew';
+                      _selectedCrewPosition = 'Captain';
                     }
                   });
                 },
-                child: const Column(
+              ),
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  border: Border.all(color: Colors.grey.shade300),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    RadioListTile<bool>(
-                      contentPadding: EdgeInsets.zero,
-                      title: Text('Open Listing (No Deadline)'),
-                      value: true,
+                    const Text(
+                      'Salary Range (optional)',
+                      style: TextStyle(fontWeight: FontWeight.w600),
                     ),
-                    RadioListTile<bool>(
-                      contentPadding: EdgeInsets.zero,
-                      title: Text('Set Application Deadline'),
-                      value: false,
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _startingPayController,
+                            keyboardType: TextInputType.number,
+                            decoration: const InputDecoration(
+                              labelText: 'Starting Pay',
+                              prefixText: r'$',
+                              border: OutlineInputBorder(),
+                              isDense: true,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: TextField(
+                            controller: _payForExperienceController,
+                            keyboardType: TextInputType.number,
+                            decoration: const InputDecoration(
+                              labelText: 'Top End Starting Pay',
+                              prefixText: r'$',
+                              border: OutlineInputBorder(),
+                              isDense: true,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    DropdownButtonFormField<String>(
+                      initialValue: _selectedPayRateMetric,
+                      decoration: const InputDecoration(
+                        labelText: 'Pay Metric',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                      items: _availablePayRateMetrics
+                          .map(
+                            (metric) => DropdownMenuItem<String>(
+                              value: metric,
+                              child: Text(metric),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (value) {
+                        setState(() {
+                          _selectedPayRateMetric = value;
+                        });
+                      },
                     ),
                   ],
                 ),
               ),
-              if (!_openListing)
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: OutlinedButton.icon(
-                    onPressed: () async {
-                      final initialDate =
-                          _deadlineDate ?? DateTime.now().add(const Duration(days: 30));
-                      final pickedDate = await showDatePicker(
-                        context: context,
-                        initialDate: initialDate,
-                        firstDate: DateTime.now(),
-                        lastDate: DateTime.now().add(const Duration(days: 730)),
-                      );
-                      if (pickedDate == null || !mounted) {
-                        return;
-                      }
-                      setState(() {
-                        _deadlineDate = pickedDate;
-                      });
-                    },
-                    icon: const Icon(Icons.event),
-                    label: Text(
-                      _deadlineDate == null
-                          ? 'Choose deadline date'
-                          : 'Application Deadline: ${_deadlineDate!.toLocal().toString().substring(0, 10)}',
+              const SizedBox(height: 12),
+              TextField(
+                controller: _descriptionController,
+                maxLines: 4,
+                decoration: const InputDecoration(
+                  labelText: 'Description / Notes (optional)',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _sourceNameController,
+                decoration: const InputDecoration(
+                  labelText: 'Source Name (optional)',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _sourceUrlController,
+                decoration: const InputDecoration(
+                  labelText: 'Source URL (optional)',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _reasonController,
+                maxLines: 2,
+                decoration: const InputDecoration(
+                  labelText: 'Admin Reason (audit log)',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  border: Border.all(color: Colors.grey.shade300),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Application Timeline (optional)',
+                      style: TextStyle(fontWeight: FontWeight.w600),
                     ),
+                    RadioGroup<bool>(
+                      groupValue: _openListing,
+                      onChanged: (value) {
+                        setState(() {
+                          _openListing = value ?? true;
+                          if (_openListing) {
+                            _deadlineDate = null;
+                          }
+                        });
+                      },
+                      child: const Column(
+                        children: [
+                          RadioListTile<bool>(
+                            contentPadding: EdgeInsets.zero,
+                            title: Text('Open Listing (No Deadline)'),
+                            value: true,
+                          ),
+                          RadioListTile<bool>(
+                            contentPadding: EdgeInsets.zero,
+                            title: Text('Set Application Deadline'),
+                            value: false,
+                          ),
+                        ],
+                      ),
+                    ),
+                    if (!_openListing)
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: OutlinedButton.icon(
+                          onPressed: () async {
+                            final initialDate =
+                                _deadlineDate ??
+                                DateTime.now().add(const Duration(days: 30));
+                            final pickedDate = await showDatePicker(
+                              context: context,
+                              initialDate: initialDate,
+                              firstDate: DateTime.now(),
+                              lastDate: DateTime.now().add(
+                                const Duration(days: 730),
+                              ),
+                            );
+                            if (pickedDate == null || !mounted) {
+                              return;
+                            }
+                            setState(() {
+                              _deadlineDate = pickedDate;
+                            });
+                          },
+                          icon: const Icon(Icons.event),
+                          label: Text(
+                            _deadlineDate == null
+                                ? 'Choose deadline date'
+                                : 'Application Deadline: ${_deadlineDate!.toLocal().toString().substring(0, 10)}',
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              _buildCheckboxCard(
+                title: 'FAA Operational Scope (optional)',
+                options: _availableFaaRules,
+                isSelected: (option) => _selectedFaaRules.contains(option),
+                onChanged: (option, selected) {
+                  setState(() {
+                    if (selected) {
+                      _selectedFaaRules
+                        ..clear()
+                        ..add(option);
+                    } else {
+                      _selectedFaaRules.remove(option);
+                    }
+                  });
+                },
+              ),
+              const SizedBox(height: 12),
+              _buildCheckboxCard(
+                title: 'Required FAA Certificates (optional)',
+                options: _availableFaaCertificates,
+                isSelected: (option) =>
+                    _selectedFaaCertificates.contains(option),
+                onChanged: (option, selected) {
+                  setState(() {
+                    if (selected) {
+                      _selectedFaaCertificates.add(option);
+                    } else {
+                      _selectedFaaCertificates.remove(option);
+                    }
+                  });
+                },
+              ),
+              const SizedBox(height: 12),
+              _buildCheckboxCard(
+                title: 'Instructor Certificates (optional)',
+                options: _availableInstructorCertificates,
+                isSelected: (option) =>
+                    _selectedFaaCertificates.contains(option),
+                onChanged: (option, selected) {
+                  setState(() {
+                    if (selected) {
+                      _selectedFaaCertificates.add(option);
+                    } else {
+                      _selectedFaaCertificates.remove(option);
+                    }
+                  });
+                },
+              ),
+              const SizedBox(height: 12),
+              _buildCheckboxCard(
+                title: 'Required Ratings (optional)',
+                options: _availableRatingSelections,
+                isSelected: (option) =>
+                    _selectedFaaCertificates.contains(option),
+                onChanged: (option, selected) {
+                  setState(() {
+                    if (selected) {
+                      _selectedFaaCertificates.add(option);
+                    } else {
+                      _selectedFaaCertificates.remove(option);
+                    }
+                  });
+                },
+              ),
+              const SizedBox(height: 12),
+              _buildHoursRequirementSection(
+                title: 'Flight Hours (optional)',
+                options: _availableEmployerFlightHours,
+                selectedHours: _selectedFlightHours,
+                preferredHours: _preferredFlightHours,
+              ),
+              const SizedBox(height: 12),
+              _buildHoursRequirementSection(
+                title: 'Instructor Hours (optional)',
+                options: _availableInstructorHours,
+                selectedHours: _selectedInstructorHours,
+                preferredHours: _preferredInstructorHours,
+              ),
+              const SizedBox(height: 12),
+              _buildHoursRequirementSection(
+                title: 'Specialty Hours (optional)',
+                options: _availableSpecialtyExperience,
+                selectedHours: _selectedSpecialtyHours,
+                preferredHours: _preferredSpecialtyHours,
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _aircraftController,
+                decoration: const InputDecoration(
+                  labelText: 'Aircraft Types (optional)',
+                  hintText: 'Cessna 172, Boeing 737',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _typeRatingsController,
+                decoration: const InputDecoration(
+                  labelText: 'Type Ratings (optional)',
+                  hintText: 'Boeing 737, Embraer E-175',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              if (_editingListing == null)
+                SizedBox(
+                  height: 44,
+                  child: ElevatedButton.icon(
+                    onPressed: _isSubmitting ? null : _submitExternalListing,
+                    icon: _isSubmitting
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.post_add),
+                    label: const Text('Post External Listing'),
                   ),
                 ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 12),
-        _buildCheckboxCard(
-          title: 'FAA Operational Scope (optional)',
-          options: _availableFaaRules,
-          isSelected: (option) => _selectedFaaRules.contains(option),
-          onChanged: (option, selected) {
-            setState(() {
-              if (selected) {
-                _selectedFaaRules
-                  ..clear()
-                  ..add(option);
-              } else {
-                _selectedFaaRules.remove(option);
-              }
-            });
-          },
-        ),
-        const SizedBox(height: 12),
-        _buildCheckboxCard(
-          title: 'Required FAA Certificates (optional)',
-          options: _availableFaaCertificates,
-          isSelected: (option) => _selectedFaaCertificates.contains(option),
-          onChanged: (option, selected) {
-            setState(() {
-              if (selected) {
-                _selectedFaaCertificates.add(option);
-              } else {
-                _selectedFaaCertificates.remove(option);
-              }
-            });
-          },
-        ),
-        const SizedBox(height: 12),
-        _buildCheckboxCard(
-          title: 'Instructor Certificates (optional)',
-          options: _availableInstructorCertificates,
-          isSelected: (option) => _selectedFaaCertificates.contains(option),
-          onChanged: (option, selected) {
-            setState(() {
-              if (selected) {
-                _selectedFaaCertificates.add(option);
-              } else {
-                _selectedFaaCertificates.remove(option);
-              }
-            });
-          },
-        ),
-        const SizedBox(height: 12),
-        _buildCheckboxCard(
-          title: 'Required Ratings (optional)',
-          options: _availableRatingSelections,
-          isSelected: (option) => _selectedFaaCertificates.contains(option),
-          onChanged: (option, selected) {
-            setState(() {
-              if (selected) {
-                _selectedFaaCertificates.add(option);
-              } else {
-                _selectedFaaCertificates.remove(option);
-              }
-            });
-          },
-        ),
-        const SizedBox(height: 12),
-        _buildHoursRequirementSection(
-          title: 'Flight Hours (optional)',
-          options: _availableEmployerFlightHours,
-          selectedHours: _selectedFlightHours,
-          preferredHours: _preferredFlightHours,
-        ),
-        const SizedBox(height: 12),
-        _buildHoursRequirementSection(
-          title: 'Instructor Hours (optional)',
-          options: _availableInstructorHours,
-          selectedHours: _selectedInstructorHours,
-          preferredHours: _preferredInstructorHours,
-        ),
-        const SizedBox(height: 12),
-        _buildHoursRequirementSection(
-          title: 'Specialty Hours (optional)',
-          options: _availableSpecialtyExperience,
-          selectedHours: _selectedSpecialtyHours,
-          preferredHours: _preferredSpecialtyHours,
-        ),
-        const SizedBox(height: 12),
-        TextField(
-          controller: _aircraftController,
-          decoration: const InputDecoration(
-            labelText: 'Aircraft Types (optional)',
-            hintText: 'Cessna 172, Boeing 737',
-            border: OutlineInputBorder(),
-          ),
-        ),
-        const SizedBox(height: 12),
-        TextField(
-          controller: _typeRatingsController,
-          decoration: const InputDecoration(
-            labelText: 'Type Ratings (optional)',
-            hintText: 'Boeing 737, Embraer E-175',
-            border: OutlineInputBorder(),
-          ),
-        ),
-        const SizedBox(height: 12),
-        if (_editingListing == null)
-          SizedBox(
-            height: 44,
-            child: ElevatedButton.icon(
-              onPressed: _isSubmitting ? null : _submitExternalListing,
-              icon: _isSubmitting
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.post_add),
-              label: const Text('Post External Listing'),
-            ),
-          ),
-        if (_editingListing == null) const SizedBox(height: 16),
-        const SizedBox(height: 16),
+              if (_editingListing == null) const SizedBox(height: 16),
+              const SizedBox(height: 16),
             ],
           ),
         ),
@@ -1604,9 +1761,7 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
             padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
             decoration: BoxDecoration(
               color: Theme.of(context).scaffoldBackgroundColor,
-              border: Border(
-                top: BorderSide(color: Colors.grey.shade300),
-              ),
+              border: Border(top: BorderSide(color: Colors.grey.shade300)),
             ),
             child: SafeArea(
               top: false,
@@ -1622,7 +1777,9 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
                       : const Icon(Icons.save),
-                  label: Text(_isSubmitting ? 'Saving...' : 'Save External Listing'),
+                  label: Text(
+                    _isSubmitting ? 'Saving...' : 'Save External Listing',
+                  ),
                 ),
               ),
             ),
@@ -1703,7 +1860,11 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
                 ),
                 if (isChecked)
                   Padding(
-                    padding: const EdgeInsets.only(left: 12, right: 12, bottom: 8),
+                    padding: const EdgeInsets.only(
+                      left: 12,
+                      right: 12,
+                      bottom: 8,
+                    ),
                     child: Column(
                       children: [
                         TextFormField(
@@ -1769,8 +1930,10 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
         itemCount: _externalListings.length,
         itemBuilder: (context, index) {
           final listing = _externalListings[index];
-          final createdLabel =
-              listing.createdAt?.toLocal().toString().substring(0, 19);
+          final createdLabel = listing.createdAt
+              ?.toLocal()
+              .toString()
+              .substring(0, 19);
 
           return Card(
             margin: const EdgeInsets.only(bottom: 10),
@@ -1804,7 +1967,8 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
                     Text('${listing.company} • ${listing.location}'),
                     const SizedBox(height: 4),
                     Text('Type: ${listing.type}'),
-                    if (listing.externalApplyUrl?.trim().isNotEmpty ?? false) ...[
+                    if (listing.externalApplyUrl?.trim().isNotEmpty ??
+                        false) ...[
                       const SizedBox(height: 4),
                       Text(
                         'Apply URL: ${listing.externalApplyUrl}',

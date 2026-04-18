@@ -12,13 +12,14 @@ import 'package:url_launcher/url_launcher.dart';
 import 'models/application.dart';
 import 'models/application_feedback.dart';
 import 'models/aviation_certificate_utils.dart';
+import 'models/aviation_location_catalogs.dart';
+import 'models/aviation_option_catalogs.dart';
 import 'models/employer_profile.dart';
 import 'models/employer_profiles_data.dart';
 import 'models/job_listing.dart';
 import 'models/job_listing_report.dart';
 import 'models/job_listing_template.dart';
 import 'models/job_seeker_profile.dart';
-import 'repositories/admin_repository.dart';
 import 'repositories/app_repository.dart';
 import 'screens/admin_dashboard.dart';
 import 'screens/sign_in_screen.dart';
@@ -26,11 +27,6 @@ import 'services/app_repository_factory.dart';
 import 'services/supabase_admin_repository.dart';
 import 'services/supabase_bootstrap.dart';
 import 'services/web_image_file_picker.dart';
-
-// Controllers for job location fields (custom location)
-final TextEditingController _createCityController = TextEditingController();
-final TextEditingController _createStateController = TextEditingController();
-final TextEditingController _createCountryController = TextEditingController();
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -59,63 +55,41 @@ class MyApp extends StatelessWidget {
   }
 }
 
+String _profileRoleLabel(Object? value) {
+  if (value is Map) {
+    final map = value.cast<Object?, Object?>();
+    const candidateKeys = [
+      'profile_type',
+      'profileType',
+      'role',
+      'user_role',
+      'userRole',
+    ];
+
+    for (final key in candidateKeys) {
+      final role = map[key]?.toString().trim().toLowerCase() ?? '';
+      if (role.isNotEmpty) {
+        return role;
+      }
+    }
+    return '';
+  }
+
+  return value?.toString().trim().toLowerCase() ?? '';
+}
+
 ProfileType _profileTypeFromMetadata(Object? value) {
-  if (value?.toString() == 'employer') {
+  final role = _profileRoleLabel(value);
+  if (role == 'employer') {
     return ProfileType.employer;
   }
   return ProfileType.jobSeeker;
 }
 
-ProfileType _profileTypeFromAdminInterfaceView(AdminInterfaceView value) {
-  switch (value) {
-    case AdminInterfaceView.employer:
-      return ProfileType.employer;
-    case AdminInterfaceView.jobSeeker:
-    case AdminInterfaceView.admin:
-      return ProfileType.jobSeeker;
-  }
-}
-
-bool _isAdminUser(User user) {
-  final userRole = user.userMetadata?['role']?.toString().trim();
-  final appRole = user.appMetadata['role']?.toString().trim();
-  return userRole == 'admin' || appRole == 'admin';
-}
-
-String _resolvedAccountRole(User user) {
-  final userRole = user.userMetadata?['role']?.toString().trim();
-  if (userRole != null && userRole.isNotEmpty) {
-    return userRole;
-  }
-
-  final appRole = user.appMetadata['role']?.toString().trim();
-  if (appRole != null && appRole.isNotEmpty) {
-    return appRole;
-  }
-
-  final profileType = user.userMetadata?['profile_type']?.toString().trim();
-  if (profileType != null && profileType.isNotEmpty) {
-    return profileType;
-  }
-
-  return 'job_seeker';
-}
-
-AdminRepository _buildAdminRepository(SupabaseClient client, String userId) {
-  return SupabaseAdminRepository(client, userId);
-}
-
-class _AuthGate extends StatefulWidget {
+class _AuthGate extends StatelessWidget {
   const _AuthGate({required this.repository});
 
   final AppRepository repository;
-
-  @override
-  State<_AuthGate> createState() => _AuthGateState();
-}
-
-class _AuthGateState extends State<_AuthGate> {
-  AdminInterfaceView _adminInterfaceView = AdminInterfaceView.admin;
 
   @override
   Widget build(BuildContext context) {
@@ -124,52 +98,48 @@ class _AuthGateState extends State<_AuthGate> {
       builder: (context, snapshot) {
         final session = snapshot.data?.session;
         if (session != null) {
-          final user = session.user;
-          final accountRoleLabel = _resolvedAccountRole(user);
-          if (_isAdminUser(user)) {
-            final adminRepo = _buildAdminRepository(
-              Supabase.instance.client,
-              user.id,
-            );
-            if (_adminInterfaceView == AdminInterfaceView.admin) {
-              return AdminDashboard(
-                adminRepository: adminRepo,
-                appRepository: widget.repository,
-                adminEmail: user.email ?? user.id,
-                adminRoleLabel: accountRoleLabel,
-                currentView: _adminInterfaceView,
-                onSwitchView: (view) {
-                  setState(() {
-                    _adminInterfaceView = view;
-                  });
-                },
-              );
-            }
+          final roleLabel = _profileRoleLabel(session.user.userMetadata);
+          final adminEmail = session.user.email?.trim() ?? '';
 
-            return MyHomePage(
-              title: 'Aviation Job Listings',
-              repository: widget.repository,
-              initialProfileType: _profileTypeFromAdminInterfaceView(
-                _adminInterfaceView,
+          if (roleLabel == 'admin') {
+            return AdminDashboard(
+              adminRepository: SupabaseAdminRepository(
+                Supabase.instance.client,
+                session.user.id,
               ),
-              accountRoleLabel: accountRoleLabel,
-              showAdminInterfaceOption: true,
-              currentAdminInterfaceView: _adminInterfaceView,
-              onAdminInterfaceSelected: (view) {
-                setState(() {
-                  _adminInterfaceView = view;
-                });
+              appRepository: repository,
+              adminEmail: adminEmail,
+              adminRoleLabel: roleLabel,
+              currentView: AdminInterfaceView.admin,
+              onSwitchView: (switchContext, view) {
+                if (view == AdminInterfaceView.admin) {
+                  return;
+                }
+
+                final initialType = view == AdminInterfaceView.employer
+                    ? ProfileType.employer
+                    : ProfileType.jobSeeker;
+
+                Navigator.of(switchContext).pushReplacement(
+                  MaterialPageRoute(
+                    builder: (_) => MyHomePage(
+                      title: 'Aviation Job Listings',
+                      repository: repository,
+                      initialProfileType: initialType,
+                    ),
+                  ),
+                );
               },
             );
           }
+
           final initialType = _profileTypeFromMetadata(
-            user.userMetadata?['profile_type'],
+            session.user.userMetadata,
           );
           return MyHomePage(
             title: 'Aviation Job Listings',
-            repository: widget.repository,
+            repository: repository,
             initialProfileType: initialType,
-            accountRoleLabel: accountRoleLabel,
           );
         }
         return const SignInScreen();
@@ -184,19 +154,17 @@ class MyHomePage extends StatefulWidget {
     required this.title,
     required this.repository,
     this.initialProfileType,
-    this.accountRoleLabel,
-    this.showAdminInterfaceOption = false,
-    this.currentAdminInterfaceView,
-    this.onAdminInterfaceSelected,
+    this.adminDashboardBuilder,
   });
 
   final String title;
   final AppRepository repository;
   final ProfileType? initialProfileType;
-  final String? accountRoleLabel;
-  final bool showAdminInterfaceOption;
-  final AdminInterfaceView? currentAdminInterfaceView;
-  final ValueChanged<AdminInterfaceView>? onAdminInterfaceSelected;
+  final Widget Function(
+    BuildContext context,
+    void Function(BuildContext context, AdminInterfaceView view) onSwitchView,
+  )?
+  adminDashboardBuilder;
 
   @override
   State<MyHomePage> createState() => _MyHomePageState();
@@ -382,6 +350,15 @@ _MatchResult _evaluateJobMatchForProfile({
     }
   }
 
+  for (final rating in job.requiredRatings) {
+    totalCount++;
+    if (profileCertificates.contains(normalizeCertificateName(rating))) {
+      matchedCount++;
+    } else {
+      missingRequirements.add(rating);
+    }
+  }
+
   for (final requirement in job.flightHoursByType.entries) {
     final isPreferred = job.preferredFlightHours.contains(requirement.key);
     if (isPreferred) {
@@ -479,160 +456,40 @@ class _MyHomePageState extends State<MyHomePage> {
   // ============================================================================
 
   // --- FAA CERTIFICATES & RATINGS ---
-  static const List<String> _availableFaaCertificates = [
-    'Airline Transport Pilot (ATP)',
-    'Commercial Pilot (CPL)',
-    'Instrument Rating (IFR)',
-    'Private Pilot (PPL)',
-    'Airframe & Powerplant (A&P)',
-    'Inspection Authorization (IA)',
-    'Dispatcher (DSP)',
-  ];
+  static const List<String> _availableFaaCertificates =
+      availableFaaCertificateOptions;
 
-  static const List<String> _availableInstructorCertificates = [
-    'Flight Instructor (CFI)',
-    'Instrument Instructor (CFII)',
-    'Multi-Engine Instructor (MEI)',
-  ];
+  static const List<String> _availableInstructorCertificates =
+      availableInstructorCertificateOptions;
 
   // --- FAA OPERATIONAL RULES/SCOPE ---
-  static const List<String> _availableFaaRules = [
-    'Part 121',
-    'Part 135',
-    'Part 91',
-  ];
+  static const List<String> _availableFaaRules = availableFaaRuleOptions;
 
-  static const List<String> _availableEmployerFlightHours = [
-    'Total Time',
-    'PIC Jet',
-    'SIC Jet',
-    'PIC Turbine',
-    'SIC Turbine',
-    'PIC',
-    'SIC',
-    'Multi-engine',
-  ];
+  static const List<String> _availableEmployerFlightHours =
+      availableEmployerFlightHourOptions;
 
-  static const List<String> _availableInstructorHours = [
-    'Total Instructor Hours',
-    'Instrument (CFII)',
-    'Multi-Engine (MEI)',
-  ];
+  static const List<String> _availableInstructorHours =
+      availableInstructorHourOptions;
 
-  static const List<String> _availableJobTypes = [
-    'Full-Time',
-    'Part-Time',
-    'Seasonal',
-    'Rotations',
-    'Contract',
-  ];
+  static const List<String> _availableJobTypes = availableJobTypeOptions;
 
-  static const List<String> _availableRatingSelections = [
-    'Multi-Engine Land',
-    'Single-Engine Land',
-    'Multi-Engine Sea',
-    'Single-Engine Sea',
-    'Tailwheel Endorsement',
-    'Rotorcraft',
-    'Gyroplane',
-    'Glider',
-    'Lighter-than-Air',
-  ];
+  static const List<String> _availableRatingSelections =
+      availableRatingSelectionOptions;
 
-  static const List<String> _availablePayRateMetrics = [
-    'Flight Hour',
-    'Hourly Pay for Duty Time',
-    'Daily Rate',
-    'Weekly Salary',
-    'Monthly Salary',
-    'Annual Salary',
-    'Shift',
-    'Contract Completion',
-  ];
+  static const List<String> _availablePayRateMetrics =
+      availablePayRateMetricOptions;
 
-  static const List<String> _usStateOptions = [
-    'Alabama',
-    'Alaska',
-    'Arizona',
-    'Arkansas',
-    'California',
-    'Colorado',
-    'Connecticut',
-    'Delaware',
-    'District of Columbia',
-    'Florida',
-    'Georgia',
-    'Hawaii',
-    'Idaho',
-    'Illinois',
-    'Indiana',
-    'Iowa',
-    'Kansas',
-    'Kentucky',
-    'Louisiana',
-    'Maine',
-    'Maryland',
-    'Massachusetts',
-    'Michigan',
-    'Minnesota',
-    'Mississippi',
-    'Missouri',
-    'Montana',
-    'Nebraska',
-    'Nevada',
-    'New Hampshire',
-    'New Jersey',
-    'New Mexico',
-    'New York',
-    'North Carolina',
-    'North Dakota',
-    'Ohio',
-    'Oklahoma',
-    'Oregon',
-    'Pennsylvania',
-    'Rhode Island',
-    'South Carolina',
-    'South Dakota',
-    'Tennessee',
-    'Texas',
-    'Utah',
-    'Vermont',
-    'Virginia',
-    'Washington',
-    'West Virginia',
-    'Wisconsin',
-    'Wyoming',
-  ];
+  static const List<String> _usStateOptions = usStateOptions;
 
-  static const List<String> _canadaProvinceOptions = [
-    'Alberta',
-    'British Columbia',
-    'Manitoba',
-    'New Brunswick',
-    'Newfoundland and Labrador',
-    'Northwest Territories',
-    'Nova Scotia',
-    'Nunavut',
-    'Ontario',
-    'Prince Edward Island',
-    'Quebec',
-    'Saskatchewan',
-    'Yukon',
-  ];
+  static const List<String> _canadaProvinceOptions = canadaProvinceOptions;
 
-  static const List<String> _countryOptions = ['USA', 'Canada'];
-
-  static const List<String> _stateProvinceOptions = [
-    ..._usStateOptions,
-    ..._canadaProvinceOptions,
-  ];
+  static const List<String> _countryOptions = countryOptions;
 
   static const List<String> _companyBenefitOptions = [
     'Health Insurance',
     '401K',
     'Relocation Reinbursement',
     'Sign-On Bonus',
-    'Commuter Program',
     'Longevity Bonus',
     'Flight Benefits',
     'Paid Vacation',
@@ -640,90 +497,19 @@ class _MyHomePageState extends State<MyHomePage> {
     'Maternity Leave',
   ];
 
-  static const Map<String, String> _stateProvinceAbbreviations = {
-    'Alabama': 'AL',
-    'Alaska': 'AK',
-    'Arizona': 'AZ',
-    'Arkansas': 'AR',
-    'California': 'CA',
-    'Colorado': 'CO',
-    'Connecticut': 'CT',
-    'Delaware': 'DE',
-    'District of Columbia': 'DC',
-    'Florida': 'FL',
-    'Georgia': 'GA',
-    'Hawaii': 'HI',
-    'Idaho': 'ID',
-    'Illinois': 'IL',
-    'Indiana': 'IN',
-    'Iowa': 'IA',
-    'Kansas': 'KS',
-    'Kentucky': 'KY',
-    'Louisiana': 'LA',
-    'Maine': 'ME',
-    'Maryland': 'MD',
-    'Massachusetts': 'MA',
-    'Michigan': 'MI',
-    'Minnesota': 'MN',
-    'Mississippi': 'MS',
-    'Missouri': 'MO',
-    'Montana': 'MT',
-    'Nebraska': 'NE',
-    'Nevada': 'NV',
-    'New Hampshire': 'NH',
-    'New Jersey': 'NJ',
-    'New Mexico': 'NM',
-    'New York': 'NY',
-    'North Carolina': 'NC',
-    'North Dakota': 'ND',
-    'Ohio': 'OH',
-    'Oklahoma': 'OK',
-    'Oregon': 'OR',
-    'Pennsylvania': 'PA',
-    'Rhode Island': 'RI',
-    'South Carolina': 'SC',
-    'South Dakota': 'SD',
-    'Tennessee': 'TN',
-    'Texas': 'TX',
-    'Utah': 'UT',
-    'Vermont': 'VT',
-    'Virginia': 'VA',
-    'Washington': 'WA',
-    'West Virginia': 'WV',
-    'Wisconsin': 'WI',
-    'Wyoming': 'WY',
-    'Alberta': 'AB',
-    'British Columbia': 'BC',
-    'Manitoba': 'MB',
-    'New Brunswick': 'NB',
-    'Newfoundland and Labrador': 'NL',
-    'Northwest Territories': 'NT',
-    'Nova Scotia': 'NS',
-    'Nunavut': 'NU',
-    'Ontario': 'ON',
-    'Prince Edward Island': 'PE',
-    'Quebec': 'QC',
-    'Saskatchewan': 'SK',
-    'Yukon': 'YT',
-  };
+  static const Map<String, String> _stateProvinceAbbreviations =
+      stateProvinceAbbreviations;
 
   // --- SPECIALTY EXPERIENCE (Future: Consider adding to Job Seeker profile) ---
-  static const List<String> _availableSpecialtyExperience = [
-    'Fire Fighting',
-    'Aerobatic',
-    'Floatplane',
-    'Tailwheel',
-    'Off Airport',
-    'Banner Towing',
-    'Low Altitude',
-    'Aerial Survey',
-  ];
+  static const List<String> _availableSpecialtyExperience =
+      availableSpecialtyExperienceOptions;
 
   // ============================================================================
   // UI CONTROLLERS: Text input fields for forms
   // ============================================================================
 
   final TextEditingController _searchController = TextEditingController();
+  final TextEditingController _searchTabController = TextEditingController();
   final TextEditingController _createTitleController = TextEditingController();
   final FocusNode _createTitleFocusNode = FocusNode();
   final TextEditingController _createCompanyController =
@@ -772,6 +558,19 @@ class _MyHomePageState extends State<MyHomePage> {
   // Tracks whether the Employer Profile tab is in edit mode.
   bool _employerProfileEditing = false;
   String _query = '';
+  String _searchTabQuery = '';
+  String _searchTabTypeFilter = 'all';
+  String _searchTabLocationFilter = 'all';
+  String _searchTabPositionFilter = 'all';
+  String _searchTabFaaRuleFilter = 'all';
+  String _searchTabCertificateFilter = 'all';
+  String _searchTabRatingFilter = 'all';
+  String _searchTabFlightHoursFilter = 'all';
+  String _searchTabInstructorHoursFilter = 'all';
+  String _searchTabPayMetricFilter = 'all';
+  String _searchTabMatchFilter = 'all';
+  String _searchTabSort = 'best_match';
+  bool _searchTabExternalOnly = false;
   int _page = 1;
   bool _loading = true;
   String? _loadingError;
@@ -793,14 +592,6 @@ class _MyHomePageState extends State<MyHomePage> {
 
   static const String _legacyLocalJobSeekerId = 'local_seeker';
   static const int _maxReapplyWindowDays = 365;
-  static const List<String> _jobListingReportReasons = [
-    'Fake or misleading listing',
-    'Scam or payment request',
-    'Wrong company or identity misuse',
-    'Inappropriate content',
-    'Duplicate or spam posting',
-    'Other',
-  ];
 
   List<Application> _myApplications = const [];
   List<Application> _employerApplications = const [];
@@ -808,14 +599,7 @@ class _MyHomePageState extends State<MyHomePage> {
   String _selectedEmployerApplicationFilter = 'all';
   String _selectedEmployerApplicationSort = 'newest';
   String _selectedMatchFilter = 'all';
-  // 'all', 'active', 'archived', 'rejected'
-  String _selectedArchiveFilter = 'all';
   Map<String, bool> _applicationsByJobId = {};
-  // Tracks which job groups are expanded in the applicants tab
-  final Set<String> _expandedJobGroups = {};
-  // Tracks which application IDs are selected for bulk actions
-  final Set<String> _selectedApplicationIds = {};
-  bool _bulkSelectMode = false;
 
   bool _hasApplied(String jobId) => _applicationsByJobId[jobId] ?? false;
 
@@ -823,9 +607,6 @@ class _MyHomePageState extends State<MyHomePage> {
       DateTime.now().millisecondsSinceEpoch.toString();
 
   String _generateFeedbackId() => 'fb_${DateTime.now().millisecondsSinceEpoch}';
-
-  String _generateJobListingReportId() =>
-      'rpt_${DateTime.now().millisecondsSinceEpoch}';
 
   String _currentJobSeekerId() {
     if (SupabaseBootstrap.isConfigured) {
@@ -887,6 +668,7 @@ class _MyHomePageState extends State<MyHomePage> {
   String _selectedCrewPosition = 'Captain';
   final List<String> _selectedFaaRules = [];
   final List<String> _selectedFaaCertificates = [];
+  final List<String> _selectedRequiredRatings = [];
   final Map<String, int> _selectedFlightHours = {};
   final Set<String> _preferredFlightHours = {};
   final Map<String, int> _selectedInstructorHours = {};
@@ -1121,6 +903,7 @@ class _MyHomePageState extends State<MyHomePage> {
       faaRules: List<String>.from(job.faaRules),
       description: job.description,
       faaCertificates: _canonicalizeCertificates(job.faaCertificates),
+      requiredRatings: List<String>.from(job.requiredRatings),
       typeRatingsRequired: List<String>.from(job.typeRatingsRequired),
       flightExperience: List<String>.from(job.flightExperience),
       flightHours: Map<String, int>.from(job.flightHours),
@@ -1138,12 +921,8 @@ class _MyHomePageState extends State<MyHomePage> {
       createdAt: job.createdAt,
       updatedAt: job.updatedAt,
       employerId: job.employerId,
-      autoRejectThreshold: job.autoRejectThreshold,
-      reapplyWindowDays: job.reapplyWindowDays,
       isExternal: job.isExternal,
       externalApplyUrl: job.externalApplyUrl,
-      isActive: job.isActive,
-      archivedAt: job.archivedAt,
     );
   }
 
@@ -1704,6 +1483,47 @@ class _MyHomePageState extends State<MyHomePage> {
     }
   }
 
+  Future<void> _contactExternalEmployer(JobListing job) async {
+    final rawUrl = job.externalApplyUrl?.trim() ?? '';
+    if (rawUrl.isNotEmpty) {
+      Uri? uri = Uri.tryParse(rawUrl);
+      if (uri != null && !uri.hasScheme) {
+        uri = Uri.tryParse('https://$rawUrl');
+      }
+
+      if (uri != null) {
+        final launched = await launchUrl(
+          uri,
+          mode: LaunchMode.externalApplication,
+        );
+        if (launched) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'Opening external listing. Contact the employer directly to apply.',
+                ),
+              ),
+            );
+          }
+          return;
+        }
+      }
+    }
+
+    if (!mounted) {
+      return;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'External listing: contact the employer directly to apply.',
+        ),
+      ),
+    );
+  }
+
   Widget _buildSummaryCountBadge(int count) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
@@ -2149,17 +1969,7 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   List<String> _selectedJobSeekerRatings(JobSeekerProfile profile) {
-    const allRatings = [
-      'Multi-Engine Land',
-      'Single-Engine Land',
-      'Multi-Engine Sea',
-      'Single-Engine Sea',
-      'Tailwheel Endorsement',
-      'Rotorcraft',
-      'Gyroplane',
-      'Glider',
-      'Lighter-than-Air',
-    ];
+    const allRatings = availableRatingSelectionOptions;
     return allRatings
         .where((rating) => profile.faaCertificates.contains(rating))
         .toList();
@@ -2504,143 +2314,14 @@ class _MyHomePageState extends State<MyHomePage> {
                     ],
                   ),
                 )
-              else ...[
+              else
                 TextField(
-                  controller: _createCityController,
+                  controller: _createLocationController,
                   decoration: const InputDecoration(
-                    labelText: 'City',
-                    hintText: 'Enter city',
+                    hintText: 'Enter job location',
                     isDense: true,
                   ),
                 ),
-                const SizedBox(height: 8),
-                DropdownButtonFormField<String>(
-                  initialValue: _createCountryController.text.isNotEmpty
-                      ? _createCountryController.text
-                      : null,
-                  decoration: const InputDecoration(labelText: 'Country'),
-                  items: _countryOptions
-                      .map(
-                        (country) => DropdownMenuItem(
-                          value: country,
-                          child: Text(country),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: (value) {
-                    setState(() {
-                      _createCountryController.text = value ?? '';
-                      final allowed = _stateProvinceOptionsForCountry(
-                        value ?? '',
-                      );
-                      if (!allowed.contains(_createStateController.text)) {
-                        _createStateController.clear();
-                      }
-                    });
-                  },
-                ),
-                const SizedBox(height: 8),
-                if (_normalizeCountryValue(_createCountryController.text) !=
-                    'International')
-                  Autocomplete<String>(
-                    key: ValueKey(
-                      'job-state-${_normalizeCountryValue(_createCountryController.text) ?? 'any'}',
-                    ),
-                    initialValue: TextEditingValue(
-                      text: _createStateController.text,
-                    ),
-                    optionsBuilder: (textEditingValue) {
-                      final scopedOptions = _stateProvinceOptionsForCountry(
-                        _createCountryController.text,
-                      );
-                      final query = textEditingValue.text.trim().toLowerCase();
-                      if (query.isEmpty) {
-                        return scopedOptions;
-                      }
-                      final exactAbbreviationMatches =
-                          _stateProvinceAbbreviations.entries
-                              .where(
-                                (entry) =>
-                                    entry.value.toLowerCase() == query &&
-                                    scopedOptions.contains(entry.key),
-                              )
-                              .map((entry) => entry.key)
-                              .toList();
-                      if (exactAbbreviationMatches.isNotEmpty) {
-                        return exactAbbreviationMatches;
-                      }
-                      return scopedOptions.where((option) {
-                        final optionLower = option.toLowerCase();
-                        final abbreviation =
-                            (_stateProvinceAbbreviations[option] ?? '')
-                                .toLowerCase();
-                        final words = optionLower.split(RegExp(r'[\s-]+'));
-                        return optionLower.startsWith(query) ||
-                            words.any((word) => word.startsWith(query)) ||
-                            abbreviation.startsWith(query);
-                      });
-                    },
-                    onSelected: (selection) {
-                      _createStateController.text = selection;
-                    },
-                    optionsViewBuilder: (context, onSelected, options) {
-                      final optionList = options.toList(growable: false);
-                      return Align(
-                        alignment: Alignment.topLeft,
-                        child: Material(
-                          elevation: 4,
-                          borderRadius: BorderRadius.circular(8),
-                          child: ConstrainedBox(
-                            constraints: const BoxConstraints(
-                              maxHeight: 240,
-                              minWidth: 280,
-                            ),
-                            child: ListView.builder(
-                              padding: EdgeInsets.zero,
-                              shrinkWrap: true,
-                              itemCount: optionList.length,
-                              itemBuilder: (context, index) {
-                                final option = optionList[index];
-                                return ListTile(
-                                  dense: true,
-                                  title: Text(_stateProvinceLabel(option)),
-                                  onTap: () => onSelected(option),
-                                );
-                              },
-                            ),
-                          ),
-                        ),
-                      );
-                    },
-                    fieldViewBuilder:
-                        (
-                          context,
-                          textEditingController,
-                          focusNode,
-                          onFieldSubmitted,
-                        ) {
-                          if (textEditingController.text !=
-                              _createStateController.text) {
-                            textEditingController.value = TextEditingValue(
-                              text: _createStateController.text,
-                              selection: TextSelection.collapsed(
-                                offset: _createStateController.text.length,
-                              ),
-                            );
-                          }
-                          return TextField(
-                            controller: textEditingController,
-                            focusNode: focusNode,
-                            decoration: const InputDecoration(
-                              labelText: 'State / Province',
-                            ),
-                            onChanged: (value) {
-                              _createStateController.text = value;
-                            },
-                          );
-                        },
-                  ),
-              ],
             ],
           ),
         ),
@@ -3007,11 +2688,11 @@ class _MyHomePageState extends State<MyHomePage> {
       MaterialPageRoute(
         builder: (pageContext) => StatefulBuilder(
           builder: (pageContext, setPageState) {
-            const landRatings = ['Multi-Engine Land', 'Single-Engine Land'];
-            const seaRatings = ['Multi-Engine Sea', 'Single-Engine Sea'];
-            const tailwheelRating = ['Tailwheel Endorsement'];
-            const rotorRatings = ['Rotorcraft', 'Gyroplane'];
-            const otherRatings = ['Glider', 'Lighter-than-Air'];
+            const landRatings = landRatingSelectionOptions;
+            const seaRatings = seaRatingSelectionOptions;
+            const tailwheelRating = tailwheelRatingSelectionOptions;
+            const rotorRatings = rotorRatingSelectionOptions;
+            const otherRatings = otherRatingSelectionOptions;
 
             final hasAtp = draftProfile.faaCertificates.contains(
               'Airline Transport Pilot (ATP)',
@@ -3857,6 +3538,7 @@ class _MyHomePageState extends State<MyHomePage> {
   @override
   void dispose() {
     _searchController.dispose();
+    _searchTabController.dispose();
     _createTitleController.dispose();
     _createTitleFocusNode.dispose();
     _createCompanyController.dispose();
@@ -3896,8 +3578,7 @@ class _MyHomePageState extends State<MyHomePage> {
 
   List<JobListing> get _visibleJobs {
     if (_profileType != ProfileType.employer) {
-      // Public view: only show active, non-expired listings
-      return _allJobs.where((job) => job.shouldShow).toList();
+      return _allJobs;
     }
 
     return _allJobs
@@ -3968,6 +3649,7 @@ class _MyHomePageState extends State<MyHomePage> {
       job.deadlineDate?.toIso8601String() ?? '',
       _sortedLowerTrimmed(job.faaRules).join('|'),
       _sortedLowerTrimmed(job.faaCertificates).join('|'),
+      _sortedLowerTrimmed(job.requiredRatings).join('|'),
       _sortedLowerTrimmed(job.typeRatingsRequired).join('|'),
       _sortedMapEntries(job.flightHours).join('|'),
       _sortedLowerTrimmed(job.preferredFlightHours).join('|'),
@@ -3985,23 +3667,9 @@ class _MyHomePageState extends State<MyHomePage> {
     final company = _profileType == ProfileType.employer
         ? _currentEmployer.companyName.trim()
         : _createCompanyController.text.trim();
-    String location;
-    if (_useCompanyLocationForJob) {
-      location = _buildCompanyLocationString();
-    } else {
-      final city = _createCityController.text.trim();
-      final state = _createStateController.text.trim();
-      final country = _createCountryController.text.trim();
-      if (country.isEmpty || country == 'International') {
-        location = city.isNotEmpty ? city : 'International';
-      } else {
-        location = [
-          if (city.isNotEmpty) city,
-          if (state.isNotEmpty) state,
-          country,
-        ].join(', ');
-      }
-    }
+    final location = _useCompanyLocationForJob
+        ? _buildCompanyLocationString()
+        : _createLocationController.text.trim();
     final typeRatingsRequired = _createTypeRatingsController.text
         .split(',')
         .map((rating) => rating.trim())
@@ -4021,6 +3689,7 @@ class _MyHomePageState extends State<MyHomePage> {
       crewPosition: _selectedCrewRole == 'Crew' ? _selectedCrewPosition : null,
       description: _createDescriptionController.text.trim(),
       faaCertificates: List<String>.from(_selectedFaaCertificates),
+      requiredRatings: List<String>.from(_selectedRequiredRatings),
       typeRatingsRequired: typeRatingsRequired,
       faaRules: _selectedFaaRules.isNotEmpty ? [_selectedFaaRules.first] : [],
       flightExperience: [
@@ -4041,7 +3710,6 @@ class _MyHomePageState extends State<MyHomePage> {
           .toSet()
           .toList(),
       salaryRange: _buildCreateSalaryRange(),
-      benefits: List<String>.from(_currentEmployer.companyBenefits),
       deadlineDate: _createOpenListing ? null : _createDeadlineDate,
       createdAt: DateTime.now(),
       updatedAt: DateTime.now(),
@@ -4061,27 +3729,6 @@ class _MyHomePageState extends State<MyHomePage> {
     setState(() {
       _createTitleController.text = job.title;
       _createCompanyController.text = _currentEmployer.companyName;
-      // Parse job.location into city/state/country if possible
-      if (_useCompanyLocationForJob) {
-        _createCityController.clear();
-        _createStateController.clear();
-        _createCountryController.clear();
-      } else {
-        final parts = job.location.split(',').map((e) => e.trim()).toList();
-        if (parts.length == 3) {
-          _createCityController.text = parts[0];
-          _createStateController.text = parts[1];
-          _createCountryController.text = parts[2];
-        } else if (parts.length == 2) {
-          _createCityController.text = parts[0];
-          _createStateController.text = '';
-          _createCountryController.text = parts[1];
-        } else if (parts.length == 1) {
-          _createCityController.text = parts[0];
-          _createStateController.clear();
-          _createCountryController.clear();
-        }
-      }
       _createLocationController.text = job.location;
       _useCompanyLocationForJob =
           companyLocation.isNotEmpty &&
@@ -4109,6 +3756,9 @@ class _MyHomePageState extends State<MyHomePage> {
       _selectedFaaCertificates
         ..clear()
         ..addAll(job.faaCertificates);
+      _selectedRequiredRatings
+        ..clear()
+        ..addAll(job.requiredRatings);
       _selectedFlightHours
         ..clear()
         ..addAll(job.flightHoursByType);
@@ -4267,6 +3917,21 @@ class _MyHomePageState extends State<MyHomePage> {
                         .toList(),
                   ),
                 ],
+                if (listing.requiredRatings.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  const Text(
+                    'Required Ratings',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: listing.requiredRatings
+                        .map((rating) => Chip(label: Text(rating)))
+                        .toList(),
+                  ),
+                ],
                 if (listing.description.trim().isNotEmpty) ...[
                   const SizedBox(height: 12),
                   const Text(
@@ -4351,8 +4016,6 @@ class _MyHomePageState extends State<MyHomePage> {
     if (!mounted) {
       return;
     }
-    _closeTemplateEditor();
-    DefaultTabController.maybeOf(context)?.animateTo(3);
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('Updated template "${selected.name}".')),
     );
@@ -4480,6 +4143,7 @@ class _MyHomePageState extends State<MyHomePage> {
         faaRules: List<String>.from(job.faaRules),
         description: job.description,
         faaCertificates: List<String>.from(job.faaCertificates),
+        requiredRatings: List<String>.from(job.requiredRatings),
         typeRatingsRequired: List<String>.from(job.typeRatingsRequired),
         flightExperience: List<String>.from(job.flightExperience),
         flightHours: Map<String, int>.from(job.flightHours),
@@ -4548,6 +4212,386 @@ class _MyHomePageState extends State<MyHomePage> {
           job.type.toLowerCase().contains(q) ||
           job.description.toLowerCase().contains(q);
     }).toList();
+  }
+
+  List<String> get _searchTabTypeOptions {
+    final listingTypes = <String>{
+      for (final job in _visibleJobs)
+        if (job.type.trim().isNotEmpty) job.type.trim(),
+    }.toList()..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+
+    final canonicalTypes = List<String>.from(_availableJobTypes)
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+
+    final merged = <String>{...canonicalTypes, ...listingTypes}.toList()
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+
+    return ['all', ...merged];
+  }
+
+  List<String> get _searchTabLocationOptions {
+    final listingLocations = <String>{
+      for (final job in _visibleJobs)
+        if (job.location.trim().isNotEmpty) job.location.trim(),
+    }.toList()..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+
+    final canonicalLocations = <String>[
+      ..._countryOptions,
+      'International',
+      'Remote',
+    ]..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+
+    final merged = <String>{...canonicalLocations, ...listingLocations}.toList()
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+
+    return ['all', ...merged];
+  }
+
+  List<String> get _searchTabPositionOptions {
+    return const [
+      'all',
+      'Single Pilot',
+      'Crew Member: Captain',
+      'Crew Member: Co-Pilot',
+    ];
+  }
+
+  List<String> get _searchTabFaaRuleOptions {
+    return ['all', ..._availableFaaRules];
+  }
+
+  List<String> get _searchTabPayMetricOptions {
+    return ['all', ..._availablePayRateMetrics];
+  }
+
+  List<String> get _searchTabCertificateOptions {
+    final canonical = <String>{
+      ..._availableFaaCertificates,
+      ..._availableInstructorCertificates,
+    };
+    final listingValues = <String>{
+      for (final job in _visibleJobs)
+        ...job.faaCertificates.where((cert) => cert.trim().isNotEmpty),
+    };
+    final merged = <String>{...canonical, ...listingValues}.toList()
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    return ['all', ...merged];
+  }
+
+  List<String> get _searchTabRatingOptions {
+    final canonical = <String>{..._availableRatingSelections};
+    final listingValues = <String>{
+      for (final job in _visibleJobs)
+        ...job.requiredRatings.where((rating) => rating.trim().isNotEmpty),
+    };
+    final merged = <String>{...canonical, ...listingValues}.toList()
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    return ['all', ...merged];
+  }
+
+  List<String> get _searchTabFlightHoursOptions {
+    return ['all', ..._availableEmployerFlightHours];
+  }
+
+  List<String> get _searchTabInstructorHoursOptions {
+    return ['all', ..._availableInstructorHours];
+  }
+
+  bool _matchesSearchTabPositionFilter(JobListing job, String filterValue) {
+    final selected = filterValue.trim().toLowerCase();
+    if (selected == 'all') {
+      return true;
+    }
+
+    final crewRole = job.crewRole.trim().toLowerCase();
+    final crewPosition = (job.crewPosition ?? '').trim().toLowerCase();
+
+    if (selected == 'single pilot') {
+      return crewRole == 'single pilot';
+    }
+    if (selected == 'crew member: captain') {
+      return crewRole == 'crew' && crewPosition == 'captain';
+    }
+    if (selected == 'crew member: co-pilot') {
+      return crewRole == 'crew' && crewPosition == 'co-pilot';
+    }
+    return false;
+  }
+
+  bool _matchesSearchTabLocationFilter(String jobLocation, String filterValue) {
+    final selected = filterValue.trim().toLowerCase();
+    if (selected == 'all') {
+      return true;
+    }
+
+    final rawLocation = jobLocation.trim();
+    if (rawLocation.isEmpty) {
+      return false;
+    }
+
+    final location = rawLocation.toLowerCase();
+    if (location == selected) {
+      return true;
+    }
+
+    if (selected == 'remote') {
+      return location.contains('remote');
+    }
+
+    final parts = location
+        .split(',')
+        .map((part) => part.trim())
+        .where((part) => part.isNotEmpty)
+        .toList();
+    final trailing = parts.isEmpty ? location : parts.last;
+
+    final usStateNames = _usStateOptions
+        .map((name) => name.toLowerCase())
+        .toSet();
+    final usStateAbbreviations = _usStateOptions
+        .map((name) => (_stateProvinceAbbreviations[name] ?? '').toLowerCase())
+        .where((abbr) => abbr.isNotEmpty)
+        .toSet();
+    final canadaProvinceNames = _canadaProvinceOptions
+        .map((name) => name.toLowerCase())
+        .toSet();
+    final canadaProvinceAbbreviations = _canadaProvinceOptions
+        .map((name) => (_stateProvinceAbbreviations[name] ?? '').toLowerCase())
+        .where((abbr) => abbr.isNotEmpty)
+        .toSet();
+
+    final isUsLike =
+        location.contains('usa') ||
+        location.contains('united states') ||
+        usStateNames.contains(trailing) ||
+        usStateAbbreviations.contains(trailing) ||
+        usStateNames.contains(location) ||
+        usStateAbbreviations.contains(location);
+
+    final isCanadaLike =
+        location.contains('canada') ||
+        canadaProvinceNames.contains(trailing) ||
+        canadaProvinceAbbreviations.contains(trailing) ||
+        canadaProvinceNames.contains(location) ||
+        canadaProvinceAbbreviations.contains(location);
+
+    if (selected == 'international') {
+      if (location.contains('international')) {
+        return true;
+      }
+      if (location.contains('remote')) {
+        return false;
+      }
+      return !isUsLike && !isCanadaLike;
+    }
+
+    if (selected == 'usa') {
+      return isUsLike;
+    }
+
+    if (selected == 'canada') {
+      return isCanadaLike;
+    }
+
+    return location == selected;
+  }
+
+  List<JobListing> get _searchTabFilteredJobs {
+    final typeFilter = _searchTabTypeOptions.contains(_searchTabTypeFilter)
+        ? _searchTabTypeFilter
+        : 'all';
+    final locationFilter =
+        _searchTabLocationOptions.contains(_searchTabLocationFilter)
+        ? _searchTabLocationFilter
+        : 'all';
+    final positionFilter =
+        _searchTabPositionOptions.contains(_searchTabPositionFilter)
+        ? _searchTabPositionFilter
+        : 'all';
+    final faaRuleFilter =
+        _searchTabFaaRuleOptions.contains(_searchTabFaaRuleFilter)
+        ? _searchTabFaaRuleFilter
+        : 'all';
+    final payMetricFilter =
+        _searchTabPayMetricOptions.contains(_searchTabPayMetricFilter)
+        ? _searchTabPayMetricFilter
+        : 'all';
+    final certificateFilter =
+        _searchTabCertificateOptions.contains(_searchTabCertificateFilter)
+        ? _searchTabCertificateFilter
+        : 'all';
+    final ratingFilter =
+        _searchTabRatingOptions.contains(_searchTabRatingFilter)
+        ? _searchTabRatingFilter
+        : 'all';
+    final flightHoursFilter =
+        _searchTabFlightHoursOptions.contains(_searchTabFlightHoursFilter)
+        ? _searchTabFlightHoursFilter
+        : 'all';
+    final instructorHoursFilter =
+        _searchTabInstructorHoursOptions.contains(
+          _searchTabInstructorHoursFilter,
+        )
+        ? _searchTabInstructorHoursFilter
+        : 'all';
+
+    final query = _searchTabQuery.toLowerCase();
+
+    final filtered = _visibleJobs.where((job) {
+      if (_searchTabExternalOnly && !job.isExternal) {
+        return false;
+      }
+
+      if (typeFilter != 'all' && job.type.trim() != typeFilter) {
+        return false;
+      }
+
+      if (!_matchesSearchTabLocationFilter(job.location, locationFilter)) {
+        return false;
+      }
+
+      if (!_matchesSearchTabPositionFilter(job, positionFilter)) {
+        return false;
+      }
+
+      if (faaRuleFilter != 'all' && !job.faaRules.contains(faaRuleFilter)) {
+        return false;
+      }
+
+      if (payMetricFilter != 'all') {
+        final compensation = (job.salaryRange ?? '').toLowerCase();
+        if (!compensation.contains(payMetricFilter.toLowerCase())) {
+          return false;
+        }
+      }
+
+      if (certificateFilter != 'all' &&
+          !job.faaCertificates.contains(certificateFilter)) {
+        return false;
+      }
+
+      if (ratingFilter != 'all') {
+        final hasRating = job.requiredRatings.contains(ratingFilter);
+        if (!hasRating) {
+          return false;
+        }
+      }
+
+      if (flightHoursFilter != 'all' &&
+          !job.flightHoursByType.containsKey(flightHoursFilter)) {
+        return false;
+      }
+
+      if (instructorHoursFilter != 'all' &&
+          !job.instructorHoursByType.containsKey(instructorHoursFilter)) {
+        return false;
+      }
+
+      if (query.isNotEmpty) {
+        final searchableFields = [
+          job.title,
+          job.company,
+          job.location,
+          job.type,
+          job.description,
+          job.crewRole,
+          job.crewPosition ?? '',
+          ...job.faaRules,
+          ...job.faaCertificates,
+          ...job.requiredRatings,
+          ...job.typeRatingsRequired,
+          ...job.aircraftFlown,
+        ];
+        final matchesQuery = searchableFields.any(
+          (value) => value.toLowerCase().contains(query),
+        );
+        if (!matchesQuery) {
+          return false;
+        }
+      }
+
+      if (_searchTabMatchFilter != 'all') {
+        final percent = _evaluateJobMatch(job).matchPercentage;
+        switch (_searchTabMatchFilter) {
+          case 'perfect':
+            if (percent < 90) {
+              return false;
+            }
+          case 'good':
+            if (percent < 70 || percent >= 90) {
+              return false;
+            }
+          case 'stretch':
+            if (percent >= 70) {
+              return false;
+            }
+        }
+      }
+
+      return true;
+    }).toList();
+
+    filtered.sort((a, b) {
+      switch (_searchTabSort) {
+        case 'newest':
+          final aDate = a.updatedAt ?? a.createdAt;
+          final bDate = b.updatedAt ?? b.createdAt;
+          if (aDate != null && bDate != null) {
+            return bDate.compareTo(aDate);
+          }
+          if (aDate != null) {
+            return -1;
+          }
+          if (bDate != null) {
+            return 1;
+          }
+          return a.title.toLowerCase().compareTo(b.title.toLowerCase());
+        case 'deadline':
+          final aDate = a.deadlineDate;
+          final bDate = b.deadlineDate;
+          if (aDate != null && bDate != null) {
+            return aDate.compareTo(bDate);
+          }
+          if (aDate != null) {
+            return -1;
+          }
+          if (bDate != null) {
+            return 1;
+          }
+          return a.title.toLowerCase().compareTo(b.title.toLowerCase());
+        case 'company':
+          return a.company.toLowerCase().compareTo(b.company.toLowerCase());
+        default:
+          final matchCompare = _evaluateJobMatch(
+            b,
+          ).matchPercentage.compareTo(_evaluateJobMatch(a).matchPercentage);
+          if (matchCompare != 0) {
+            return matchCompare;
+          }
+          return a.title.toLowerCase().compareTo(b.title.toLowerCase());
+      }
+    });
+
+    return filtered;
+  }
+
+  void _clearSearchTabFilters() {
+    _searchTabController.clear();
+    setState(() {
+      _searchTabQuery = '';
+      _searchTabTypeFilter = 'all';
+      _searchTabLocationFilter = 'all';
+      _searchTabPositionFilter = 'all';
+      _searchTabFaaRuleFilter = 'all';
+      _searchTabCertificateFilter = 'all';
+      _searchTabRatingFilter = 'all';
+      _searchTabFlightHoursFilter = 'all';
+      _searchTabInstructorHoursFilter = 'all';
+      _searchTabPayMetricFilter = 'all';
+      _searchTabMatchFilter = 'all';
+      _searchTabSort = 'best_match';
+      _searchTabExternalOnly = false;
+    });
   }
 
   List<JobListing> get _pagedJobs {
@@ -4636,27 +4680,19 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   void _openDetails(JobListing job) {
-    final isExternalListing = job.isExternal;
-    final hasApplied = isExternalListing ? false : _hasApplied(job.id);
-
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => JobDetailsPage(
           job: job,
           isFavorite: _favoriteIds.contains(job.id),
           onFavorite: () => _toggleFavorite(job),
-          onApply: isExternalListing
-              ? null
-              : (hasApplied ? null : () => _handleApplyTap(job)),
+          onApply: _hasApplied(job.id) ? null : () => _handleApplyTap(job),
           onShare: () => _shareJobListing(job),
-          onReport: _profileType == ProfileType.jobSeeker
-              ? () => _reportJobListing(job)
-              : null,
+          onReport: () => _reportJobListing(job),
           companyProfile: _findEmployerProfileForJob(job),
           openRoleCount: _countOpenRolesForJob(job),
           onSeeAllListings: () => _seeAllListingsForCompany(job),
-          hasApplied: hasApplied,
-          isExternalListing: isExternalListing,
+          hasApplied: _hasApplied(job.id),
           matchPercentage: _profileType == ProfileType.jobSeeker
               ? _evaluateJobMatch(job).matchPercentage
               : null,
@@ -4744,11 +4780,6 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Future<void> _applyToJob(JobListing job, {String? coverLetter}) async {
-    if (job.isExternal) {
-      await _openExternalApply(job);
-      return;
-    }
-
     if (_hasApplied(job.id)) {
       // Check reapply window
       final existing = await _getLatestApplicationForCurrentSeeker(job.id);
@@ -4894,53 +4925,9 @@ class _MyHomePageState extends State<MyHomePage> {
     }
   }
 
-  Future<void> _openExternalApply(JobListing job) async {
-    final rawUrl = job.externalApplyUrl?.trim() ?? '';
-    if (rawUrl.isEmpty) {
-      if (!mounted) {
-        return;
-      }
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'This external listing does not have an application link yet.',
-          ),
-        ),
-      );
-      return;
-    }
-
-    final uri = Uri.tryParse(rawUrl);
-    final isValidHttp =
-        uri != null &&
-        (uri.scheme == 'http' || uri.scheme == 'https') &&
-        uri.host.isNotEmpty;
-
-    if (!isValidHttp) {
-      if (!mounted) {
-        return;
-      }
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('The external application URL is not valid.'),
-        ),
-      );
-      return;
-    }
-
-    final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
-    if (!launched && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Could not open the external application page.'),
-        ),
-      );
-    }
-  }
-
   void _handleApplyTap(JobListing job) {
     if (job.isExternal) {
-      _openExternalApply(job);
+      _contactExternalEmployer(job);
       return;
     }
 
@@ -4949,134 +4936,6 @@ class _MyHomePageState extends State<MyHomePage> {
       _applyToJob(job);
     } else {
       _showQuickApplyDialog(job, match);
-    }
-  }
-
-  Future<void> _reportJobListing(JobListing job) async {
-    final detailsController = TextEditingController();
-    String selectedReason = _jobListingReportReasons.first;
-    String? errorText;
-
-    final report = await showDialog<JobListingReport>(
-      context: context,
-      builder: (dialogContext) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) => AlertDialog(
-            title: const Text('Report job listing'),
-            content: SingleChildScrollView(
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 520),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      '${job.title} • ${job.company}',
-                      style: const TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                    const SizedBox(height: 12),
-                    DropdownButtonFormField<String>(
-                      initialValue: selectedReason,
-                      decoration: const InputDecoration(
-                        labelText: 'Reason',
-                        border: OutlineInputBorder(),
-                      ),
-                      items: _jobListingReportReasons
-                          .map(
-                            (reason) => DropdownMenuItem<String>(
-                              value: reason,
-                              child: Text(reason),
-                            ),
-                          )
-                          .toList(),
-                      onChanged: (value) {
-                        if (value == null) {
-                          return;
-                        }
-                        setDialogState(() {
-                          selectedReason = value;
-                          errorText = null;
-                        });
-                      },
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: detailsController,
-                      maxLines: 4,
-                      decoration: InputDecoration(
-                        labelText: 'Details (optional)',
-                        hintText:
-                            'Add any context that helps admin review this listing.',
-                        border: const OutlineInputBorder(),
-                        errorText: errorText,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(dialogContext).pop(),
-                child: const Text('Cancel'),
-              ),
-              ElevatedButton.icon(
-                onPressed: () {
-                  final reporterUserId = SupabaseBootstrap.isConfigured
-                      ? (Supabase.instance.client.auth.currentUser?.id ?? '')
-                      : _currentJobSeekerId();
-                  if (reporterUserId.trim().isEmpty) {
-                    setDialogState(() {
-                      errorText = 'You must be signed in to report a listing.';
-                    });
-                    return;
-                  }
-
-                  Navigator.of(dialogContext).pop(
-                    JobListingReport(
-                      id: _generateJobListingReportId(),
-                      jobListingId: job.id,
-                      reporterUserId: reporterUserId,
-                      employerId: job.employerId,
-                      reason: selectedReason,
-                      details: detailsController.text.trim(),
-                      jobTitle: job.title,
-                      company: job.company,
-                      location: job.location,
-                      createdAt: DateTime.now(),
-                    ),
-                  );
-                },
-                icon: const Icon(Icons.flag_outlined),
-                label: const Text('Submit Report'),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-
-    if (report == null) {
-      return;
-    }
-
-    try {
-      await _appRepository.reportJobListing(report);
-      if (!mounted) {
-        return;
-      }
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Report submitted. Admin will review the listing.'),
-        ),
-      );
-    } catch (e) {
-      if (!mounted) {
-        return;
-      }
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Could not submit report: $e')));
     }
   }
 
@@ -5124,134 +4983,6 @@ class _MyHomePageState extends State<MyHomePage> {
     return parts.isEmpty ? 'Not provided' : parts.join(' • ');
   }
 
-  Future<void> _toggleArchiveApplication(Application application) async {
-    final newArchived = !application.isArchived;
-    try {
-      await _appRepository.updateApplicationArchived(
-        application.id,
-        newArchived,
-      );
-      if (!mounted) return;
-      final updated = application.copyWith(
-        isArchived: newArchived,
-        updatedAt: DateTime.now(),
-      );
-      setState(() {
-        _employerApplications = _employerApplications
-            .map((app) => app.id == updated.id ? updated : app)
-            .toList();
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            newArchived ? 'Applicant archived.' : 'Applicant unarchived.',
-          ),
-        ),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Could not update applicant: $e')));
-    }
-  }
-
-  Future<void> _deleteApplication(Application application) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Delete application?'),
-        content: const Text(
-          'Permanently delete this application? This cannot be undone.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.red,
-              foregroundColor: Colors.white,
-            ),
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true) return;
-    try {
-      await _appRepository.deleteApplication(application.id);
-      if (!mounted) return;
-      setState(() {
-        _employerApplications.removeWhere((app) => app.id == application.id);
-        _selectedApplicationIds.remove(application.id);
-      });
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Application deleted.')));
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not delete application: $e')),
-      );
-    }
-  }
-
-  Future<void> _bulkDeleteApplications(List<Application> applications) async {
-    final count = applications.length;
-    if (count == 0) return;
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('Delete $count application${count == 1 ? '' : 's'}?'),
-        content: Text(
-          'Permanently delete $count application${count == 1 ? '' : 's'}? '
-          'This cannot be undone.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.red,
-              foregroundColor: Colors.white,
-            ),
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: Text('Delete $count'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true) return;
-    final ids = applications.map((app) => app.id).toList();
-    try {
-      await _appRepository.deleteApplications(ids);
-      if (!mounted) return;
-      final idSet = ids.toSet();
-      setState(() {
-        _employerApplications.removeWhere((app) => idSet.contains(app.id));
-        _selectedApplicationIds.removeAll(idSet);
-        if (_selectedApplicationIds.isEmpty) {
-          _bulkSelectMode = false;
-        }
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Deleted $count application${count == 1 ? '' : 's'}.'),
-        ),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not delete applications: $e')),
-      );
-    }
-  }
-
   String _normalizeRequirementToken(String value) {
     return value.trim().toLowerCase();
   }
@@ -5267,6 +4998,13 @@ class _MyHomePageState extends State<MyHomePage> {
       final normalized = normalizeCertificateName(cert);
       if (applicantCertificates.contains(normalized)) {
         met.add('Cert: ${canonicalCertificateLabel(cert)}');
+      }
+    }
+
+    for (final rating in job.requiredRatings) {
+      final normalized = normalizeCertificateName(rating);
+      if (applicantCertificates.contains(normalized)) {
+        met.add('Rating: ${rating.trim()}');
       }
     }
 
@@ -5388,6 +5126,13 @@ class _MyHomePageState extends State<MyHomePage> {
       }
     }
 
+    for (final rating in job.requiredRatings) {
+      final normalized = normalizeCertificateName(rating);
+      if (!applicantCertificates.contains(normalized)) {
+        lacking.add('Rating: ${rating.trim()}');
+      }
+    }
+
     final applicantTypeRatings = {
       for (final rating in app.applicantTypeRatings)
         _normalizeRequirementToken(rating),
@@ -5489,6 +5234,73 @@ class _MyHomePageState extends State<MyHomePage> {
     return lacking;
   }
 
+  Future<void> _sendApplicationFeedback(
+    String applicationId,
+    String feedbackType,
+    String message,
+  ) async {
+    try {
+      final feedback = ApplicationFeedback(
+        id: _generateFeedbackId(),
+        applicationId: applicationId,
+        message: message,
+        feedbackType: feedbackType,
+        sentByEmployer: true,
+        sentAt: DateTime.now(),
+      );
+
+      await _appRepository.saveFeedback(feedback);
+
+      // Update application status
+      Application? application;
+      try {
+        application = _employerApplications.firstWhere(
+          (app) => app.id == applicationId,
+        );
+      } catch (_) {
+        try {
+          application = _myApplications.firstWhere(
+            (app) => app.id == applicationId,
+          );
+        } catch (_) {
+          application = null;
+        }
+      }
+      if (application == null) {
+        throw StateError('Application not found: $applicationId');
+      }
+      final nextStatus =
+          feedbackType == ApplicationFeedback.feedbackTypeInterested
+          ? Application.statusInterested
+          : Application.statusRejected;
+      await _appRepository.updateApplicationStatus(applicationId, nextStatus);
+
+      if (!mounted) return;
+
+      final updated = application.copyWith(
+        status: nextStatus,
+        updatedAt: DateTime.now(),
+      );
+      setState(() {
+        _employerApplications = _employerApplications
+            .map((app) => app.id == updated.id ? updated : app)
+            .toList();
+      });
+      await _loadMyApplications();
+      await _loadAllFeedback();
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Feedback sent to applicant.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Error sending feedback: $e')));
+    }
+  }
+
   Widget _buildApplicantDetailsList({
     required String title,
     required List<String> values,
@@ -5518,81 +5330,216 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Future<void> _openApplicantDetails(Application app, JobListing job) async {
+    final existingFeedback = _getFeedbackForApplication(app.id);
+    final customMessageController = TextEditingController();
+    String? selectedFeedbackType;
+
     await showDialog<void>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Applicant Details'),
-        content: SingleChildScrollView(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 560),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  app.applicantName.trim().isNotEmpty
-                      ? app.applicantName
-                      : app.jobSeekerId,
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w700,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Applicant Details'),
+          content: SingleChildScrollView(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 560),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    app.applicantName.trim().isNotEmpty
+                        ? app.applicantName
+                        : app.jobSeekerId,
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 4),
-                Text('Applied for: ${job.title}'),
-                const SizedBox(height: 4),
-                Text('Match: ${app.matchPercentage}%'),
-                const SizedBox(height: 4),
-                Text('Location: ${_applicantLocation(app)}'),
-                const SizedBox(height: 10),
-                Text(
-                  'Email: ${app.applicantEmail.trim().isNotEmpty ? app.applicantEmail : 'Not provided'}',
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  'Phone: ${app.applicantPhone.trim().isNotEmpty ? app.applicantPhone : 'Not provided'}',
-                ),
-                const SizedBox(height: 4),
-                Text('Total Flight Hours: ${app.applicantTotalFlightHours}'),
-                const SizedBox(height: 12),
-                _buildApplicantDetailsList(
-                  title: 'FAA Certificates',
-                  values: app.applicantFaaCertificates,
-                  emptyText: 'No certificates provided.',
-                ),
-                const SizedBox(height: 12),
-                _buildApplicantDetailsList(
-                  title: 'Type Ratings',
-                  values: app.applicantTypeRatings,
-                  emptyText: 'No type ratings provided.',
-                ),
-                const SizedBox(height: 12),
-                _buildApplicantDetailsList(
-                  title: 'Aircraft Experience',
-                  values: app.applicantAircraftFlown,
-                  emptyText: 'No aircraft experience provided.',
-                ),
-                if (app.coverLetter.trim().isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text('Applied for: ${job.title}'),
+                  const SizedBox(height: 4),
+                  Text('Match: ${app.matchPercentage}%'),
+                  const SizedBox(height: 4),
+                  Text('Location: ${_applicantLocation(app)}'),
+                  const SizedBox(height: 10),
+                  Text(
+                    'Email: ${app.applicantEmail.trim().isNotEmpty ? app.applicantEmail : 'Not provided'}',
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Phone: ${app.applicantPhone.trim().isNotEmpty ? app.applicantPhone : 'Not provided'}',
+                  ),
+                  const SizedBox(height: 4),
+                  Text('Total Flight Hours: ${app.applicantTotalFlightHours}'),
                   const SizedBox(height: 12),
-                  const Text(
-                    'Message to Hiring Team',
-                    style: TextStyle(fontWeight: FontWeight.w600),
+                  _buildApplicantDetailsList(
+                    title: 'FAA Certificates',
+                    values: app.applicantFaaCertificates,
+                    emptyText: 'No certificates provided.',
                   ),
-                  const SizedBox(height: 6),
-                  Text(app.coverLetter.trim()),
+                  const SizedBox(height: 12),
+                  _buildApplicantDetailsList(
+                    title: 'Type Ratings',
+                    values: app.applicantTypeRatings,
+                    emptyText: 'No type ratings provided.',
+                  ),
+                  const SizedBox(height: 12),
+                  _buildApplicantDetailsList(
+                    title: 'Aircraft Experience',
+                    values: app.applicantAircraftFlown,
+                    emptyText: 'No aircraft experience provided.',
+                  ),
+                  if (app.coverLetter.trim().isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    const Text(
+                      'Cover Letter',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(app.coverLetter.trim()),
+                  ],
+                  const SizedBox(height: 16),
+                  const Divider(),
+                  const SizedBox(height: 8),
+                  // Previous feedback display
+                  if (existingFeedback != null) ...[
+                    const Text(
+                      'Previous Feedback Sent',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 6),
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Colors.blueGrey.shade50,
+                        border: Border.all(color: Colors.blueGrey.shade200),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            existingFeedback.message,
+                            style: const TextStyle(fontStyle: FontStyle.italic),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Sent ${_formatYmd(existingFeedback.sentAt.toLocal())}',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey.shade600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                  // Feedback form
+                  const Text(
+                    'Send Feedback',
+                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      ChoiceChip(
+                        label: const Text('Interested'),
+                        selected:
+                            selectedFeedbackType ==
+                            ApplicationFeedback.feedbackTypeInterested,
+                        selectedColor: Colors.green.shade100,
+                        onSelected: (_) {
+                          setDialogState(() {
+                            selectedFeedbackType =
+                                ApplicationFeedback.feedbackTypeInterested;
+                          });
+                        },
+                      ),
+                      ChoiceChip(
+                        label: const Text('Not a Fit'),
+                        selected:
+                            selectedFeedbackType ==
+                            ApplicationFeedback.feedbackTypeNotFit,
+                        selectedColor: Colors.red.shade100,
+                        onSelected: (_) {
+                          setDialogState(() {
+                            selectedFeedbackType =
+                                ApplicationFeedback.feedbackTypeNotFit;
+                          });
+                        },
+                      ),
+                      ChoiceChip(
+                        label: const Text('Custom'),
+                        selected:
+                            selectedFeedbackType ==
+                            ApplicationFeedback.feedbackTypeCustom,
+                        selectedColor: Colors.blue.shade100,
+                        onSelected: (_) {
+                          setDialogState(() {
+                            selectedFeedbackType =
+                                ApplicationFeedback.feedbackTypeCustom;
+                          });
+                        },
+                      ),
+                    ],
+                  ),
+                  if (selectedFeedbackType ==
+                      ApplicationFeedback.feedbackTypeCustom) ...[
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: customMessageController,
+                      decoration: const InputDecoration(
+                        labelText: 'Custom message',
+                        border: OutlineInputBorder(),
+                        hintText: 'Enter your feedback message...',
+                      ),
+                      maxLines: 3,
+                    ),
+                  ],
                 ],
-              ],
+              ),
             ),
           ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Close'),
+            ),
+            if (selectedFeedbackType != null)
+              FilledButton(
+                onPressed: () async {
+                  final type = selectedFeedbackType!;
+                  final message =
+                      type == ApplicationFeedback.feedbackTypeInterested
+                      ? 'We are interested in your application and would like to move forward.'
+                      : type == ApplicationFeedback.feedbackTypeNotFit
+                      ? 'Thank you for your interest. Unfortunately, you are not a fit for this role at this time.'
+                      : customMessageController.text.trim();
+
+                  if (type == ApplicationFeedback.feedbackTypeCustom &&
+                      message.isEmpty) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Please enter a custom message.'),
+                      ),
+                    );
+                    return;
+                  }
+
+                  Navigator.of(dialogContext).pop();
+                  await _sendApplicationFeedback(app.id, type, message);
+                },
+                child: const Text('Send Feedback'),
+              ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(),
-            child: const Text('Close'),
-          ),
-        ],
       ),
     );
+
+    customMessageController.dispose();
   }
 
   Future<void> _showQuickApplyDialog(JobListing job, _MatchResult match) async {
@@ -5601,7 +5548,7 @@ class _MyHomePageState extends State<MyHomePage> {
         ? '${match.matchPercentage}% Good Match'
         : '${match.matchPercentage}% Stretch Match';
     final bodyText = match.missingRequirements.isEmpty
-        ? 'Add an optional message for hiring staff.'
+        ? 'Add an optional cover letter.'
         : 'Missing: ${match.missingRequirements.take(3).join(', ')}'
               '${match.missingRequirements.length > 3 ? '...' : ''}.';
     final submitted = await showDialog<String?>(
@@ -5624,7 +5571,7 @@ class _MyHomePageState extends State<MyHomePage> {
             TextField(
               controller: coverLetterController,
               decoration: const InputDecoration(
-                labelText: 'Message to Hiring Team (optional)',
+                labelText: 'Cover letter (optional)',
                 border: OutlineInputBorder(),
               ),
               maxLines: 4,
@@ -5671,6 +5618,125 @@ class _MyHomePageState extends State<MyHomePage> {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Listing details copied to clipboard.')),
     );
+  }
+
+  Future<void> _reportJobListing(JobListing job) async {
+    final reasonController = TextEditingController();
+    final detailsController = TextEditingController();
+    String selectedReason = 'Fraud / Scam';
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Report Listing'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                DropdownButtonFormField<String>(
+                  initialValue: selectedReason,
+                  decoration: const InputDecoration(labelText: 'Reason'),
+                  items: const [
+                    DropdownMenuItem(
+                      value: 'Fraud / Scam',
+                      child: Text('Fraud / Scam'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'Misleading Information',
+                      child: Text('Misleading Information'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'Inappropriate Content',
+                      child: Text('Inappropriate Content'),
+                    ),
+                    DropdownMenuItem(value: 'Other', child: Text('Other')),
+                  ],
+                  onChanged: (value) {
+                    if (value == null) {
+                      return;
+                    }
+                    setDialogState(() {
+                      selectedReason = value;
+                    });
+                  },
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: detailsController,
+                  maxLines: 3,
+                  decoration: const InputDecoration(
+                    labelText: 'Additional Details (optional)',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                reasonController.text = selectedReason;
+                Navigator.of(dialogContext).pop(true);
+              },
+              child: const Text('Submit Report'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (confirmed != true) {
+      reasonController.dispose();
+      detailsController.dispose();
+      return;
+    }
+
+    final supabaseUserId =
+        Supabase.instance.client.auth.currentUser?.id.trim() ?? '';
+    final reporterUserId = supabaseUserId.isNotEmpty
+        ? supabaseUserId
+        : _currentJobSeekerId();
+
+    final report = JobListingReport(
+      id: 'report_${DateTime.now().millisecondsSinceEpoch}',
+      jobListingId: job.id,
+      reporterUserId: reporterUserId,
+      employerId: job.employerId,
+      reason: reasonController.text.trim().isEmpty
+          ? 'Other'
+          : reasonController.text.trim(),
+      details: detailsController.text.trim(),
+      jobTitle: job.title,
+      company: job.company,
+      location: job.location,
+      createdAt: DateTime.now(),
+    );
+
+    reasonController.dispose();
+    detailsController.dispose();
+
+    try {
+      await _appRepository.reportJobListing(report);
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Listing report submitted. Thank you.')),
+      );
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Could not submit report: $e')));
+    }
   }
 
   Future<bool> _confirmDeleteJob(JobListing job) async {
@@ -5743,68 +5809,6 @@ class _MyHomePageState extends State<MyHomePage> {
     }
   }
 
-  Future<void> _archiveJob(JobListing job) async {
-    final updated = job.copyWith(isActive: false, archivedAt: DateTime.now());
-    try {
-      await _appRepository.updateJob(updated);
-      if (!mounted) return;
-      setState(() {
-        _allJobs = _allJobs
-            .map((j) => j.id == updated.id ? updated : j)
-            .toList();
-      });
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Archived "${job.title}".')));
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Could not archive job: $e')));
-    }
-  }
-
-  Future<void> _reopenJob(JobListing job) async {
-    final now = DateTime.now();
-    final initialDate =
-        (job.deadlineDate != null && job.deadlineDate!.isAfter(now))
-        ? job.deadlineDate!
-        : now.add(const Duration(days: 30));
-
-    if (!mounted) return;
-    final newDeadline = await showDatePicker(
-      context: context,
-      initialDate: initialDate,
-      firstDate: now,
-      lastDate: now.add(const Duration(days: 730)),
-      helpText: 'Choose new application deadline',
-    );
-    if (newDeadline == null) return;
-
-    final updated = job.copyWith(
-      isActive: true,
-      archivedAt: null,
-      deadlineDate: newDeadline,
-    );
-    try {
-      await _appRepository.updateJob(updated);
-      if (!mounted) return;
-      setState(() {
-        _allJobs = _allJobs
-            .map((j) => j.id == updated.id ? updated : j)
-            .toList();
-      });
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Reopened "${job.title}".')));
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Could not reopen job: $e')));
-    }
-  }
-
   Future<void> _editJob(JobListing job) async {
     final titleController = TextEditingController(text: job.title);
     final locationController = TextEditingController(text: job.location);
@@ -5829,6 +5833,7 @@ class _MyHomePageState extends State<MyHomePage> {
     final selectedFaaCertificates = <String>{
       ..._canonicalizeCertificates(job.faaCertificates),
     };
+    final selectedRequiredRatings = <String>{...job.requiredRatings};
     String? selectedFaaRule = job.faaRules.isNotEmpty
         ? job.faaRules.first
         : null;
@@ -5986,6 +5991,11 @@ class _MyHomePageState extends State<MyHomePage> {
             trim: true,
           ) ||
           !_sameStringSet(
+            draft.requiredRatings,
+            job.requiredRatings,
+            trim: true,
+          ) ||
+          !_sameStringSet(
             draft.typeRatingsRequired,
             job.typeRatingsRequired,
             trim: true,
@@ -6016,7 +6026,6 @@ class _MyHomePageState extends State<MyHomePage> {
     JobListing? buildEditedDraft({bool showValidationFeedback = true}) {
       final title = titleController.text.trim();
       final location = locationController.text.trim();
-      final normalizedLocation = _normalizeCityStateLocation(location);
 
       final missingRequirements = <String>[];
       if (title.isEmpty) {
@@ -6024,11 +6033,6 @@ class _MyHomePageState extends State<MyHomePage> {
       }
       if (location.isEmpty) {
         missingRequirements.add('Location');
-      }
-      if (location.isNotEmpty && normalizedLocation == null) {
-        missingRequirements.add(
-          'Location must follow City, State format (e.g., Dallas, TX)',
-        );
       }
       if (selectedEmploymentType == null || selectedEmploymentType!.isEmpty) {
         missingRequirements.add('Employment Type');
@@ -6065,7 +6069,7 @@ class _MyHomePageState extends State<MyHomePage> {
       final hasCertificateSelection = selectedFaaCertificates.any(
         _availableFaaCertificates.contains,
       );
-      final hasRatingSelection = selectedFaaCertificates.any(
+      final hasRatingSelection = selectedRequiredRatings.any(
         _availableRatingSelections.contains,
       );
       if (!hasCertificateSelection) {
@@ -6186,13 +6190,14 @@ class _MyHomePageState extends State<MyHomePage> {
         id: job.id,
         title: title,
         company: lockedCompanyName,
-        location: normalizedLocation ?? location,
+        location: location,
         type: selectedEmploymentType!,
         crewRole: selectedCrewRole,
         crewPosition: selectedCrewRole == 'Crew' ? selectedCrewPosition : null,
         faaRules: selectedFaaRule == null ? [] : [selectedFaaRule!],
         description: descriptionController.text.trim(),
         faaCertificates: selectedFaaCertificates.toList(),
+        requiredRatings: selectedRequiredRatings.toList(),
         typeRatingsRequired: parsedTypeRatings,
         flightExperience: [...flightHours.keys, ...instructorHours.keys],
         flightHours: flightHours,
@@ -6216,6 +6221,8 @@ class _MyHomePageState extends State<MyHomePage> {
         createdAt: job.createdAt,
         updatedAt: DateTime.now(),
         employerId: job.employerId,
+        isExternal: job.isExternal,
+        externalApplyUrl: job.externalApplyUrl,
       );
     }
 
@@ -6239,10 +6246,7 @@ class _MyHomePageState extends State<MyHomePage> {
           TextField(
             controller: locationController,
             onChanged: (_) => setModalState(() {}),
-            decoration: const InputDecoration(
-              labelText: 'Location *',
-              hintText: 'City, ST',
-            ),
+            decoration: const InputDecoration(labelText: 'Location *'),
           ),
           const SizedBox(height: 10),
           DropdownButtonFormField<String>(
@@ -6533,13 +6537,13 @@ class _MyHomePageState extends State<MyHomePage> {
                   dense: true,
                   contentPadding: EdgeInsets.zero,
                   title: Text(rating),
-                  value: selectedFaaCertificates.contains(rating),
+                  value: selectedRequiredRatings.contains(rating),
                   onChanged: (selected) {
                     setModalState(() {
                       if (selected == true) {
-                        selectedFaaCertificates.add(rating);
+                        selectedRequiredRatings.add(rating);
                       } else {
-                        selectedFaaCertificates.remove(rating);
+                        selectedRequiredRatings.remove(rating);
                       }
                     });
                   },
@@ -6893,39 +6897,6 @@ class _MyHomePageState extends State<MyHomePage> {
     return 'Company headquarters location not set';
   }
 
-  String _toTitleCaseWords(String input) {
-    return input
-        .split(RegExp(r'\s+'))
-        .where((part) => part.isNotEmpty)
-        .map((part) {
-          if (part.length == 1) {
-            return part.toUpperCase();
-          }
-          return '${part[0].toUpperCase()}${part.substring(1).toLowerCase()}';
-        })
-        .join(' ');
-  }
-
-  String? _normalizeCityStateLocation(String value) {
-    final trimmed = value.trim();
-    final match = RegExp(
-      r"^([A-Za-z][A-Za-z .'-]*),\s*([A-Za-z]{2}|[A-Za-z][A-Za-z .'-]*)$",
-    ).firstMatch(trimmed);
-    if (match == null) {
-      return null;
-    }
-
-    final city = _toTitleCaseWords(
-      match.group(1)!.replaceAll(RegExp(r'\s+'), ' '),
-    );
-    final stateRaw = match.group(2)!.replaceAll(RegExp(r'\s+'), ' ').trim();
-    final state = stateRaw.length == 2
-        ? stateRaw.toUpperCase()
-        : _toTitleCaseWords(stateRaw);
-
-    return '$city, $state';
-  }
-
   String _buildJobTimelineText(JobListing job) {
     return _buildTimelineLabels(
       createdAt: job.createdAt,
@@ -6953,6 +6924,7 @@ class _MyHomePageState extends State<MyHomePage> {
     _createDescriptionController.clear();
     _createTypeRatingsController.clear();
     _selectedFaaCertificates.clear();
+    _selectedRequiredRatings.clear();
     _selectedFaaRules.clear();
     _selectedFlightHours.clear();
     _preferredFlightHours.clear();
@@ -6975,16 +6947,9 @@ class _MyHomePageState extends State<MyHomePage> {
     final company = _profileType == ProfileType.employer
         ? _currentEmployer.companyName.trim()
         : _createCompanyController.text.trim();
-    final customCity = _createCityController.text.trim();
-    final customState = _createStateController.text.trim();
-    final customCountry = _createCountryController.text.trim();
     final location = _useCompanyLocationForJob
         ? _buildCompanyLocationString()
-        : [
-            customCity,
-            customState,
-            customCountry,
-          ].where((part) => part.isNotEmpty).join(', ');
+        : _createLocationController.text.trim();
     final type = _createTypeController.text.trim();
     final position = _selectedCreatePositionOption;
     final startingPay = _createStartingPayController.text.trim();
@@ -6995,15 +6960,6 @@ class _MyHomePageState extends State<MyHomePage> {
     if (title.isEmpty) missing.add('Title');
     if (company.isEmpty) missing.add('Company');
     if (location.isEmpty) missing.add('Location');
-    if (!_useCompanyLocationForJob && customCity.isEmpty) {
-      missing.add('City');
-    }
-    if (!_useCompanyLocationForJob && customState.isEmpty) {
-      missing.add('State / Province');
-    }
-    if (!_useCompanyLocationForJob && customCountry.isEmpty) {
-      missing.add('Country');
-    }
     if (type.isEmpty) missing.add('Employment Type');
     if (position == null || position.isEmpty) missing.add('Position Selection');
     if (description.isEmpty) missing.add('Description');
@@ -7072,7 +7028,7 @@ class _MyHomePageState extends State<MyHomePage> {
     final hasCertificateSelection = _selectedFaaCertificates.any(
       _availableFaaCertificates.contains,
     );
-    final hasRatingSelection = _selectedFaaCertificates.any(
+    final hasRatingSelection = _selectedRequiredRatings.any(
       _availableRatingSelections.contains,
     );
     final selectedFlightHourEntries = _selectedFlightHours.entries.toList();
@@ -7146,6 +7102,7 @@ class _MyHomePageState extends State<MyHomePage> {
   Future<void> _showCreatedJobSummary(JobListing job) async {
     final requirementCount =
         job.faaCertificates.length +
+        job.requiredRatings.length +
         job.flightHoursByType.length +
         job.instructorHoursByType.length +
         job.specialtyHoursByType.length;
@@ -7516,13 +7473,6 @@ class _MyHomePageState extends State<MyHomePage> {
                           final deadlineText = job.deadlineDate != null
                               ? _formatYmd(job.deadlineDate!.toLocal())
                               : null;
-                          final isNarrowCard =
-                              MediaQuery.sizeOf(context).width < 430;
-                          final actionButtonSize = isNarrowCard ? 36.0 : 42.0;
-                          final actionButtonPadding = EdgeInsets.all(
-                            isNarrowCard ? 6 : 8,
-                          );
-                          final hasApplied = _hasApplied(job.id);
                           return Card(
                             margin: const EdgeInsets.symmetric(vertical: 8),
                             child: InkWell(
@@ -7607,182 +7557,42 @@ class _MyHomePageState extends State<MyHomePage> {
                                                         CrossAxisAlignment
                                                             .start,
                                                     children: [
-                                                      Text(
-                                                        job.title,
-                                                        style: const TextStyle(
-                                                          fontSize: 16,
-                                                          fontWeight:
-                                                              FontWeight.w600,
-                                                        ),
-                                                      ),
-                                                      if (job.isExternal) ...[
-                                                        const SizedBox(height: 2),
-                                                        Container(
-                                                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                                          decoration: BoxDecoration(
-                                                            color: Colors.teal.shade50,
-                                                            border: Border.all(color: Colors.teal.shade300),
-                                                            borderRadius: BorderRadius.circular(4),
-                                                          ),
-                                                          child: Text(
-                                                            'EXTERNAL',
-                                                            style: TextStyle(
-                                                              fontSize: 10,
-                                                              color: Colors.teal.shade800,
-                                                              fontWeight: FontWeight.w700,
-                                                              letterSpacing: 0.5,
-                                                            ),
-                                                          ),
-                                                        ),
-                                                      ],
-                                                      if (_profileType ==
-                                                          ProfileType
-                                                              .employer) ...[
-                                                        const SizedBox(
-                                                          height: 4,
-                                                        ),
-                                                        Builder(
-                                                          builder: (ctx) {
-                                                            final String
-                                                            statusIcon;
-                                                            final Color
-                                                            statusColor;
-                                                            final String
-                                                            statusLabel;
-                                                            if (!job.isActive) {
-                                                              statusIcon = '📦';
-                                                              statusColor =
-                                                                  Colors
-                                                                      .grey
-                                                                      .shade200;
-                                                              statusLabel =
-                                                                  'Archived';
-                                                            } else if (job
-                                                                .isExpired) {
-                                                              statusIcon = '⏳';
-                                                              statusColor =
-                                                                  Colors
-                                                                      .orange
-                                                                      .shade100;
-                                                              statusLabel =
-                                                                  'Expired';
-                                                            } else {
-                                                              statusIcon = '✅';
-                                                              statusColor =
-                                                                  Colors
-                                                                      .green
-                                                                      .shade100;
-                                                              final days = job
-                                                                  .daysUntilDeadline;
-                                                              statusLabel =
-                                                                  days != null
-                                                                  ? 'Active · $days day${days == 1 ? '' : 's'} left'
-                                                                  : 'Active';
-                                                            }
-                                                            return Container(
-                                                              padding:
-                                                                  const EdgeInsets.symmetric(
-                                                                    horizontal:
-                                                                        8,
-                                                                    vertical: 2,
-                                                                  ),
-                                                              decoration: BoxDecoration(
-                                                                color:
-                                                                    statusColor,
-                                                                borderRadius:
-                                                                    BorderRadius.circular(
-                                                                      12,
-                                                                    ),
-                                                              ),
-                                                              child: Text(
-                                                                '$statusIcon $statusLabel',
-                                                                style:
-                                                                    const TextStyle(
-                                                                      fontSize:
-                                                                          11,
-                                                                    ),
-                                                              ),
-                                                            );
-                                                          },
-                                                        ),
-                                                      ],
-                                                      const SizedBox(height: 4),
-                                                      if (job.isExternal) ...[
-                                                        const SizedBox(
-                                                          height: 4,
-                                                        ),
-                                                        Container(
-                                                          padding:
-                                                              const EdgeInsets.symmetric(
-                                                                horizontal: 8,
-                                                                vertical: 2,
-                                                              ),
-                                                          decoration: BoxDecoration(
-                                                            color: Colors
-                                                                .teal
-                                                                .shade50,
-                                                            border: Border.all(
-                                                              color: Colors
-                                                                  .teal
-                                                                  .shade200,
-                                                            ),
-                                                            borderRadius:
-                                                                BorderRadius.circular(
-                                                                  12,
-                                                                ),
-                                                          ),
-                                                          child: Text(
-                                                            'External posting • Apply off-platform',
-                                                            style: TextStyle(
-                                                              fontSize: 11,
-                                                              color: Colors
-                                                                  .teal
-                                                                  .shade800,
+                                                      Wrap(
+                                                        crossAxisAlignment:
+                                                            WrapCrossAlignment
+                                                                .center,
+                                                        spacing: 8,
+                                                        runSpacing: 4,
+                                                        children: [
+                                                          Text(
+                                                            job.title,
+                                                            style: const TextStyle(
+                                                              fontSize: 16,
                                                               fontWeight:
                                                                   FontWeight
                                                                       .w600,
                                                             ),
                                                           ),
-                                                        ),
-                                                      ],
+                                                          if (job.isExternal)
+                                                            const Text(
+                                                              'EXTERNAL JOB',
+                                                              style: TextStyle(
+                                                                fontSize: 12,
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .w800,
+                                                                color: Colors
+                                                                    .teal,
+                                                                letterSpacing:
+                                                                    0.5,
+                                                              ),
+                                                            ),
+                                                        ],
+                                                      ),
+                                                      const SizedBox(height: 4),
                                                       Text(
                                                         '${job.company} • ${job.location}',
                                                       ),
-                                                      if (_profileType ==
-                                                          ProfileType.jobSeeker)
-                                                        Align(
-                                                          alignment: Alignment
-                                                              .centerLeft,
-                                                          child: TextButton.icon(
-                                                            onPressed: () =>
-                                                                _openLocationInMaps(
-                                                                  job.location,
-                                                                ),
-                                                            icon: const Icon(
-                                                              Icons
-                                                                  .map_outlined,
-                                                              size: 16,
-                                                            ),
-                                                            label: const Text(
-                                                              'View map',
-                                                            ),
-                                                            style: TextButton.styleFrom(
-                                                              padding:
-                                                                  EdgeInsets
-                                                                      .zero,
-                                                              minimumSize:
-                                                                  const Size(
-                                                                    0,
-                                                                    28,
-                                                                  ),
-                                                              tapTargetSize:
-                                                                  MaterialTapTargetSize
-                                                                      .shrinkWrap,
-                                                              alignment: Alignment
-                                                                  .centerLeft,
-                                                            ),
-                                                          ),
-                                                        ),
                                                       const SizedBox(height: 2),
                                                       Text(job.type),
                                                       if (deadlineText !=
@@ -7891,76 +7701,17 @@ class _MyHomePageState extends State<MyHomePage> {
                                         color: Colors.grey.shade800,
                                       ),
                                     ),
-                                    if (job.benefits.isNotEmpty) ...[
-                                      const SizedBox(height: 8),
-                                      Wrap(
-                                        spacing: 6,
-                                        runSpacing: 4,
-                                        children: [
-                                          ...job.benefits
-                                              .take(3)
-                                              .map(
-                                                (benefit) => Container(
-                                                  padding:
-                                                      const EdgeInsets.symmetric(
-                                                        horizontal: 8,
-                                                        vertical: 4,
-                                                      ),
-                                                  decoration: BoxDecoration(
-                                                    color: Colors.blue.shade50,
-                                                    borderRadius:
-                                                        BorderRadius.circular(
-                                                          12,
-                                                        ),
-                                                  ),
-                                                  child: Text(
-                                                    benefit,
-                                                    style: const TextStyle(
-                                                      fontSize: 11,
-                                                    ),
-                                                  ),
-                                                ),
-                                              ),
-                                          if (job.benefits.length > 3)
-                                            Container(
-                                              padding:
-                                                  const EdgeInsets.symmetric(
-                                                    horizontal: 8,
-                                                    vertical: 4,
-                                                  ),
-                                              decoration: BoxDecoration(
-                                                color: Colors.blue.shade50,
-                                                borderRadius:
-                                                    BorderRadius.circular(12),
-                                              ),
-                                              child: Text(
-                                                '+${job.benefits.length - 3} more',
-                                                style: const TextStyle(
-                                                  fontSize: 11,
-                                                ),
-                                              ),
-                                            ),
-                                        ],
-                                      ),
-                                    ],
                                     const SizedBox(height: 8),
                                     Align(
                                       alignment: Alignment.centerRight,
                                       child: Wrap(
-                                        spacing: isNarrowCard ? 2 : 4,
+                                        spacing: 8,
                                         children: [
                                           if (_profileType ==
                                               ProfileType.jobSeeker)
-                                            IconButton(
-                                              constraints:
-                                                  BoxConstraints.tightFor(
-                                                    width: actionButtonSize,
-                                                    height: actionButtonSize,
-                                                  ),
-                                              padding: actionButtonPadding,
-                                              visualDensity: isNarrowCard
-                                                  ? VisualDensity.compact
-                                                  : VisualDensity.standard,
+                                            OutlinedButton.icon(
+                                              onPressed: () =>
+                                                  _toggleFavorite(job),
                                               icon: Icon(
                                                 isFav
                                                     ? Icons.star
@@ -7969,81 +7720,59 @@ class _MyHomePageState extends State<MyHomePage> {
                                                     ? Colors.amber
                                                     : null,
                                               ),
-                                              onPressed: () =>
-                                                  _toggleFavorite(job),
+                                              label: Text(
+                                                isFav
+                                                    ? 'Favorited'
+                                                    : 'Favorite',
+                                              ),
                                             ),
                                           if (_profileType ==
                                               ProfileType.jobSeeker)
-                                            IconButton(
-                                              constraints:
-                                                  BoxConstraints.tightFor(
-                                                    width: actionButtonSize,
-                                                    height: actionButtonSize,
-                                                  ),
-                                              padding: actionButtonPadding,
-                                              visualDensity: isNarrowCard
-                                                  ? VisualDensity.compact
-                                                  : VisualDensity.standard,
+                                            OutlinedButton.icon(
+                                              onPressed:
+                                                  (job.isExternal ||
+                                                      !_hasApplied(job.id))
+                                                  ? () => _handleApplyTap(job)
+                                                  : null,
                                               icon: Icon(
                                                 job.isExternal
                                                     ? Icons.open_in_new
-                                                    : hasApplied
+                                                    : _hasApplied(job.id)
                                                     ? Icons.check_circle
                                                     : Icons.send,
-                                                color: job.isExternal
-                                                    ? Colors.blue
-                                                    : hasApplied
+                                                color:
+                                                    !job.isExternal &&
+                                                        _hasApplied(job.id)
                                                     ? Colors.green
                                                     : null,
                                               ),
-                                              tooltip: job.isExternal
-                                                  ? 'Apply Externally'
-                                                  : hasApplied
-                                                  ? 'Applied'
-                                                  : 'Apply',
-                                              onPressed: job.isExternal
-                                                  ? null
-                                                  : hasApplied
-                                                  ? null
-                                                  : () => _handleApplyTap(job),
+                                              label: Text(
+                                                job.isExternal
+                                                    ? 'Contact Employer'
+                                                    : _hasApplied(job.id)
+                                                    ? 'Applied'
+                                                    : 'Apply',
+                                              ),
                                             ),
                                           if (_profileType ==
                                               ProfileType.jobSeeker)
-                                            IconButton(
-                                              constraints:
-                                                  BoxConstraints.tightFor(
-                                                    width: actionButtonSize,
-                                                    height: actionButtonSize,
-                                                  ),
-                                              padding: actionButtonPadding,
-                                              visualDensity: isNarrowCard
-                                                  ? VisualDensity.compact
-                                                  : VisualDensity.standard,
+                                            OutlinedButton.icon(
+                                              onPressed: () =>
+                                                  _shareJobListing(job),
                                               icon: const Icon(
                                                 Icons.share_outlined,
                                               ),
-                                              tooltip: 'Share listing',
-                                              onPressed: () =>
-                                                  _shareJobListing(job),
+                                              label: const Text('Share'),
                                             ),
                                           if (_profileType ==
                                               ProfileType.jobSeeker)
-                                            IconButton(
-                                              constraints:
-                                                  BoxConstraints.tightFor(
-                                                    width: actionButtonSize,
-                                                    height: actionButtonSize,
-                                                  ),
-                                              padding: actionButtonPadding,
-                                              visualDensity: isNarrowCard
-                                                  ? VisualDensity.compact
-                                                  : VisualDensity.standard,
+                                            OutlinedButton.icon(
+                                              onPressed: () =>
+                                                  _reportJobListing(job),
                                               icon: const Icon(
                                                 Icons.flag_outlined,
                                               ),
-                                              tooltip: 'Report listing',
-                                              onPressed: () =>
-                                                  _reportJobListing(job),
+                                              label: const Text('Report'),
                                             ),
                                           if (_canEditJob(job))
                                             OutlinedButton.icon(
@@ -8060,23 +7789,7 @@ class _MyHomePageState extends State<MyHomePage> {
                                               label: const Text('Delete'),
                                             ),
                                           if (_profileType ==
-                                              ProfileType.employer) ...[
-                                            if (!job.isActive || job.isExpired)
-                                              OutlinedButton.icon(
-                                                onPressed: () =>
-                                                    _reopenJob(job),
-                                                icon: const Icon(Icons.refresh),
-                                                label: const Text('Reopen'),
-                                              ),
-                                            if (job.isActive)
-                                              OutlinedButton.icon(
-                                                onPressed: () =>
-                                                    _archiveJob(job),
-                                                icon: const Icon(
-                                                  Icons.archive_outlined,
-                                                ),
-                                                label: const Text('Archive'),
-                                              ),
+                                              ProfileType.employer)
                                             OutlinedButton.icon(
                                               onPressed: () =>
                                                   _saveJobAsTemplate(job),
@@ -8087,7 +7800,6 @@ class _MyHomePageState extends State<MyHomePage> {
                                                 'Save as Template',
                                               ),
                                             ),
-                                          ],
                                         ],
                                       ),
                                     ),
@@ -8303,15 +8015,6 @@ class _MyHomePageState extends State<MyHomePage> {
 
   Widget _buildEmployerApplicationsTab() {
     final allApplications = _employerApplications;
-
-    // Archive filter options
-    final archiveFilterOptions = const [
-      ('all', 'All Applicants'),
-      ('active', 'Active Only'),
-      ('archived', 'Archived Only'),
-      ('rejected', 'Rejected'),
-    ];
-
     final filterOptions = const [
       ('all', 'All'),
       ('applied', 'Submitted'),
@@ -8330,27 +8033,15 @@ class _MyHomePageState extends State<MyHomePage> {
       ('highest_match', 'Highest Match'),
       ('status', 'Status'),
     ];
-
-    // Apply archive filter
-    final archiveFiltered = switch (_selectedArchiveFilter) {
-      'active' => allApplications.where((app) => !app.isArchived).toList(),
-      'archived' => allApplications.where((app) => app.isArchived).toList(),
-      'rejected' =>
-        allApplications
-            .where((app) => app.status == Application.statusRejected)
-            .toList(),
-      _ => allApplications,
-    };
-
     final countsByStatus = {
-      'applied': archiveFiltered.where((app) => app.status == 'applied').length,
-      'reviewed': archiveFiltered
+      'applied': allApplications.where((app) => app.status == 'applied').length,
+      'reviewed': allApplications
           .where((app) => app.status == 'reviewed')
           .length,
-      'interested': archiveFiltered
+      'interested': allApplications
           .where((app) => app.status == 'interested')
           .length,
-      'rejected': archiveFiltered
+      'rejected': allApplications
           .where((app) => app.status == 'rejected')
           .length,
     };
@@ -8364,8 +8055,8 @@ class _MyHomePageState extends State<MyHomePage> {
 
     // Apply status filter
     final statusFiltered = _selectedEmployerApplicationFilter == 'all'
-        ? archiveFiltered
-        : archiveFiltered
+        ? allApplications
+        : allApplications
               .where((app) => app.status == _selectedEmployerApplicationFilter)
               .toList();
 
@@ -8377,43 +8068,43 @@ class _MyHomePageState extends State<MyHomePage> {
       _ => statusFiltered,
     };
 
-    // Sort the applications
     final sorted = [...filteredApplications]
       ..sort((a, b) {
         if (_selectedEmployerApplicationSort == 'highest_match') {
           final matchCompare = b.matchPercentage.compareTo(a.matchPercentage);
-          if (matchCompare != 0) return matchCompare;
+          if (matchCompare != 0) {
+            return matchCompare;
+          }
           return b.appliedAt.compareTo(a.appliedAt);
         }
+
         if (_selectedEmployerApplicationSort == 'status') {
-          int statusRank(String status) => switch (status) {
-            'applied' => 0,
-            'reviewed' => 1,
-            'interested' => 2,
-            'rejected' => 3,
-            _ => 4,
-          };
+          int statusRank(String status) {
+            switch (status) {
+              case 'applied':
+                return 0;
+              case 'reviewed':
+                return 1;
+              case 'interested':
+                return 2;
+              case 'rejected':
+                return 3;
+              default:
+                return 4;
+            }
+          }
+
           final statusCompare = statusRank(
             a.status,
           ).compareTo(statusRank(b.status));
-          if (statusCompare != 0) return statusCompare;
+          if (statusCompare != 0) {
+            return statusCompare;
+          }
           return b.appliedAt.compareTo(a.appliedAt);
         }
+
         return b.appliedAt.compareTo(a.appliedAt);
       });
-
-    // Group by job id for collapsible sections
-    final jobGroups = <String, List<Application>>{};
-    for (final app in sorted) {
-      jobGroups.putIfAbsent(app.jobId, () => []).add(app);
-    }
-
-    final selectedApps = allApplications
-        .where((app) => _selectedApplicationIds.contains(app.id))
-        .toList();
-    final rejectedApps = allApplications
-        .where((app) => app.status == Application.statusRejected)
-        .toList();
 
     if (allApplications.isEmpty) {
       return const Center(
@@ -8421,254 +8112,147 @@ class _MyHomePageState extends State<MyHomePage> {
       );
     }
 
-    // Build the flat list of widgets to display
-    final listItems = <Widget>[];
-
-    // ── Header: stats + filters ─────────────────────────────────────────────
-    listItems.add(
-      Padding(
-        padding: const EdgeInsets.only(bottom: 8),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Overall quick stats
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(10),
-              margin: const EdgeInsets.only(bottom: 10),
-              decoration: BoxDecoration(
-                color: Colors.blueGrey.shade50,
-                border: Border.all(color: Colors.blueGrey.shade100),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Wrap(
-                spacing: 16,
-                runSpacing: 4,
-                children: [
-                  Text(
-                    '🟢 $perfectCount perfect',
-                    style: const TextStyle(fontSize: 13),
-                  ),
-                  Text(
-                    '🟡 $goodCount good',
-                    style: const TextStyle(fontSize: 13),
-                  ),
-                  Text(
-                    '🔴 $stretchCount stretch',
-                    style: const TextStyle(fontSize: 13),
-                  ),
-                ],
-              ),
-            ),
-            // Archive view filter
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              crossAxisAlignment: WrapCrossAlignment.center,
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      itemCount: sorted.isEmpty ? 2 : sorted.length + 1,
+      itemBuilder: (context, index) {
+        if (index == 0) {
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  'View:',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w600,
-                    color: Colors.grey.shade700,
+                // Quick stats
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(10),
+                  margin: const EdgeInsets.only(bottom: 10),
+                  decoration: BoxDecoration(
+                    color: Colors.blueGrey.shade50,
+                    border: Border.all(color: Colors.blueGrey.shade100),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Wrap(
+                    spacing: 16,
+                    runSpacing: 4,
+                    children: [
+                      Text(
+                        '🟢 $perfectCount perfect',
+                        style: const TextStyle(fontSize: 13),
+                      ),
+                      Text(
+                        '🟡 $goodCount good',
+                        style: const TextStyle(fontSize: 13),
+                      ),
+                      Text(
+                        '🔴 $stretchCount stretch',
+                        style: const TextStyle(fontSize: 13),
+                      ),
+                    ],
                   ),
                 ),
-                ...archiveFilterOptions.map((option) {
-                  final key = option.$1;
-                  final label = option.$2;
-                  return ChoiceChip(
-                    label: Text(label),
-                    selected: _selectedArchiveFilter == key,
-                    onSelected: (_) {
-                      setState(() {
-                        _selectedArchiveFilter = key;
-                      });
-                    },
-                  );
-                }),
-              ],
-            ),
-            const SizedBox(height: 8),
-            // Status filter
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: filterOptions.map((option) {
-                final key = option.$1;
-                final label = option.$2;
-                final count = key == 'all'
-                    ? archiveFiltered.length
-                    : (countsByStatus[key] ?? 0);
-                return ChoiceChip(
-                  label: Text('$label ($count)'),
-                  selected: _selectedEmployerApplicationFilter == key,
-                  onSelected: (_) {
-                    setState(() {
-                      _selectedEmployerApplicationFilter = key;
-                    });
-                  },
-                );
-              }).toList(),
-            ),
-            const SizedBox(height: 8),
-            // Match % filter
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                Text(
-                  'Match:',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w600,
-                    color: Colors.grey.shade700,
-                  ),
+                // Status filter
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: filterOptions.map((option) {
+                    final key = option.$1;
+                    final label = option.$2;
+                    final count = key == 'all'
+                        ? allApplications.length
+                        : (countsByStatus[key] ?? 0);
+                    return ChoiceChip(
+                      label: Text('$label ($count)'),
+                      selected: _selectedEmployerApplicationFilter == key,
+                      onSelected: (_) {
+                        setState(() {
+                          _selectedEmployerApplicationFilter = key;
+                        });
+                      },
+                    );
+                  }).toList(),
                 ),
-                ...matchFilterOptions.map((option) {
-                  final key = option.$1;
-                  final label = option.$2;
-                  return ChoiceChip(
-                    label: Text(label),
-                    selected: _selectedMatchFilter == key,
-                    onSelected: (_) {
-                      setState(() {
-                        _selectedMatchFilter = key;
-                      });
-                    },
-                  );
-                }),
-              ],
-            ),
-            const SizedBox(height: 8),
-            // Sort
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                Text(
-                  'Sort:',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w600,
-                    color: Colors.grey.shade700,
-                  ),
-                ),
-                ...sortOptions.map((option) {
-                  final key = option.$1;
-                  final label = option.$2;
-                  return ChoiceChip(
-                    label: Text(label),
-                    selected: _selectedEmployerApplicationSort == key,
-                    onSelected: (_) {
-                      setState(() {
-                        _selectedEmployerApplicationSort = key;
-                      });
-                    },
-                  );
-                }),
-              ],
-            ),
-            const SizedBox(height: 8),
-            // Bulk action row
-            Row(
-              children: [
-                TextButton.icon(
-                  onPressed: () {
-                    setState(() {
-                      _bulkSelectMode = !_bulkSelectMode;
-                      if (!_bulkSelectMode) {
-                        _selectedApplicationIds.clear();
-                      }
-                    });
-                  },
-                  icon: Icon(
-                    _bulkSelectMode
-                        ? Icons.check_box
-                        : Icons.check_box_outline_blank,
-                  ),
-                  label: Text(_bulkSelectMode ? 'Cancel Select' : 'Select'),
-                ),
-                if (_bulkSelectMode) ...[
-                  const SizedBox(width: 4),
-                  TextButton(
-                    onPressed: () {
-                      setState(() {
-                        if (_selectedApplicationIds.length ==
-                            filteredApplications.length) {
-                          _selectedApplicationIds.clear();
-                        } else {
-                          _selectedApplicationIds.addAll(
-                            filteredApplications.map((app) => app.id),
-                          );
-                        }
-                      });
-                    },
-                    child: Text(
-                      _selectedApplicationIds.length ==
-                              filteredApplications.length
-                          ? 'Deselect All'
-                          : 'Select All',
-                    ),
-                  ),
-                  if (_selectedApplicationIds.isNotEmpty)
+                const SizedBox(height: 8),
+                // Match % filter
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
                     Text(
-                      '${_selectedApplicationIds.length} selected',
-                      style: TextStyle(color: Colors.grey.shade600),
+                      'Match:',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        color: Colors.grey.shade700,
+                      ),
                     ),
-                ],
-                const Spacer(),
-                if (_bulkSelectMode && _selectedApplicationIds.isNotEmpty)
-                  TextButton.icon(
-                    onPressed: () => _bulkDeleteApplications(selectedApps),
-                    icon: const Icon(Icons.delete_outline, color: Colors.red),
-                    label: Text(
-                      'Delete ${_selectedApplicationIds.length}',
-                      style: const TextStyle(color: Colors.red),
+                    ...matchFilterOptions.map((option) {
+                      final key = option.$1;
+                      final label = option.$2;
+                      return ChoiceChip(
+                        label: Text(label),
+                        selected: _selectedMatchFilter == key,
+                        onSelected: (_) {
+                          setState(() {
+                            _selectedMatchFilter = key;
+                          });
+                        },
+                      );
+                    }),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                // Sort
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    Text(
+                      'Sort:',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        color: Colors.grey.shade700,
+                      ),
                     ),
-                  ),
-                if (rejectedApps.isNotEmpty)
-                  TextButton.icon(
-                    onPressed: () => _bulkDeleteApplications(rejectedApps),
-                    icon: const Icon(
-                      Icons.delete_sweep_outlined,
-                      color: Colors.red,
-                    ),
-                    label: Text(
-                      'Delete All Rejected (${rejectedApps.length})',
-                      style: const TextStyle(color: Colors.red),
-                    ),
-                  ),
+                    ...sortOptions.map((option) {
+                      final key = option.$1;
+                      final label = option.$2;
+                      return ChoiceChip(
+                        label: Text(label),
+                        selected: _selectedEmployerApplicationSort == key,
+                        onSelected: (_) {
+                          setState(() {
+                            _selectedEmployerApplicationSort = key;
+                          });
+                        },
+                      );
+                    }),
+                  ],
+                ),
               ],
             ),
-          ],
-        ),
-      ),
-    );
+          );
+        }
 
-    if (sorted.isEmpty) {
-      listItems.add(
-        Card(
-          margin: const EdgeInsets.symmetric(vertical: 8),
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Text(
-              'No applications match the selected filters.',
-              style: TextStyle(color: Colors.grey.shade700),
+        if (sorted.isEmpty) {
+          return Card(
+            margin: const EdgeInsets.symmetric(vertical: 8),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text(
+                'No applications match the selected filters.',
+                style: TextStyle(color: Colors.grey.shade700),
+              ),
             ),
-          ),
-        ),
-      );
-    } else {
-      // ── Grouped sections ─────────────────────────────────────────────────
-      for (final entry in jobGroups.entries) {
-        final jobId = entry.key;
-        final groupApps = entry.value;
-        final isExpanded = _expandedJobGroups.contains(jobId);
+          );
+        }
 
+        final app = sorted[index - 1];
         final job = _allJobs.firstWhere(
-          (j) => j.id == jobId,
+          (j) => j.id == app.jobId,
           orElse: () => JobListing(
-            id: jobId,
+            id: app.jobId,
             title: 'Unknown Job',
             company: _currentEmployer.companyName,
             location: '',
@@ -8682,469 +8266,1019 @@ class _MyHomePageState extends State<MyHomePage> {
           ),
         );
 
-        // Match tiers: perfect=90%+, good=70-89%, stretch=<70%
-        final groupPerfect = groupApps.where((a) => a.isPerfectMatch).length;
-        final groupGood = groupApps.where((a) => a.isGoodMatch).length;
-        final groupStretch = groupApps.where((a) => a.isStretchMatch).length;
-        final groupAutoRejected = groupApps.where((app) {
-          final feedback = _getFeedbackForApplication(app.id);
-          final rejectedByThreshold =
-              job.autoRejectThreshold > 0 &&
-              app.matchPercentage < job.autoRejectThreshold;
-          final rejectedByAutoFeedback =
-              feedback != null && feedback.isAutoGenerated;
-          return app.status == Application.statusRejected &&
-              (rejectedByThreshold || rejectedByAutoFeedback);
-        }).length;
+        final statusLabel = switch (app.status) {
+          'reviewed' => 'Reviewed',
+          'interested' => 'Interested',
+          'rejected' => 'Not moving forward',
+          _ => 'Submitted',
+        };
 
-        // Group header
-        listItems.add(
-          InkWell(
-            onTap: () {
-              setState(() {
-                if (isExpanded) {
-                  _expandedJobGroups.remove(jobId);
-                } else {
-                  _expandedJobGroups.add(jobId);
-                }
-              });
-            },
-            child: Container(
-              margin: const EdgeInsets.only(top: 8),
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              decoration: BoxDecoration(
-                color: Colors.blueGrey.shade50,
-                border: Border.all(color: Colors.blueGrey.shade200),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Row(
-                children: [
-                  Icon(
-                    isExpanded
-                        ? Icons.keyboard_arrow_down
-                        : Icons.keyboard_arrow_right,
-                    color: Colors.blueGrey,
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          '${job.title} (${groupApps.length} applicant${groupApps.length == 1 ? '' : 's'})',
-                          style: const TextStyle(
-                            fontWeight: FontWeight.w700,
-                            fontSize: 14,
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          '🟢 $groupPerfect perfect · 🟡 $groupGood good · 🔴 $groupStretch stretch · ⚙ $groupAutoRejected auto-rejected',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: Colors.blueGrey.shade700,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        );
+        final statusColor = switch (app.status) {
+          'reviewed' => Colors.blueGrey.shade100,
+          'interested' => Colors.green.shade100,
+          'rejected' => Colors.red.shade100,
+          _ => Colors.orange.shade100,
+        };
 
-        if (isExpanded) {
-          for (final app in groupApps) {
-            listItems.add(_buildApplicantCard(app, job));
-          }
+        final Color matchBadgeColor;
+        final String matchBadgeLabel;
+        if (app.isPerfectMatch) {
+          matchBadgeColor = Colors.green.shade100;
+          matchBadgeLabel = '🟢 ${app.matchPercentage}%';
+        } else if (app.isGoodMatch) {
+          matchBadgeColor = Colors.yellow.shade100;
+          matchBadgeLabel = '🟡 ${app.matchPercentage}%';
+        } else {
+          matchBadgeColor = Colors.red.shade100;
+          matchBadgeLabel = '🔴 ${app.matchPercentage}%';
         }
-      }
-    }
 
-    return ListView.builder(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      itemCount: listItems.length,
-      itemBuilder: (context, index) => listItems[index],
-    );
-  }
+        final appFeedback = _getFeedbackForApplication(app.id);
+        final hasFeedback = appFeedback != null;
+        final isAutoRejected =
+            app.status == 'rejected' &&
+            hasFeedback &&
+            appFeedback.isAutoGenerated;
+        final metRequirements = _metRequirementsForApplicant(app, job);
+        final lackingRequirements = _lackingRequirementsForApplicant(app, job);
 
-  Widget _buildApplicantCard(Application app, JobListing job) {
-    final statusLabel = switch (app.status) {
-      'reviewed' => 'Reviewed',
-      'interested' => 'Interested',
-      'rejected' => 'Not moving forward',
-      _ => 'Submitted',
-    };
-
-    final statusColor = switch (app.status) {
-      'reviewed' => Colors.blueGrey.shade100,
-      'interested' => Colors.green.shade100,
-      'rejected' => Colors.red.shade100,
-      _ => Colors.orange.shade100,
-    };
-
-    final Color matchBadgeColor;
-    final String matchBadgeLabel;
-    if (app.isPerfectMatch) {
-      matchBadgeColor = Colors.green.shade100;
-      matchBadgeLabel = '🟢 ${app.matchPercentage}%';
-    } else if (app.isGoodMatch) {
-      matchBadgeColor = Colors.yellow.shade100;
-      matchBadgeLabel = '🟡 ${app.matchPercentage}%';
-    } else {
-      matchBadgeColor = Colors.red.shade100;
-      matchBadgeLabel = '🔴 ${app.matchPercentage}%';
-    }
-
-    final appFeedback = _getFeedbackForApplication(app.id);
-    final hasFeedback = appFeedback != null;
-    final rejectedByThreshold =
-        job.autoRejectThreshold > 0 &&
-        app.matchPercentage < job.autoRejectThreshold;
-    final rejectedByAutoFeedback = hasFeedback && appFeedback.isAutoGenerated;
-    final isAutoRejected =
-        app.status == 'rejected' &&
-        (rejectedByThreshold || rejectedByAutoFeedback);
-    final autoRejectMessage = isAutoRejected
-        ? rejectedByAutoFeedback
-              ? appFeedback.message
-              : rejectedByThreshold
-              ? 'Auto-rejected: match ${app.matchPercentage}% is below threshold ${job.autoRejectThreshold}%.'
-              : 'Auto-rejected by employer settings.'
-        : null;
-    final metRequirements = _metRequirementsForApplicant(app, job);
-    final lackingRequirements = _lackingRequirementsForApplicant(app, job);
-    final isSelected = _selectedApplicationIds.contains(app.id);
-
-    return Opacity(
-      opacity: app.isArchived ? 0.6 : 1.0,
-      child: Card(
-        margin: const EdgeInsets.symmetric(vertical: 4),
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  if (_bulkSelectMode)
-                    Checkbox(
-                      value: isSelected,
-                      onChanged: (checked) {
-                        setState(() {
-                          if (checked == true) {
-                            _selectedApplicationIds.add(app.id);
-                          } else {
-                            _selectedApplicationIds.remove(app.id);
-                          }
-                        });
-                      },
-                    ),
-                  Expanded(
-                    child: Text(
-                      app.applicantName.trim().isNotEmpty
-                          ? app.applicantName
-                          : 'Applicant ID: ${app.jobSeekerId}',
-                      style: const TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                  ),
-                  if (app.isArchived)
-                    Container(
-                      margin: const EdgeInsets.only(left: 4),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 6,
-                        vertical: 2,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.grey.shade200,
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: const Text(
-                        '📦 Archived',
-                        style: TextStyle(fontSize: 11),
-                      ),
-                    ),
-                  if (hasFeedback && !isAutoRejected)
-                    Container(
-                      margin: const EdgeInsets.only(left: 4),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 6,
-                        vertical: 2,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.orange.shade100,
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: const Text(
-                        '[!]',
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                  if (isAutoRejected)
-                    Container(
-                      margin: const EdgeInsets.only(left: 4),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 6,
-                        vertical: 2,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.red.shade100,
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: const Text(
-                        '[✓] Auto-Rejected',
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                  // Archive (star) toggle
-                  IconButton(
-                    tooltip: app.isArchived ? 'Unarchive' : 'Archive',
-                    icon: Icon(
-                      app.isArchived ? Icons.star : Icons.star_border,
-                      color: app.isArchived ? Colors.amber : null,
-                    ),
-                    onPressed: () => _toggleArchiveApplication(app),
-                  ),
-                  // Delete button
-                  IconButton(
-                    tooltip: 'Delete application',
-                    icon: const Icon(Icons.delete_outline, color: Colors.red),
-                    onPressed: () => _deleteApplication(app),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 2),
-              Text(
-                app.applicantEmail.trim().isNotEmpty
-                    ? app.applicantEmail
-                    : 'Email not provided',
-                style: TextStyle(color: Colors.grey.shade700),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                _applicantLocation(app),
-                style: TextStyle(color: Colors.grey.shade700),
-              ),
-              const SizedBox(height: 8),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: Colors.blueGrey.shade50,
-                  border: Border.all(color: Colors.blueGrey.shade100),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+        return Card(
+          margin: const EdgeInsets.symmetric(vertical: 8),
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
                   children: [
-                    Text(
-                      'Profile Snapshot',
-                      style: TextStyle(
-                        fontWeight: FontWeight.w700,
-                        color: Colors.blueGrey.shade800,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Text('Match Score: ${app.matchPercentage}%'),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Total Flight Hours: ${app.applicantTotalFlightHours}',
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Requirements Met',
-                      style: TextStyle(
-                        fontWeight: FontWeight.w700,
-                        color: Colors.green.shade800,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    if (metRequirements.isEmpty)
-                      Text(
-                        'No required items currently marked as met.',
-                        style: TextStyle(
-                          color: Colors.green.shade900,
-                          fontSize: 12,
+                    Expanded(
+                      child: Text(
+                        job.title,
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
                         ),
-                      )
-                    else
-                      Wrap(
-                        spacing: 6,
-                        runSpacing: 6,
-                        children: metRequirements
-                            .take(8)
-                            .map(
-                              (item) => Chip(
-                                label: Text(item),
-                                backgroundColor: Colors.green.shade50,
-                                side: BorderSide(color: Colors.green.shade200),
-                              ),
-                            )
-                            .toList(),
-                      ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Requirements Lacking',
-                      style: TextStyle(
-                        fontWeight: FontWeight.w700,
-                        color: Colors.red.shade800,
                       ),
                     ),
-                    const SizedBox(height: 4),
-                    if (lackingRequirements.isEmpty)
-                      Text(
-                        'No required gaps detected in the snapshot.',
-                        style: TextStyle(
-                          color: Colors.green.shade900,
-                          fontSize: 12,
+                    if (hasFeedback && !isAutoRejected)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
                         ),
-                      )
-                    else
-                      Wrap(
-                        spacing: 6,
-                        runSpacing: 6,
-                        children: lackingRequirements
-                            .take(8)
-                            .map(
-                              (item) => Chip(
-                                label: Text(item),
-                                backgroundColor: Colors.red.shade50,
-                                side: BorderSide(color: Colors.red.shade200),
-                              ),
-                            )
-                            .toList(),
+                        decoration: BoxDecoration(
+                          color: Colors.orange.shade100,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: const Text(
+                          '[!]',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
                       ),
-                    if (app.applicantFaaCertificates.isNotEmpty) ...[
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 6,
-                        runSpacing: 6,
-                        children: app.applicantFaaCertificates
-                            .take(4)
-                            .map((cert) => Chip(label: Text(cert)))
-                            .toList(),
+                    if (isAutoRejected) ...[
+                      const SizedBox(width: 4),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.red.shade100,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: const Text(
+                          '[✓] Auto-rejected',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
                       ),
                     ],
                   ],
                 ),
-              ),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 4,
-                    ),
-                    decoration: BoxDecoration(
-                      color: matchBadgeColor,
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Text(matchBadgeLabel),
-                  ),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 4,
-                    ),
-                    decoration: BoxDecoration(
-                      color: statusColor,
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Text(statusLabel),
-                  ),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 4,
-                    ),
-                    decoration: BoxDecoration(
-                      color: Colors.grey.shade100,
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Text(
-                      'Applied ${_formatYmd(app.appliedAt.toLocal())}',
-                    ),
-                  ),
-                ],
-              ),
-              if (autoRejectMessage != null) ...[
+                const SizedBox(height: 4),
+                Text(
+                  app.applicantName.trim().isNotEmpty
+                      ? app.applicantName
+                      : 'Applicant ID: ${app.jobSeekerId}',
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  app.applicantEmail.trim().isNotEmpty
+                      ? app.applicantEmail
+                      : 'Email not provided',
+                  style: TextStyle(color: Colors.grey.shade700),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  _applicantLocation(app),
+                  style: TextStyle(color: Colors.grey.shade700),
+                ),
                 const SizedBox(height: 8),
                 Container(
                   width: double.infinity,
                   padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: Colors.red.shade50,
-                    border: Border.all(color: Colors.red.shade200),
-                    borderRadius: BorderRadius.circular(8),
+                    color: Colors.blueGrey.shade50,
+                    border: Border.all(color: Colors.blueGrey.shade100),
+                    borderRadius: BorderRadius.circular(10),
                   ),
-                  child: Text(
-                    autoRejectMessage,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Colors.red.shade900,
-                      fontWeight: FontWeight.w600,
-                    ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Profile Snapshot',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          color: Colors.blueGrey.shade800,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text('Match Score: ${app.matchPercentage}%'),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Total Flight Hours: ${app.applicantTotalFlightHours}',
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Requirements Met',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          color: Colors.green.shade800,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      if (metRequirements.isEmpty)
+                        Text(
+                          'No required items currently marked as met.',
+                          style: TextStyle(
+                            color: Colors.green.shade900,
+                            fontSize: 12,
+                          ),
+                        )
+                      else
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 6,
+                          children: metRequirements
+                              .take(8)
+                              .map(
+                                (item) => Chip(
+                                  label: Text(item),
+                                  backgroundColor: Colors.green.shade50,
+                                  side: BorderSide(
+                                    color: Colors.green.shade200,
+                                  ),
+                                ),
+                              )
+                              .toList(),
+                        ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Requirements Lacking',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          color: Colors.red.shade800,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      if (lackingRequirements.isEmpty)
+                        Text(
+                          'No required gaps detected in the snapshot.',
+                          style: TextStyle(
+                            color: Colors.green.shade900,
+                            fontSize: 12,
+                          ),
+                        )
+                      else
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 6,
+                          children: lackingRequirements
+                              .take(8)
+                              .map(
+                                (item) => Chip(
+                                  label: Text(item),
+                                  backgroundColor: Colors.red.shade50,
+                                  side: BorderSide(color: Colors.red.shade200),
+                                ),
+                              )
+                              .toList(),
+                        ),
+                      if (app.applicantFaaCertificates.isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 6,
+                          children: app.applicantFaaCertificates
+                              .take(4)
+                              .map((cert) => Chip(label: Text(cert)))
+                              .toList(),
+                        ),
+                      ],
+                    ],
                   ),
                 ),
-              ],
-              if (app.coverLetter.trim().isNotEmpty) ...[
                 const SizedBox(height: 8),
-                Text(
-                  'Message to Hiring Team: ${app.coverLetter.trim()}',
-                  style: TextStyle(color: Colors.grey.shade800),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: matchBadgeColor,
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(matchBadgeLabel),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: statusColor,
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(statusLabel),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade100,
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        'Applied ${_formatYmd(app.appliedAt.toLocal())}',
+                      ),
+                    ),
+                  ],
                 ),
-              ],
-              const SizedBox(height: 10),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  OutlinedButton.icon(
-                    onPressed: () => _openApplicantDetails(app, job),
-                    icon: const Icon(Icons.person_outline),
-                    label: const Text('View Applicant'),
-                  ),
-                  OutlinedButton(
-                    onPressed: app.status == 'reviewed'
-                        ? null
-                        : () => _updateApplicationStatus(app, 'reviewed'),
-                    child: const Text('Mark Reviewed'),
-                  ),
-                  OutlinedButton(
-                    onPressed: app.status == 'interested'
-                        ? null
-                        : () => _updateApplicationStatus(app, 'interested'),
-                    child: const Text('Interested'),
-                  ),
-                  OutlinedButton(
-                    onPressed: app.status == 'rejected'
-                        ? null
-                        : () => _updateApplicationStatus(app, 'rejected'),
-                    child: const Text('Not Moving Forward'),
+                if (app.coverLetter.trim().isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    'Cover Letter: ${app.coverLetter.trim()}',
+                    style: TextStyle(color: Colors.grey.shade800),
                   ),
                 ],
-              ),
-            ],
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed: () => _openApplicantDetails(app, job),
+                      icon: const Icon(Icons.person_outline),
+                      label: const Text('View & Send Feedback'),
+                    ),
+                    OutlinedButton(
+                      onPressed: app.status == 'reviewed'
+                          ? null
+                          : () => _updateApplicationStatus(app, 'reviewed'),
+                      child: const Text('Mark Reviewed'),
+                    ),
+                    OutlinedButton(
+                      onPressed: app.status == 'interested'
+                          ? null
+                          : () => _updateApplicationStatus(app, 'interested'),
+                      child: const Text('Interested'),
+                    ),
+                    OutlinedButton(
+                      onPressed: app.status == 'rejected'
+                          ? null
+                          : () => _updateApplicationStatus(app, 'rejected'),
+                      child: const Text('Not Moving Forward'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
   Widget _buildSearchTab() {
-    return const Center(
-      child: Text(
-        'Search placeholder - eventually show filters, saved searches, and suggestions.',
+    final allVisibleJobs = _visibleJobs;
+    final filteredJobs = _searchTabFilteredJobs;
+    final typeOptions = _searchTabTypeOptions;
+    final locationOptions = _searchTabLocationOptions;
+    final positionOptions = _searchTabPositionOptions;
+    final faaRuleOptions = _searchTabFaaRuleOptions;
+    final payMetricOptions = _searchTabPayMetricOptions;
+    final certificateOptions = _searchTabCertificateOptions;
+    final ratingOptions = _searchTabRatingOptions;
+    final flightHoursOptions = _searchTabFlightHoursOptions;
+    final instructorHoursOptions = _searchTabInstructorHoursOptions;
+
+    final selectedType = typeOptions.contains(_searchTabTypeFilter)
+        ? _searchTabTypeFilter
+        : 'all';
+    final selectedLocation = locationOptions.contains(_searchTabLocationFilter)
+        ? _searchTabLocationFilter
+        : 'all';
+    final selectedPosition = positionOptions.contains(_searchTabPositionFilter)
+        ? _searchTabPositionFilter
+        : 'all';
+    final selectedFaaRule = faaRuleOptions.contains(_searchTabFaaRuleFilter)
+        ? _searchTabFaaRuleFilter
+        : 'all';
+    final selectedPayMetric =
+        payMetricOptions.contains(_searchTabPayMetricFilter)
+        ? _searchTabPayMetricFilter
+        : 'all';
+    final selectedCertificate =
+        certificateOptions.contains(_searchTabCertificateFilter)
+        ? _searchTabCertificateFilter
+        : 'all';
+    final selectedRating = ratingOptions.contains(_searchTabRatingFilter)
+        ? _searchTabRatingFilter
+        : 'all';
+    final selectedFlightHours =
+        flightHoursOptions.contains(_searchTabFlightHoursFilter)
+        ? _searchTabFlightHoursFilter
+        : 'all';
+    final selectedInstructorHours =
+        instructorHoursOptions.contains(_searchTabInstructorHoursFilter)
+        ? _searchTabInstructorHoursFilter
+        : 'all';
+    final selectedSort = switch (_searchTabSort) {
+      'newest' || 'deadline' || 'company' => _searchTabSort,
+      _ => 'best_match',
+    };
+
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (allVisibleJobs.isEmpty) {
+      return const Center(
+        child: Text(
+          'No jobs available yet. Check back after listings are added.',
+        ),
+      );
+    }
+
+    return SafeArea(
+      top: false,
+      child: ListView.builder(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        itemCount: filteredJobs.length + 1,
+        itemBuilder: (context, index) {
+          if (index == 0) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextField(
+                  key: const ValueKey('search-tab-query'),
+                  controller: _searchTabController,
+                  decoration: InputDecoration(
+                    labelText: 'Search jobs and keywords',
+                    hintText: 'Part 135, Captain, Dallas, turbine...',
+                    prefixIcon: const Icon(Icons.search),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    suffixIcon: _searchTabQuery.isNotEmpty
+                        ? IconButton(
+                            onPressed: _clearSearchTabFilters,
+                            icon: const Icon(Icons.clear),
+                          )
+                        : null,
+                  ),
+                  onChanged: (value) {
+                    setState(() {
+                      _searchTabQuery = value.trim();
+                    });
+                  },
+                ),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 10,
+                  children: [
+                    SizedBox(
+                      width: 260,
+                      child: DropdownButtonFormField<String>(
+                        key: const ValueKey('search-tab-type-filter'),
+                        initialValue: selectedType,
+                        isExpanded: true,
+                        decoration: const InputDecoration(
+                          labelText: 'Employment Type',
+                          border: OutlineInputBorder(),
+                        ),
+                        items: typeOptions
+                            .map(
+                              (value) => DropdownMenuItem<String>(
+                                value: value,
+                                child: Text(
+                                  value == 'all' ? 'All Types' : value,
+                                ),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (value) {
+                          if (value == null) return;
+                          setState(() {
+                            _searchTabTypeFilter = value;
+                          });
+                        },
+                      ),
+                    ),
+                    SizedBox(
+                      width: 260,
+                      child: DropdownButtonFormField<String>(
+                        key: const ValueKey('search-tab-location-filter'),
+                        initialValue: selectedLocation,
+                        isExpanded: true,
+                        decoration: const InputDecoration(
+                          labelText: 'Location',
+                          border: OutlineInputBorder(),
+                        ),
+                        items: locationOptions
+                            .map(
+                              (value) => DropdownMenuItem<String>(
+                                value: value,
+                                child: Text(
+                                  value == 'all' ? 'All Locations' : value,
+                                ),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (value) {
+                          if (value == null) return;
+                          setState(() {
+                            _searchTabLocationFilter = value;
+                          });
+                        },
+                      ),
+                    ),
+                    SizedBox(
+                      width: 260,
+                      child: DropdownButtonFormField<String>(
+                        key: const ValueKey('search-tab-sort'),
+                        initialValue: selectedSort,
+                        isExpanded: true,
+                        decoration: const InputDecoration(
+                          labelText: 'Sort Results',
+                          border: OutlineInputBorder(),
+                        ),
+                        items: const [
+                          DropdownMenuItem(
+                            value: 'best_match',
+                            child: Text('Best Match'),
+                          ),
+                          DropdownMenuItem(
+                            value: 'newest',
+                            child: Text('Newest'),
+                          ),
+                          DropdownMenuItem(
+                            value: 'deadline',
+                            child: Text('Deadline'),
+                          ),
+                          DropdownMenuItem(
+                            value: 'company',
+                            child: Text('Company A-Z'),
+                          ),
+                        ],
+                        onChanged: (value) {
+                          if (value == null) return;
+                          setState(() {
+                            _searchTabSort = value;
+                          });
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Card(
+                  child: ExpansionTile(
+                    tilePadding: const EdgeInsets.symmetric(horizontal: 12),
+                    childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                    title: const Text('Employer Listing Filters'),
+                    subtitle: const Text(
+                      'Position and FAA Rule are pinned on top for now',
+                    ),
+                    children: [
+                      // Top row (kept as requested)
+                      Wrap(
+                        spacing: 10,
+                        runSpacing: 10,
+                        children: [
+                          SizedBox(
+                            width: 260,
+                            child: DropdownButtonFormField<String>(
+                              key: const ValueKey('search-tab-position-filter'),
+                              initialValue: selectedPosition,
+                              isExpanded: true,
+                              decoration: const InputDecoration(
+                                labelText: 'Position',
+                                border: OutlineInputBorder(),
+                              ),
+                              items: positionOptions
+                                  .map(
+                                    (value) => DropdownMenuItem<String>(
+                                      value: value,
+                                      child: Text(
+                                        value == 'all'
+                                            ? 'All Positions'
+                                            : value,
+                                      ),
+                                    ),
+                                  )
+                                  .toList(),
+                              onChanged: (value) {
+                                if (value == null) return;
+                                setState(() {
+                                  _searchTabPositionFilter = value;
+                                });
+                              },
+                            ),
+                          ),
+                          SizedBox(
+                            width: 260,
+                            child: DropdownButtonFormField<String>(
+                              key: const ValueKey('search-tab-faa-rule-filter'),
+                              initialValue: selectedFaaRule,
+                              isExpanded: true,
+                              decoration: const InputDecoration(
+                                labelText: 'FAA Rule',
+                                border: OutlineInputBorder(),
+                              ),
+                              items: faaRuleOptions
+                                  .map(
+                                    (value) => DropdownMenuItem<String>(
+                                      value: value,
+                                      child: Text(
+                                        value == 'all'
+                                            ? 'All FAA Rules'
+                                            : value,
+                                      ),
+                                    ),
+                                  )
+                                  .toList(),
+                              onChanged: (value) {
+                                if (value == null) return;
+                                setState(() {
+                                  _searchTabFaaRuleFilter = value;
+                                });
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      // Tweak-needed row
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: Colors.blueGrey.shade50,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Needs tuning: Certificate/Ratings + Hours filters',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.blueGrey.shade700,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Wrap(
+                              spacing: 10,
+                              runSpacing: 10,
+                              children: [
+                                SizedBox(
+                                  width: 260,
+                                  child: DropdownButtonFormField<String>(
+                                    key: const ValueKey(
+                                      'search-tab-certificate-filter',
+                                    ),
+                                    initialValue: selectedCertificate,
+                                    isExpanded: true,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Certificate',
+                                      border: OutlineInputBorder(),
+                                    ),
+                                    items: certificateOptions
+                                        .map(
+                                          (value) => DropdownMenuItem<String>(
+                                            value: value,
+                                            child: Text(
+                                              value == 'all'
+                                                  ? 'All Certificates'
+                                                  : value,
+                                            ),
+                                          ),
+                                        )
+                                        .toList(),
+                                    onChanged: (value) {
+                                      if (value == null) return;
+                                      setState(() {
+                                        _searchTabCertificateFilter = value;
+                                      });
+                                    },
+                                  ),
+                                ),
+                                SizedBox(
+                                  width: 260,
+                                  child: DropdownButtonFormField<String>(
+                                    key: const ValueKey(
+                                      'search-tab-rating-filter',
+                                    ),
+                                    initialValue: selectedRating,
+                                    isExpanded: true,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Rating',
+                                      border: OutlineInputBorder(),
+                                    ),
+                                    items: ratingOptions
+                                        .map(
+                                          (value) => DropdownMenuItem<String>(
+                                            value: value,
+                                            child: Text(
+                                              value == 'all'
+                                                  ? 'All Ratings'
+                                                  : value,
+                                            ),
+                                          ),
+                                        )
+                                        .toList(),
+                                    onChanged: (value) {
+                                      if (value == null) return;
+                                      setState(() {
+                                        _searchTabRatingFilter = value;
+                                      });
+                                    },
+                                  ),
+                                ),
+                                SizedBox(
+                                  width: 260,
+                                  child: DropdownButtonFormField<String>(
+                                    key: const ValueKey(
+                                      'search-tab-flight-hours-filter',
+                                    ),
+                                    initialValue: selectedFlightHours,
+                                    isExpanded: true,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Flight Hours Category',
+                                      border: OutlineInputBorder(),
+                                    ),
+                                    items: flightHoursOptions
+                                        .map(
+                                          (value) => DropdownMenuItem<String>(
+                                            value: value,
+                                            child: Text(
+                                              value == 'all'
+                                                  ? 'All Flight Hour Categories'
+                                                  : value,
+                                            ),
+                                          ),
+                                        )
+                                        .toList(),
+                                    onChanged: (value) {
+                                      if (value == null) return;
+                                      setState(() {
+                                        _searchTabFlightHoursFilter = value;
+                                      });
+                                    },
+                                  ),
+                                ),
+                                SizedBox(
+                                  width: 260,
+                                  child: DropdownButtonFormField<String>(
+                                    key: const ValueKey(
+                                      'search-tab-instructor-hours-filter',
+                                    ),
+                                    initialValue: selectedInstructorHours,
+                                    isExpanded: true,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Instructor Hours Category',
+                                      border: OutlineInputBorder(),
+                                    ),
+                                    items: instructorHoursOptions
+                                        .map(
+                                          (value) => DropdownMenuItem<String>(
+                                            value: value,
+                                            child: Text(
+                                              value == 'all'
+                                                  ? 'All Instructor Categories'
+                                                  : value,
+                                            ),
+                                          ),
+                                        )
+                                        .toList(),
+                                    onChanged: (value) {
+                                      if (value == null) return;
+                                      setState(() {
+                                        _searchTabInstructorHoursFilter = value;
+                                      });
+                                    },
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      // Bottom row (moved as requested)
+                      Wrap(
+                        spacing: 10,
+                        runSpacing: 10,
+                        children: [
+                          SizedBox(
+                            width: 260,
+                            child: DropdownButtonFormField<String>(
+                              key: const ValueKey(
+                                'search-tab-pay-metric-filter',
+                              ),
+                              initialValue: selectedPayMetric,
+                              isExpanded: true,
+                              decoration: const InputDecoration(
+                                labelText: 'Pay Metric',
+                                border: OutlineInputBorder(),
+                              ),
+                              items: payMetricOptions
+                                  .map(
+                                    (value) => DropdownMenuItem<String>(
+                                      value: value,
+                                      child: Text(
+                                        value == 'all'
+                                            ? 'All Pay Metrics'
+                                            : value,
+                                      ),
+                                    ),
+                                  )
+                                  .toList(),
+                              onChanged: (value) {
+                                if (value == null) return;
+                                setState(() {
+                                  _searchTabPayMetricFilter = value;
+                                });
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    const Text('Match:'),
+                    ChoiceChip(
+                      label: const Text('All'),
+                      selected: _searchTabMatchFilter == 'all',
+                      onSelected: (_) {
+                        setState(() {
+                          _searchTabMatchFilter = 'all';
+                        });
+                      },
+                    ),
+                    ChoiceChip(
+                      label: const Text('90%+'),
+                      selected: _searchTabMatchFilter == 'perfect',
+                      onSelected: (_) {
+                        setState(() {
+                          _searchTabMatchFilter = 'perfect';
+                        });
+                      },
+                    ),
+                    ChoiceChip(
+                      label: const Text('70-89%'),
+                      selected: _searchTabMatchFilter == 'good',
+                      onSelected: (_) {
+                        setState(() {
+                          _searchTabMatchFilter = 'good';
+                        });
+                      },
+                    ),
+                    ChoiceChip(
+                      label: const Text('<70%'),
+                      selected: _searchTabMatchFilter == 'stretch',
+                      onSelected: (_) {
+                        setState(() {
+                          _searchTabMatchFilter = 'stretch';
+                        });
+                      },
+                    ),
+                    FilterChip(
+                      key: const ValueKey('search-tab-external-only'),
+                      label: const Text('External postings only'),
+                      selected: _searchTabExternalOnly,
+                      onSelected: (selected) {
+                        setState(() {
+                          _searchTabExternalOnly = selected;
+                        });
+                      },
+                    ),
+                    OutlinedButton(
+                      key: const ValueKey('search-tab-clear-filters'),
+                      onPressed: _clearSearchTabFilters,
+                      child: const Text('Clear Filters'),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'Showing ${filteredJobs.length} of ${allVisibleJobs.length} jobs',
+                  style: TextStyle(
+                    color: Colors.grey.shade700,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                if (filteredJobs.isEmpty)
+                  Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(14),
+                      child: Text(
+                        'No jobs match your current search. Try broadening your filters.',
+                        style: TextStyle(color: Colors.grey.shade800),
+                      ),
+                    ),
+                  ),
+              ],
+            );
+          }
+
+          final job = filteredJobs[index - 1];
+          final match = _evaluateJobMatch(job);
+          final deadlineText = job.deadlineDate != null
+              ? _formatYmd(job.deadlineDate!.toLocal())
+              : null;
+
+          return Card(
+            margin: const EdgeInsets.symmetric(vertical: 8),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(12),
+              onTap: () => _openDetails(job),
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Wrap(
+                                crossAxisAlignment:
+                                    WrapCrossAlignment.center,
+                                spacing: 8,
+                                runSpacing: 4,
+                                children: [
+                                  Text(
+                                    job.title,
+                                    style: const TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  if (job.isExternal)
+                                    const Text(
+                                      'EXTERNAL JOB',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w800,
+                                        color: Colors.teal,
+                                        letterSpacing: 0.5,
+                                      ),
+                                    ),
+                                ],
+                              ),
+                              const SizedBox(height: 4),
+                              Text('${job.company} • ${job.location}'),
+                              const SizedBox(height: 2),
+                              Text(job.type),
+                              if (deadlineText != null)
+                                Text(
+                                  'Deadline: $deadlineText',
+                                  style: TextStyle(
+                                    color: Colors.orange.shade900,
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                        Container(
+                          margin: const EdgeInsets.only(left: 8),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 4,
+                          ),
+                          decoration: BoxDecoration(
+                            color: match.matchPercentage >= 90
+                                ? Colors.green
+                                : match.matchPercentage >= 70
+                                ? Colors.orange
+                                : Colors.red,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Text(
+                            '${match.matchPercentage}%',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      job.description,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: Colors.grey.shade800),
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        OutlinedButton.icon(
+                          onPressed: () => _toggleFavorite(job),
+                          icon: Icon(
+                            _favoriteIds.contains(job.id)
+                                ? Icons.star
+                                : Icons.star_border,
+                            color: _favoriteIds.contains(job.id)
+                                ? Colors.amber
+                                : null,
+                          ),
+                          label: Text(
+                            _favoriteIds.contains(job.id)
+                                ? 'Favorited'
+                                : 'Favorite',
+                          ),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: (job.isExternal || !_hasApplied(job.id))
+                              ? () => _handleApplyTap(job)
+                              : null,
+                          icon: Icon(
+                            job.isExternal
+                                ? Icons.open_in_new
+                                : _hasApplied(job.id)
+                                ? Icons.check_circle
+                                : Icons.send,
+                            color: !job.isExternal && _hasApplied(job.id)
+                                ? Colors.green
+                                : null,
+                          ),
+                          label: Text(
+                            job.isExternal
+                                ? 'Contact Employer'
+                                : _hasApplied(job.id)
+                                ? 'Applied'
+                                : 'Apply',
+                          ),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: () => _shareJobListing(job),
+                          icon: const Icon(Icons.share_outlined),
+                          label: const Text('Share'),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: () => _reportJobListing(job),
+                          icon: const Icon(Icons.flag_outlined),
+                          label: const Text('Report'),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
       ),
     );
   }
@@ -9175,32 +9309,37 @@ class _MyHomePageState extends State<MyHomePage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          job.title,
-                          style: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                      IconButton(
-                        tooltip: 'Share listing',
-                        icon: const Icon(Icons.share_outlined),
-                        onPressed: () => _shareJobListing(job),
-                      ),
-                      IconButton(
-                        tooltip: 'Remove from Favorites',
-                        icon: const Icon(Icons.star),
-                        color: Colors.amber,
-                        onPressed: () => _toggleFavorite(job),
-                      ),
-                    ],
+                  Text(
+                    job.title,
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                   const SizedBox(height: 4),
                   Text('${job.company} • ${job.location}'),
+                  if (job.isExternal) ...[
+                    const SizedBox(height: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.blueGrey.shade50,
+                        border: Border.all(color: Colors.blueGrey.shade200),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Text(
+                        'External Listing',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.blueGrey.shade800,
+                        ),
+                      ),
+                    ),
+                  ],
                   if (deadlineText != null) ...[
                     const SizedBox(height: 8),
                     Container(
@@ -9258,39 +9397,15 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   String _stateProvinceLabel(String name) {
-    final abbreviation = _stateProvinceAbbreviations[name];
-    if (abbreviation == null || abbreviation.isEmpty) {
-      return name;
-    }
-    return '$abbreviation - $name';
+    return stateProvinceLabel(name);
   }
 
   String? _normalizeCountryValue(String value) {
-    final normalized = value.trim().toLowerCase();
-    if (normalized.isEmpty) {
-      return null;
-    }
-    if (normalized == 'usa' ||
-        normalized == 'us' ||
-        normalized == 'united states' ||
-        normalized == 'united states of america') {
-      return 'USA';
-    }
-    if (normalized == 'canada' || normalized == 'ca') {
-      return 'Canada';
-    }
-    return null;
+    return normalizeCountryValue(value);
   }
 
   List<String> _stateProvinceOptionsForCountry(String rawCountry) {
-    switch (_normalizeCountryValue(rawCountry)) {
-      case 'USA':
-        return _usStateOptions;
-      case 'Canada':
-        return _canadaProvinceOptions;
-      default:
-        return _stateProvinceOptions;
-    }
+    return stateProvinceOptionsForCountry(rawCountry);
   }
 
   Widget _buildEmployerCountryField() {
@@ -10407,7 +10522,7 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   List<String> _selectedCreateRatings() {
-    return _selectedFaaCertificates
+    return _selectedRequiredRatings
         .where(_availableRatingSelections.contains)
         .toList();
   }
@@ -10504,24 +10619,24 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Widget _buildCreateRatingsContent() {
-    const landRatings = ['Multi-Engine Land', 'Single-Engine Land'];
-    const seaRatings = ['Multi-Engine Sea', 'Single-Engine Sea'];
-    const tailwheelRating = ['Tailwheel Endorsement'];
-    const rotorRatings = ['Rotorcraft', 'Gyroplane'];
-    const otherRatings = ['Glider', 'Lighter-than-Air'];
+    const landRatings = landRatingSelectionOptions;
+    const seaRatings = seaRatingSelectionOptions;
+    const tailwheelRating = tailwheelRatingSelectionOptions;
+    const rotorRatings = rotorRatingSelectionOptions;
+    const otherRatings = otherRatingSelectionOptions;
 
     Widget buildRatingCard(List<String> options) {
       return _buildCheckboxCard(
         options: options,
         margin: const EdgeInsets.symmetric(vertical: 4),
         padding: const EdgeInsets.all(8),
-        isSelected: (cert) => _selectedFaaCertificates.contains(cert),
+        isSelected: (cert) => _selectedRequiredRatings.contains(cert),
         onChanged: (cert, selected) {
           setState(() {
             if (selected) {
-              _selectedFaaCertificates.add(cert);
+              _selectedRequiredRatings.add(cert);
             } else {
-              _selectedFaaCertificates.remove(cert);
+              _selectedRequiredRatings.remove(cert);
             }
           });
         },
@@ -11310,55 +11425,134 @@ class _MyHomePageState extends State<MyHomePage> {
           title: Text(widget.title),
           actions: [
             PopupMenuButton<String>(
+              key: const ValueKey('home-profile-switcher'),
               icon: const Icon(Icons.person),
               onSelected: (value) {
-                if (value == 'admin' &&
-                    widget.showAdminInterfaceOption &&
-                    widget.onAdminInterfaceSelected != null) {
-                  widget.onAdminInterfaceSelected!(AdminInterfaceView.admin);
+                if (value == 'admin') {
+                  if (widget.adminDashboardBuilder != null) {
+                    Navigator.of(context).pushReplacement(
+                      MaterialPageRoute(
+                        builder: (_) => widget.adminDashboardBuilder!(context, (
+                          switchContext,
+                          selectedView,
+                        ) {
+                          if (selectedView == AdminInterfaceView.admin) {
+                            return;
+                          }
+
+                          final initialType =
+                              selectedView == AdminInterfaceView.employer
+                              ? ProfileType.employer
+                              : ProfileType.jobSeeker;
+
+                          Navigator.of(switchContext).pushReplacement(
+                            MaterialPageRoute(
+                              builder: (_) => MyHomePage(
+                                title: widget.title,
+                                repository: widget.repository,
+                                initialProfileType: initialType,
+                                adminDashboardBuilder:
+                                    widget.adminDashboardBuilder,
+                              ),
+                            ),
+                          );
+                        }),
+                      ),
+                    );
+                    return;
+                  }
+
+                  if (!SupabaseBootstrap.isConfigured) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text(
+                          'Admin dashboard requires Supabase sign-in.',
+                        ),
+                      ),
+                    );
+                    return;
+                  }
+
+                  final user = Supabase.instance.client.auth.currentUser;
+                  if (user == null) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text(
+                          'Please sign in to open Admin dashboard.',
+                        ),
+                      ),
+                    );
+                    return;
+                  }
+
+                  Navigator.of(context).pushReplacement(
+                    MaterialPageRoute(
+                      builder: (_) => AdminDashboard(
+                        adminRepository: SupabaseAdminRepository(
+                          Supabase.instance.client,
+                          user.id,
+                        ),
+                        appRepository: widget.repository,
+                        adminEmail: user.email?.trim() ?? '',
+                        adminRoleLabel: 'admin',
+                        currentView: AdminInterfaceView.admin,
+                        onSwitchView: (switchContext, selectedView) {
+                          if (selectedView == AdminInterfaceView.admin) {
+                            return;
+                          }
+
+                          final initialType =
+                              selectedView == AdminInterfaceView.employer
+                              ? ProfileType.employer
+                              : ProfileType.jobSeeker;
+
+                          Navigator.of(switchContext).pushReplacement(
+                            MaterialPageRoute(
+                              builder: (_) => MyHomePage(
+                                title: widget.title,
+                                repository: widget.repository,
+                                initialProfileType: initialType,
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  );
                   return;
                 }
 
-                final selectedProfileType = value == 'employer'
-                    ? ProfileType.employer
-                    : ProfileType.jobSeeker;
-
-                if (widget.showAdminInterfaceOption &&
-                    widget.onAdminInterfaceSelected != null) {
-                  widget.onAdminInterfaceSelected!(
-                    selectedProfileType == ProfileType.employer
-                        ? AdminInterfaceView.employer
-                        : AdminInterfaceView.jobSeeker,
-                  );
-                }
-
                 setState(() {
-                  _profileType = selectedProfileType;
+                  _profileType = value == 'employer'
+                      ? ProfileType.employer
+                      : ProfileType.jobSeeker;
                   _query = '';
+                  _searchTabController.clear();
+                  _searchTabQuery = '';
+                  _searchTabTypeFilter = 'all';
+                  _searchTabLocationFilter = 'all';
+                  _searchTabPositionFilter = 'all';
+                  _searchTabFaaRuleFilter = 'all';
+                  _searchTabCertificateFilter = 'all';
+                  _searchTabRatingFilter = 'all';
+                  _searchTabFlightHoursFilter = 'all';
+                  _searchTabInstructorHoursFilter = 'all';
+                  _searchTabPayMetricFilter = 'all';
+                  _searchTabMatchFilter = 'all';
+                  _searchTabSort = 'best_match';
+                  _searchTabExternalOnly = false;
                   _page = 1;
                 });
               },
               itemBuilder: (context) => [
                 const PopupMenuItem(
-                  value: 'job_seeker',
+                  value: 'jobSeeker',
                   child: Text('Job Seeker'),
                 ),
                 const PopupMenuItem(value: 'employer', child: Text('Employer')),
-                if (widget.showAdminInterfaceOption)
-                  const PopupMenuItem(value: 'admin', child: Text('Admin')),
+                const PopupMenuItem(value: 'admin', child: Text('Admin')),
               ],
             ),
-            if (kDebugMode &&
-                widget.accountRoleLabel != null &&
-                widget.accountRoleLabel!.trim().isNotEmpty)
-              Container(
-                margin: const EdgeInsets.only(right: 8),
-                alignment: Alignment.center,
-                child: Chip(
-                  visualDensity: VisualDensity.compact,
-                  label: Text('acct: ${widget.accountRoleLabel}'),
-                ),
-              ),
             if (_profileType == ProfileType.jobSeeker)
               Container(
                 margin: const EdgeInsets.only(right: 16),
@@ -11424,7 +11618,6 @@ class JobDetailsPage extends StatelessWidget {
   final EmployerProfile? companyProfile;
   final int openRoleCount;
   final bool hasApplied;
-  final bool isExternalListing;
   final int? matchPercentage;
 
   const JobDetailsPage({
@@ -11440,7 +11633,6 @@ class JobDetailsPage extends StatelessWidget {
     this.companyProfile,
     this.openRoleCount = 0,
     this.hasApplied = false,
-    this.isExternalListing = false,
     this.matchPercentage,
   });
 
@@ -11455,25 +11647,6 @@ class JobDetailsPage extends StatelessWidget {
         ),
       ),
     );
-  }
-
-  Future<void> _openJobLocationInMaps(BuildContext context) async {
-    final trimmed = job.location.trim();
-    if (trimmed.isEmpty) {
-      return;
-    }
-
-    final uri = Uri.https('www.google.com', '/maps/search/', {
-      'api': '1',
-      'query': trimmed,
-    });
-    final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
-
-    if (!launched && context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not open map for this location.')),
-      );
-    }
   }
 
   @override
@@ -11574,23 +11747,32 @@ class JobDetailsPage extends StatelessWidget {
                                       color: Colors.grey.shade700,
                                     ),
                                   ),
-                                  const SizedBox(height: 2),
-                                  TextButton.icon(
-                                    onPressed: () =>
-                                        _openJobLocationInMaps(context),
-                                    icon: const Icon(
-                                      Icons.map_outlined,
-                                      size: 18,
+                                  if (job.isExternal) ...[
+                                    const SizedBox(height: 8),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 10,
+                                        vertical: 4,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: Colors.blueGrey.shade50,
+                                        border: Border.all(
+                                          color: Colors.blueGrey.shade200,
+                                        ),
+                                        borderRadius: BorderRadius.circular(
+                                          999,
+                                        ),
+                                      ),
+                                      child: Text(
+                                        'External Listing',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w700,
+                                          color: Colors.blueGrey.shade800,
+                                        ),
+                                      ),
                                     ),
-                                    label: const Text('View map'),
-                                    style: TextButton.styleFrom(
-                                      padding: EdgeInsets.zero,
-                                      minimumSize: const Size(0, 30),
-                                      tapTargetSize:
-                                          MaterialTapTargetSize.shrinkWrap,
-                                      alignment: Alignment.centerLeft,
-                                    ),
-                                  ),
+                                  ],
                                   if (applicationDeadlineText != null) ...[
                                     const SizedBox(height: 12),
                                     Container(
@@ -11652,14 +11834,6 @@ class JobDetailsPage extends StatelessWidget {
                                     spacing: 8,
                                     runSpacing: 8,
                                     children: [
-                                      if (isExternalListing)
-                                        Chip(
-                                          avatar: const Icon(
-                                            Icons.public,
-                                            size: 16,
-                                          ),
-                                          label: const Text('External posting'),
-                                        ),
                                       if (job.salaryRange != null)
                                         Chip(
                                           label: Text(
@@ -11703,115 +11877,6 @@ class JobDetailsPage extends StatelessWidget {
                               ),
                             ),
                             const SizedBox(height: 12),
-                            if (isExternalListing)
-                              Container(
-                                width: double.infinity,
-                                padding: const EdgeInsets.all(16),
-                                decoration: BoxDecoration(
-                                  color: Colors.amber.shade50,
-                                  border: Border.all(
-                                    color: Colors.amber.shade300,
-                                    width: 2,
-                                  ),
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Row(
-                                      children: [
-                                        Icon(
-                                          Icons.info_outlined,
-                                          color: Colors.amber.shade800,
-                                          size: 24,
-                                        ),
-                                        const SizedBox(width: 12),
-                                        Expanded(
-                                          child: Column(
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.start,
-                                            children: [
-                                              Text(
-                                                'External Posting',
-                                                style: Theme.of(context)
-                                                    .textTheme
-                                                    .titleMedium
-                                                    ?.copyWith(
-                                                      fontWeight:
-                                                          FontWeight.w700,
-                                                      color:
-                                                          Colors.amber.shade900,
-                                                    ),
-                                              ),
-                                              const SizedBox(height: 6),
-                                              Text(
-                                                'This listing is posted by a third party. '
-                                                'To apply, you will contact them directly '
-                                                'through an external link.',
-                                                style: TextStyle(
-                                                  fontSize: 13,
-                                                  color: Colors.amber.shade900,
-                                                  height: 1.4,
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    const SizedBox(height: 14),
-                                    Container(
-                                      width: double.infinity,
-                                      padding: const EdgeInsets.all(12),
-                                      decoration: BoxDecoration(
-                                        color: Colors.white,
-                                        border: Border.all(
-                                          color: Colors.amber.shade200,
-                                        ),
-                                        borderRadius: BorderRadius.circular(10),
-                                      ),
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Row(
-                                            children: [
-                                              Icon(
-                                                Icons.business,
-                                                size: 18,
-                                                color: Colors.amber.shade700,
-                                              ),
-                                              const SizedBox(width: 8),
-                                              Expanded(
-                                                child: Text(
-                                                  'Is this your business?',
-                                                  style: TextStyle(
-                                                    fontWeight: FontWeight.w600,
-                                                    color:
-                                                        Colors.amber.shade900,
-                                                    fontSize: 13,
-                                                  ),
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                          const SizedBox(height: 8),
-                                          Text(
-                                            'Create a verified account to manage job listings, '
-                                            'view applicants, and communicate directly with candidates.',
-                                            style: TextStyle(
-                                              fontSize: 12,
-                                              color: Colors.grey.shade700,
-                                              height: 1.4,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            const SizedBox(height: 12),
                             _buildDetailSection(
                               context: context,
                               title: 'Job Description',
@@ -11847,6 +11912,19 @@ class JobDetailsPage extends StatelessWidget {
                                             canonicalCertificateLabel(cert),
                                           ),
                                         ),
+                                      )
+                                      .toList(),
+                                ),
+                              ),
+                            if (job.requiredRatings.isNotEmpty)
+                              _buildDetailSection(
+                                context: context,
+                                title: 'Required Ratings',
+                                icon: Icons.fact_check_outlined,
+                                child: _buildChipWrap(
+                                  job.requiredRatings
+                                      .map(
+                                        (rating) => Chip(label: Text(rating)),
                                       )
                                       .toList(),
                                 ),
@@ -12007,6 +12085,11 @@ class JobDetailsPage extends StatelessWidget {
                                 label: const Text('Share Listing'),
                               ),
                               OutlinedButton.icon(
+                                onPressed: onReport,
+                                icon: const Icon(Icons.flag_outlined),
+                                label: const Text('Report Listing'),
+                              ),
+                              OutlinedButton.icon(
                                 onPressed: onFavorite,
                                 icon: Icon(
                                   isFavorite ? Icons.star : Icons.star_border,
@@ -12015,12 +12098,6 @@ class JobDetailsPage extends StatelessWidget {
                                   isFavorite ? 'Favorited' : 'Favorite',
                                 ),
                               ),
-                              if (onReport != null)
-                                OutlinedButton.icon(
-                                  onPressed: onReport,
-                                  icon: const Icon(Icons.flag_outlined),
-                                  label: const Text('Report Listing'),
-                                ),
                             ],
                           ),
                         ),
@@ -12036,11 +12113,12 @@ class JobDetailsPage extends StatelessWidget {
   }
 
   Widget _buildApplyButton(BuildContext context) {
-    if (isExternalListing) {
+    if (job.isExternal) {
+      final hasExternalUrl = (job.externalApplyUrl?.trim().isNotEmpty ?? false);
       return FilledButton.icon(
-        onPressed: null,
+        onPressed: onApply,
         icon: const Icon(Icons.open_in_new),
-        label: const Text('Apply Externally'),
+        label: Text(hasExternalUrl ? 'Apply Externally' : 'Contact Employer'),
       );
     }
 
@@ -12199,6 +12277,7 @@ class JobDetailsPage extends StatelessWidget {
 
     final hasVisibleResults =
         job.faaCertificates.isNotEmpty ||
+        job.requiredRatings.isNotEmpty ||
         flightRows.isNotEmpty ||
         instructorRows.isNotEmpty ||
         specialtyRows.isNotEmpty;
@@ -12248,6 +12327,39 @@ class JobDetailsPage extends StatelessWidget {
                   Expanded(
                     child: Text(
                       certLabel,
+                      softWrap: true,
+                      style: TextStyle(
+                        color: hasIt ? Colors.green : Colors.red,
+                        decoration: hasIt ? null : TextDecoration.lineThrough,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }),
+          const SizedBox(height: 8),
+        ],
+        if (job.requiredRatings.isNotEmpty) ...[
+          const Text('Ratings:', style: TextStyle(fontWeight: FontWeight.bold)),
+          ...job.requiredRatings.map((rating) {
+            final hasIt = profileCertificates.contains(
+              normalizeCertificateName(rating),
+            );
+            return Padding(
+              padding: const EdgeInsets.only(left: 8, top: 4),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(
+                    hasIt ? Icons.check_circle : Icons.cancel,
+                    size: 16,
+                    color: hasIt ? Colors.green : Colors.red,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      rating,
                       softWrap: true,
                       style: TextStyle(
                         color: hasIt ? Colors.green : Colors.red,
@@ -12609,6 +12721,13 @@ class PublicCompanyInfoPage extends StatelessWidget {
                                     'Headquarters: $headquartersLabel',
                                   ),
                                 ),
+                              Chip(
+                                avatar: const Icon(
+                                  Icons.work_outline,
+                                  size: 18,
+                                ),
+                                label: Text('Current opening: ${job.title}'),
+                              ),
                             ],
                           ),
                           if (websiteValue.isNotEmpty ||

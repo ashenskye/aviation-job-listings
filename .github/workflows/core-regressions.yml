@@ -1,0 +1,34 @@
+name: core-regressions
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  core-regressions:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Run core regression tests
+        run: >-
+          flutter test
+          test/aviation_option_catalogs_test.dart
+          test/admin_profile_guardrails_test.dart
+          test/app_smoke_test.dart
+          test/apply_flow_test.dart
+          test/search_tab_test.dart
+          test/job_details_test.dart
+          test/phase2b_test.dart

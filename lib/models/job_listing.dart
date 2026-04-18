@@ -1,10 +1,5 @@
 import 'aviation_certificate_utils.dart';
-
-const Set<String> _instructorHourKeys = {
-  'Total Instructor Hours',
-  'Instrument (CFII)',
-  'Multi-Engine (MEI)',
-};
+import 'aviation_option_catalogs.dart';
 
 class JobListing {
   final String id;
@@ -17,6 +12,7 @@ class JobListing {
   final List<String> faaRules;
   final String description;
   final List<String> faaCertificates;
+  final List<String> requiredRatings;
   final List<String> typeRatingsRequired;
   final List<String> flightExperience;
   final Map<String, int> flightHours;
@@ -52,6 +48,7 @@ class JobListing {
     required this.faaRules,
     required this.description,
     required this.faaCertificates,
+    this.requiredRatings = const [],
     this.typeRatingsRequired = const [],
     required this.flightExperience,
     this.flightHours = const {},
@@ -100,21 +97,21 @@ class JobListing {
         ? parsedInstructorHours
         : {
             for (final entry in rawFlightHours.entries)
-              if (_instructorHourKeys.contains(entry.key))
+              if (instructorHourOptionSet.contains(entry.key))
                 entry.key: entry.value,
           };
 
     final preferredInstructorHours = parsedPreferredInstructorHours.isNotEmpty
         ? parsedPreferredInstructorHours
-        : rawPreferredFlightHours.where(_instructorHourKeys.contains).toList();
+        : rawPreferredFlightHours.where(instructorHourOptionSet.contains).toList();
 
     final flightHours = {
       for (final entry in rawFlightHours.entries)
-        if (!_instructorHourKeys.contains(entry.key)) entry.key: entry.value,
+        if (!instructorHourOptionSet.contains(entry.key)) entry.key: entry.value,
     };
 
     final preferredFlightHours = rawPreferredFlightHours
-        .where((name) => !_instructorHourKeys.contains(name))
+        .where((name) => !instructorHourOptionSet.contains(name))
         .toList();
 
     return JobListing(
@@ -135,6 +132,11 @@ class JobListing {
           (json['faaCertificates'] as List<dynamic>?)
               ?.map((e) => e.toString())
               .toList() ??
+          [],
+        requiredRatings:
+          (json['requiredRatings'] as List<dynamic>?)
+            ?.map((e) => e.toString())
+            .toList() ??
           [],
       typeRatingsRequired:
           (json['typeRatingsRequired'] as List<dynamic>?)
@@ -213,6 +215,7 @@ class JobListing {
     'faaRules': faaRules,
     'description': description,
     'faaCertificates': faaCertificates,
+    'requiredRatings': requiredRatings,
     'typeRatingsRequired': typeRatingsRequired,
     'flyingStyles': flightExperience,
     'flightHours': flightHours,
@@ -261,7 +264,7 @@ class JobListing {
 
     return {
       for (final item in flightExperience)
-        if (_instructorHourKeys.contains(item)) item: 0,
+        if (instructorHourOptionSet.contains(item)) item: 0,
     };
   }
 
@@ -288,6 +291,7 @@ class JobListing {
     List<String>? faaRules,
     String? description,
     List<String>? faaCertificates,
+    List<String>? requiredRatings,
     List<String>? typeRatingsRequired,
     List<String>? flightExperience,
     Map<String, int>? flightHours,
@@ -325,6 +329,7 @@ class JobListing {
       faaRules: faaRules ?? this.faaRules,
       description: description ?? this.description,
       faaCertificates: faaCertificates ?? this.faaCertificates,
+      requiredRatings: requiredRatings ?? this.requiredRatings,
       typeRatingsRequired: typeRatingsRequired ?? this.typeRatingsRequired,
       flightExperience: flightExperience ?? this.flightExperience,
       flightHours: flightHours ?? this.flightHours,
