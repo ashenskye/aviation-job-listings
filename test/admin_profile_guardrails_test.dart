@@ -210,6 +210,29 @@ void main() {
       expect(find.text('Favorites'), findsOneWidget);
     },
   );
+
+  testWidgets('employer profile benefits includes Company Housing option', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(MyApp(repository: FakeAppRepository()));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.person));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Employer').last);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Employer Profile'));
+    await tester.pumpAndSettle();
+
+    final editButton = find.widgetWithText(OutlinedButton, 'Edit');
+    await tester.ensureVisible(editButton);
+    await tester.tap(editButton.hitTestable());
+    await tester.pumpAndSettle();
+
+    expect(find.text('Company Benefits'), findsOneWidget);
+    expect(find.text('Company Housing'), findsOneWidget);
+  });
 }
 
 class _TestAdminRepository implements AdminRepository {

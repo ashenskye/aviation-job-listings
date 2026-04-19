@@ -28,6 +28,19 @@ void main() {
     expect(instructorHourOptionSet, availableInstructorHourOptions.toSet());
   });
 
+  test('flight hour options keep Instrument below Multi-engine, Cross-Country and Night below Instrument', () {
+    final opts = availableEmployerFlightHourOptions;
+    final multiEngineIndex = opts.indexOf('Multi-engine');
+    final instrumentIndex = opts.indexOf('Instrument');
+    final crossCountryIndex = opts.indexOf('Cross-Country');
+    final nightIndex = opts.indexOf('Night');
+
+    expect(multiEngineIndex, isNonNegative);
+    expect(instrumentIndex, multiEngineIndex + 1);
+    expect(crossCountryIndex, greaterThan(instrumentIndex));
+    expect(nightIndex, crossCountryIndex + 1);
+  });
+
   test('shared option catalogs stay unique', () {
     final optionLists = <List<String>>[
       availableFaaCertificateOptions,

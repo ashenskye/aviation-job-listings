@@ -5,11 +5,92 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 /// The role a new user intends to take in the app.
 enum SignUpPath { jobSeeker, employer }
 
+abstract class SignInAuthService {
+  Future<void> signUp({
+    required String email,
+    required String password,
+    String? emailRedirectTo,
+    Map<String, dynamic>? data,
+  });
+
+  Future<void> signInWithPassword({
+    required String email,
+    required String password,
+  });
+
+  Future<void> resendSignupConfirmation({
+    required String email,
+    String? emailRedirectTo,
+  });
+
+  Future<void> resetPasswordForEmail({
+    required String email,
+    String? redirectTo,
+  });
+}
+
+class SupabaseSignInAuthService implements SignInAuthService {
+  const SupabaseSignInAuthService();
+
+  static const SupabaseSignInAuthService instance = SupabaseSignInAuthService();
+
+  @override
+  Future<void> signUp({
+    required String email,
+    required String password,
+    String? emailRedirectTo,
+    Map<String, dynamic>? data,
+  }) async {
+    await Supabase.instance.client.auth.signUp(
+      email: email,
+      password: password,
+      emailRedirectTo: emailRedirectTo,
+      data: data,
+    );
+  }
+
+  @override
+  Future<void> signInWithPassword({
+    required String email,
+    required String password,
+  }) async {
+    await Supabase.instance.client.auth.signInWithPassword(
+      email: email,
+      password: password,
+    );
+  }
+
+  @override
+  Future<void> resendSignupConfirmation({
+    required String email,
+    String? emailRedirectTo,
+  }) async {
+    await Supabase.instance.client.auth.resend(
+      type: OtpType.signup,
+      email: email,
+      emailRedirectTo: emailRedirectTo,
+    );
+  }
+
+  @override
+  Future<void> resetPasswordForEmail({
+    required String email,
+    String? redirectTo,
+  }) async {
+    await Supabase.instance.client.auth.resetPasswordForEmail(
+      email,
+      redirectTo: redirectTo,
+    );
+  }
+}
+
 /// Sign-in / sign-up screen shown when Supabase is configured but the user
 /// has no active session.  Successful auth triggers the [AuthGate] stream,
 /// which navigates to the main app automatically.
 class SignInScreen extends StatefulWidget {
-  const SignInScreen({super.key});
+  const SignInScreen({super.key, this.authService});
+
+  final SignInAuthService? authService;
 
   @override
   State<SignInScreen> createState() => _SignInScreenState();
@@ -24,11 +105,16 @@ class _SignInScreenState extends State<SignInScreen> {
   bool _isLoading = false;
   bool _isResendingConfirmation = false;
   bool _isSendingPasswordReset = false;
+  bool _showResendConfirmationLink = false;
+  bool _showPasswordResetLink = false;
   SignUpPath _signUpPath = SignUpPath.jobSeeker;
   String? _lastSignUpEmail;
   DateTime? _emailActionCooldownUntil;
 
   static const Duration _emailActionCooldown = Duration(seconds: 60);
+
+  SignInAuthService get _authService =>
+      widget.authService ?? SupabaseSignInAuthService.instance;
 
   bool get _emailActionCoolingDown {
     final until = _emailActionCooldownUntil;
@@ -92,6 +178,19 @@ class _SignInScreenState extends State<SignInScreen> {
         lower.contains('429');
   }
 
+  bool _authMessageIndicatesUnconfirmedEmail(String message) {
+    final lower = message.toLowerCase();
+    return lower.contains('email not confirmed') ||
+        (lower.contains('confirm') && lower.contains('email'));
+  }
+
+  bool _authMessageIndicatesInvalidCredentials(String message) {
+    final lower = message.toLowerCase();
+    return lower.contains('invalid login credentials') ||
+        lower.contains('invalid credentials') ||
+        lower.contains('invalid email or password');
+  }
+
   @override
   void dispose() {
     _emailController.dispose();
@@ -105,7 +204,6 @@ class _SignInScreenState extends State<SignInScreen> {
     setState(() => _isLoading = true);
 
     try {
-      final client = Supabase.instance.client;
       final email = _emailController.text.trim();
       final password = _passwordController.text;
       final redirectUrl = _developmentEmailRedirectUrl;
@@ -114,7 +212,7 @@ class _SignInScreenState extends State<SignInScreen> {
         final roleValue = _signUpPath == SignUpPath.employer
             ? 'employer'
             : 'job_seeker';
-        await client.auth.signUp(
+        await _authService.signUp(
           email: email,
           password: password,
           emailRedirectTo: redirectUrl,
@@ -132,13 +230,23 @@ class _SignInScreenState extends State<SignInScreen> {
         setState(() {
           _lastSignUpEmail = signedUpEmail;
           _isSignUp = false;
+          _showResendConfirmationLink = true;
+          _showPasswordResetLink = false;
         });
       } else {
-        await client.auth.signInWithPassword(email: email, password: password);
+        await _authService.signInWithPassword(email: email, password: password);
         // AuthGate stream handles navigation — no explicit push needed.
       }
     } on AuthException catch (e) {
       if (!mounted) return;
+      setState(() {
+        if (_authMessageIndicatesUnconfirmedEmail(e.message)) {
+          _showResendConfirmationLink = true;
+          _showPasswordResetLink = false;
+        } else if (_authMessageIndicatesInvalidCredentials(e.message)) {
+          _showPasswordResetLink = true;
+        }
+      });
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text(e.message)));
@@ -174,8 +282,7 @@ class _SignInScreenState extends State<SignInScreen> {
     setState(() => _isResendingConfirmation = true);
     try {
       final redirectUrl = _developmentEmailRedirectUrl;
-      await Supabase.instance.client.auth.resend(
-        type: OtpType.signup,
+      await _authService.resendSignupConfirmation(
         email: email,
         emailRedirectTo: redirectUrl,
       );
@@ -233,8 +340,8 @@ class _SignInScreenState extends State<SignInScreen> {
     setState(() => _isSendingPasswordReset = true);
     try {
       final redirectUrl = _developmentEmailRedirectUrl;
-      await Supabase.instance.client.auth.resetPasswordForEmail(
-        email,
+      await _authService.resetPasswordForEmail(
+        email: email,
         redirectTo: redirectUrl,
       );
       if (!mounted) {
@@ -395,38 +502,43 @@ class _SignInScreenState extends State<SignInScreen> {
                           )
                         : Text(_isSignUp ? 'Create Account' : 'Sign In'),
                   ),
-                  const SizedBox(height: 8),
-                  TextButton(
-                    onPressed:
-                        (_isLoading ||
-                            _isResendingConfirmation ||
-                            _emailActionCoolingDown)
-                        ? null
-                        : _resendConfirmationEmail,
-                    child: _isResendingConfirmation
-                        ? const SizedBox(
-                            height: 18,
-                            width: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Text('Resend Confirmation Email'),
-                  ),
-                  TextButton(
-                    onPressed:
-                        (_isLoading ||
-                            _isResendingConfirmation ||
-                            _isSendingPasswordReset ||
-                            _emailActionCoolingDown)
-                        ? null
-                        : _sendPasswordResetEmail,
-                    child: _isSendingPasswordReset
-                        ? const SizedBox(
-                            height: 18,
-                            width: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Text('Send Password Reset Email'),
-                  ),
+                  if (!_isSignUp &&
+                      (_showResendConfirmationLink ||
+                          _showPasswordResetLink))
+                    const SizedBox(height: 8),
+                  if (!_isSignUp && _showResendConfirmationLink)
+                    TextButton(
+                      onPressed:
+                          (_isLoading ||
+                              _isResendingConfirmation ||
+                              _emailActionCoolingDown)
+                          ? null
+                          : _resendConfirmationEmail,
+                      child: _isResendingConfirmation
+                          ? const SizedBox(
+                              height: 18,
+                              width: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Text('Resend Confirmation Email'),
+                    ),
+                  if (!_isSignUp && _showPasswordResetLink)
+                    TextButton(
+                      onPressed:
+                          (_isLoading ||
+                              _isResendingConfirmation ||
+                              _isSendingPasswordReset ||
+                              _emailActionCoolingDown)
+                          ? null
+                          : _sendPasswordResetEmail,
+                      child: _isSendingPasswordReset
+                          ? const SizedBox(
+                              height: 18,
+                              width: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Text('Send Password Reset Email'),
+                    ),
                   const SizedBox(height: 12),
                   TextButton(
                     onPressed: _isLoading
@@ -434,6 +546,10 @@ class _SignInScreenState extends State<SignInScreen> {
                         : () => setState(() {
                             _isSignUp = !_isSignUp;
                             _signUpPath = SignUpPath.jobSeeker;
+                            if (_isSignUp) {
+                              _showResendConfirmationLink = false;
+                              _showPasswordResetLink = false;
+                            }
                             _formKey.currentState?.reset();
                           }),
                     child: Text(

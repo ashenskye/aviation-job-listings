@@ -29,6 +29,9 @@ const List<String> availableEmployerFlightHourOptions = [
   'PIC',
   'SIC',
   'Multi-engine',
+  'Instrument',
+  'Cross-Country',
+  'Night',
 ];
 
 const List<String> availableInstructorHourOptions = [

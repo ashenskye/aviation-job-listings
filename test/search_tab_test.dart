@@ -17,6 +17,7 @@ Future<void> _pumpSearchTab(WidgetTester tester) async {
       type: 'Full-Time',
       crewRole: 'Single Pilot',
       faaRules: ['Part 135'],
+      part135SubType: 'ifr',
       description: 'Rescue and medevac operations.',
       faaCertificates: ['Airline Transport Pilot (ATP)'],
       flightExperience: [],
@@ -49,6 +50,7 @@ Future<void> _pumpSearchTab(WidgetTester tester) async {
       crewRole: 'Crew',
       crewPosition: 'Dispatcher',
       faaRules: ['Part 135'],
+      part135SubType: 'vfr',
       description: 'Dispatch and flight planning support.',
       faaCertificates: [],
       flightExperience: [],
@@ -103,46 +105,62 @@ Future<void> _selectDropdownOption(
   String optionText,
 ) async {
   final dropdownFinder = find.byKey(ValueKey(dropdownKey));
-  await tester.scrollUntilVisible(
-    dropdownFinder,
-    200,
-    scrollable: find.byType(Scrollable).first,
-  );
-  await tester.tap(dropdownFinder);
+  await tester.ensureVisible(dropdownFinder);
   await tester.pumpAndSettle();
-  final optionFinder = find.text(optionText);
+  await tester.tap(dropdownFinder.hitTestable().first);
+  await tester.pumpAndSettle();
+  final optionFinder = find.descendant(
+    of: find.byType(Overlay),
+    matching: find.text(optionText),
+  );
   expect(optionFinder, findsWidgets);
-  await tester.tap(optionFinder.first);
+  await tester.tap(optionFinder.hitTestable().first);
+  await tester.pumpAndSettle();
+}
+
+Future<void> _expandFilterSection(WidgetTester tester, String title) async {
+  final titleFinder = find.text(title);
+  final tileFinder = find.ancestor(of: titleFinder, matching: find.byType(ListTile));
+  final tile = tester.widget<ListTile>(tileFinder.first);
+  tile.onTap?.call();
   await tester.pumpAndSettle();
 }
 
 Future<void> _expandEmployerFilters(WidgetTester tester) async {
-  await tester.ensureVisible(find.text('Employer Listing Filters'));
-  await tester.tap(find.text('Employer Listing Filters'));
-  await tester.pumpAndSettle();
+  await _expandFilterSection(tester, 'Advanced Filters');
 }
 
 void main() {
-  testWidgets('search tab filters by FAA rule from employer options', (
+  testWidgets('search tab FAA rule filter shows Part 135 IFR and VFR options', (
     WidgetTester tester,
   ) async {
     await _pumpSearchTab(tester);
-    await _expandEmployerFilters(tester);
 
-    await _selectDropdownOption(
-      tester,
-      'search-tab-faa-rule-filter',
-      'Part 135',
+    final dropdownFinder = find.byKey(const ValueKey('search-tab-faa-rule-filter'));
+    await tester.ensureVisible(dropdownFinder);
+    await tester.pumpAndSettle();
+    await tester.tap(dropdownFinder.hitTestable().first);
+    await tester.pumpAndSettle();
+
+    final ifrOption = find.descendant(
+      of: find.byType(Overlay),
+      matching: find.text('Part 135 IFR'),
     );
+    final vfrOption = find.descendant(
+      of: find.byType(Overlay),
+      matching: find.text('Part 135 VFR'),
+    );
+    expect(ifrOption, findsWidgets);
+    expect(vfrOption, findsWidgets);
 
-    expect(find.text('Showing 2 of 5 jobs'), findsOneWidget);
+    await tester.tap(vfrOption.hitTestable().first);
+    await tester.pumpAndSettle();
   });
 
-  testWidgets('search tab filters by position from employer options', (
+  testWidgets('search tab filters by position from primary filters', (
     WidgetTester tester,
   ) async {
     await _pumpSearchTab(tester);
-    await _expandEmployerFilters(tester);
 
     await _selectDropdownOption(
       tester,
@@ -193,8 +211,10 @@ void main() {
   ) async {
     await _pumpSearchTab(tester);
 
-    await tester.ensureVisible(find.text('<70%'));
-    await tester.tap(find.text('<70%'));
+    final stretchChip = find.widgetWithText(ChoiceChip, '<70%');
+    await tester.ensureVisible(stretchChip);
+    await tester.pumpAndSettle();
+    await tester.tap(stretchChip.hitTestable().first);
     await tester.pumpAndSettle();
 
     expect(find.text('Showing 2 of 5 jobs'), findsOneWidget);
@@ -226,5 +246,72 @@ void main() {
       'Multi-Engine Land',
     );
     expect(find.text('Showing 1 of 5 jobs'), findsOneWidget);
+  });
+
+  testWidgets('search tab supports instructor-only toggle', (
+    WidgetTester tester,
+  ) async {
+    final repository = FakeAppRepository();
+    await repository.createJob(
+      const JobListing(
+        id: 'instructor-role-1',
+        title: 'Flight Instructor',
+        company: 'Lift Academy',
+        location: 'Mesa, AZ',
+        type: 'Full-Time',
+        crewRole: 'Single Pilot',
+        faaRules: ['Part 91'],
+        description: 'Train student pilots and run CFI checkout flights.',
+        faaCertificates: ['Flight Instructor (CFI)'],
+        flightExperience: [],
+        instructorHours: {'Total Instructor Hours': 300},
+        aircraftFlown: ['Cessna 172'],
+      ),
+    );
+    await repository.createJob(
+      const JobListing(
+        id: 'non-instructor-role-1',
+        title: 'Ramp Agent',
+        company: 'Regional Ops',
+        location: 'Mesa, AZ',
+        type: 'Full-Time',
+        crewRole: 'Crew',
+        crewPosition: 'Ground',
+        faaRules: ['Part 91'],
+        description: 'Support ramp and turn operations.',
+        faaCertificates: [],
+        flightExperience: [],
+        aircraftFlown: ['Tug'],
+      ),
+    );
+
+    await tester.pumpWidget(MyApp(repository: repository));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Search').last);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Showing 2 of 2 jobs'), findsOneWidget);
+
+    final instructorOnlyChip = find.byKey(
+      const ValueKey('search-tab-instructor-only'),
+    );
+    await tester.ensureVisible(instructorOnlyChip);
+    await tester.tap(instructorOnlyChip.hitTestable().first);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Showing 1 of 2 jobs'), findsOneWidget);
+    expect(find.text('Instructor Filters'), findsOneWidget);
+    expect(find.text('Instructor Hours Category'), findsOneWidget);
+
+    await _expandFilterSection(tester, 'Instructor Filters');
+    await _expandFilterSection(tester, 'Instructor Filters');
+
+    await tester.enterText(
+      find.byKey(const ValueKey('search-tab-query')),
+      'Ramp Agent',
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Showing 0 of 2 jobs'), findsOneWidget);
   });
 }

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:aviation_job_listings/main.dart';
 import 'package:aviation_job_listings/models/job_listing.dart';
@@ -71,6 +72,11 @@ void main() {
       await tester.tap(find.text('Part 135').hitTestable());
       await tester.pumpAndSettle();
 
+      // Part 135 requires selecting IFR/Commuter or VFR Only.
+      await tester.ensureVisible(find.text('IFR / Commuter'));
+      await tester.tap(find.text('IFR / Commuter').hitTestable());
+      await tester.pumpAndSettle();
+
       await tester.ensureVisible(
         find.text('Airline Transport Pilot (ATP)').first,
       );
@@ -80,17 +86,8 @@ void main() {
       await tester.tap(find.text('Multi-Engine Land').first);
       await tester.pumpAndSettle();
 
-      await tester.ensureVisible(find.text('Hours Requirements *'));
-      await tester.tap(find.text('Hours Requirements *').hitTestable());
-      await tester.pumpAndSettle();
-      await tester.ensureVisible(find.text('Total Time'));
-      await tester.tap(find.text('Total Time').hitTestable());
-      await tester.pumpAndSettle();
-      await tester.enterText(
-        find.byKey(const ValueKey('create-hours-Flight Hours-Total Time')),
-        '1000',
-      );
-      await tester.pumpAndSettle();
+      // IFR / Commuter auto-populates hours minimums, so no manual entry needed.
+      // Just proceed to create the listing.
 
       await tester.ensureVisible(find.text('Create Job Listing'));
       await tester.tap(find.text('Create Job Listing').hitTestable());
@@ -233,6 +230,7 @@ void main() {
   testWidgets(
     'external listing shows EXTERNAL JOB label on jobs and search cards',
     (WidgetTester tester) async {
+      SharedPreferences.setMockInitialValues({});
       final repository = FakeAppRepository();
       await repository.createJob(
         JobListing.fromJson({
@@ -271,20 +269,134 @@ void main() {
         ),
       );
 
-      await tester.pumpWidget(MyApp(repository: repository));
+      await tester.pumpWidget(
+        MaterialApp(
+          home: MyHomePage(
+            title: 'Aviation Job Listings',
+            repository: repository,
+            initialProfileType: ProfileType.jobSeeker,
+          ),
+        ),
+      );
       await tester.pumpAndSettle();
 
       await tester.tap(find.text('Jobs'));
       await tester.pumpAndSettle();
 
-      expect(find.text('External Label Regression Role'), findsOneWidget);
+      await tester.enterText(
+        find.widgetWithText(TextField, 'Search jobs'),
+        'External Label Regression Role',
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('External Label Regression Role'), findsWidgets);
       expect(find.text('EXTERNAL JOB'), findsOneWidget);
 
       await tester.tap(find.text('Search').last);
       await tester.pumpAndSettle();
 
-      expect(find.text('External Label Regression Role'), findsOneWidget);
+      await tester.enterText(
+        find.byKey(const ValueKey('search-tab-query')),
+        'External Label Regression Role',
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Showing 1 of 2 jobs'), findsOneWidget);
+      await tester.drag(find.byType(ListView).last, const Offset(0, -1200));
+      await tester.pumpAndSettle();
+      await tester.drag(find.byType(ListView).last, const Offset(0, -1200));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.descendant(
+          of: find.byType(Card),
+          matching: find.text('External Label Regression Role'),
+        ),
+        findsOneWidget,
+      );
       expect(find.text('EXTERNAL JOB'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'job seeker summary shows Part 135 IFR for legacy listings without subtype',
+    (WidgetTester tester) async {
+      final repository = FakeAppRepository();
+      await repository.createJob(
+        const JobListing(
+          id: 'legacy-part135-ifr-fallback',
+          title: 'Legacy IFR Charter Role',
+          company: 'Mountain Jet',
+          location: 'Boise, ID',
+          type: 'Full-Time',
+          crewRole: 'Single Pilot',
+          faaRules: ['Part 135'],
+          // Legacy records may be missing part135SubType. The UI should infer
+          // IFR from the standard IFR/Commuter minimums.
+          flightHours: {
+            'Total Time': 1200,
+            'Cross-Country': 500,
+            'Night': 100,
+            'Instrument': 75,
+          },
+          flightExperience: ['Total Time', 'Cross-Country', 'Night', 'Instrument'],
+          description: 'Legacy listing to verify Part 135 fallback display.',
+          faaCertificates: ['Airline Transport Pilot (ATP)'],
+          aircraftFlown: ['Pilatus PC-12'],
+          employerId: 'emp-mountain-jet',
+        ),
+      );
+
+      await tester.pumpWidget(MyApp(repository: repository));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Legacy IFR Charter Role'), findsOneWidget);
+
+      await tester.tap(find.text('Legacy IFR Charter Role').first);
+      await tester.pumpAndSettle();
+
+      expect(find.text('Part 135 IFR'), findsWidgets);
+    },
+  );
+
+  testWidgets(
+    'job seeker summary shows Part 135 VFR for legacy listings without subtype',
+    (WidgetTester tester) async {
+      final repository = FakeAppRepository();
+      await repository.createJob(
+        const JobListing(
+          id: 'legacy-part135-vfr-fallback',
+          title: 'Legacy VFR Charter Role',
+          company: 'Canyon Air Taxi',
+          location: 'Phoenix, AZ',
+          type: 'Full-Time',
+          crewRole: 'Single Pilot',
+          faaRules: ['Part 135'],
+          // Legacy records may be missing part135SubType. The UI should infer
+          // VFR from the standard VFR-only minimums.
+          flightHours: {
+            'Total Time': 500,
+            'Cross-Country': 100,
+            'Night': 25,
+            'Instrument': 0,
+          },
+          flightExperience: ['Total Time', 'Cross-Country', 'Night'],
+          description: 'Legacy listing to verify Part 135 VFR fallback display.',
+          faaCertificates: ['Commercial Pilot Certificate'],
+          aircraftFlown: ['Cessna 208 Caravan'],
+          employerId: 'emp-canyon-air-taxi',
+        ),
+      );
+
+      await tester.pumpWidget(MyApp(repository: repository));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Legacy VFR Charter Role'), findsOneWidget);
+
+      await tester.tap(find.text('Legacy VFR Charter Role').first);
+      await tester.pumpAndSettle();
+
+      expect(find.text('Part 135 VFR'), findsWidgets);
     },
   );
 }

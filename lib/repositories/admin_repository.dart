@@ -56,6 +56,7 @@ abstract class AdminRepository {
     String crewRole = 'Single Pilot',
     String? crewPosition,
     List<String> faaRules = const [],
+    String? part135SubType,
     List<String> faaCertificates = const [],
     List<String> typeRatingsRequired = const [],
     Map<String, int> flightHours = const {},
@@ -72,6 +73,10 @@ abstract class AdminRepository {
     int autoRejectThreshold = 0,
     int reapplyWindowDays = 30,
     String? externalApplyUrl,
+    String? contactName,
+    String? contactEmail,
+    String? companyPhone,
+    String? companyUrl,
     String? reason,
   });
 

@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/admin_action_log.dart';
@@ -146,6 +147,10 @@ class _AdminDashboardState extends State<AdminDashboard>
 
   @override
   Widget build(BuildContext context) {
+    final screenWidth = MediaQuery.sizeOf(context).width;
+    final showRoleChip = screenWidth >= 520;
+    final showAdminEmail = screenWidth >= 430;
+
     return Scaffold(
       appBar: AppBar(
         backgroundColor: Colors.red.shade700,
@@ -172,7 +177,7 @@ class _AdminDashboardState extends State<AdminDashboard>
               ),
             ],
           ),
-          if (kDebugMode && widget.adminRoleLabel.trim().isNotEmpty)
+          if (kDebugMode && showRoleChip && widget.adminRoleLabel.trim().isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(right: 8),
               child: Center(
@@ -182,15 +187,16 @@ class _AdminDashboardState extends State<AdminDashboard>
                 ),
               ),
             ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            child: Center(
-              child: Text(
-                widget.adminEmail,
-                style: const TextStyle(fontSize: 13, color: Colors.white70),
+          if (showAdminEmail)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: Center(
+                child: Text(
+                  widget.adminEmail,
+                  style: const TextStyle(fontSize: 13, color: Colors.white70),
+                ),
               ),
             ),
-          ),
           IconButton(
             icon: const Icon(Icons.logout),
             tooltip: 'Sign Out',
@@ -304,6 +310,10 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
   final _locationCountryController = TextEditingController(text: 'USA');
   final _employmentTypeController = TextEditingController();
   final _descriptionController = TextEditingController();
+  final _contactNameController = TextEditingController();
+  final _contactEmailController = TextEditingController();
+  final _companyPhoneController = TextEditingController();
+  final _companyUrlController = TextEditingController();
   final _startingPayController = TextEditingController();
   final _payForExperienceController = TextEditingController();
   final _typeRatingsController = TextEditingController();
@@ -327,6 +337,7 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
   DateTime? _deadlineDate;
   final Set<String> _selectedFaaCertificates = <String>{};
   final Set<String> _selectedFaaRules = <String>{};
+  String? _part135SubType; // 'ifr' or 'vfr'
   final Map<String, int> _selectedFlightHours = <String, int>{};
   final Set<String> _preferredFlightHours = <String>{};
   final Map<String, int> _selectedInstructorHours = <String, int>{};
@@ -350,6 +361,10 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
     _locationCountryController.dispose();
     _employmentTypeController.dispose();
     _descriptionController.dispose();
+    _contactNameController.dispose();
+    _contactEmailController.dispose();
+    _companyPhoneController.dispose();
+    _companyUrlController.dispose();
     _startingPayController.dispose();
     _payForExperienceController.dispose();
     _typeRatingsController.dispose();
@@ -387,6 +402,16 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
       return;
     }
 
+    // Validate Part 135 sub-type is selected when Part 135 is selected
+    if (_selectedFaaRules.contains('Part 135') && _part135SubType == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Part 135 requires selecting IFR/Commuter or VFR Only'),
+        ),
+      );
+      return;
+    }
+
     final title = _titleController.text.trim();
     final company = _companyController.text.trim();
     final locationError = _validateLocationInput();
@@ -400,8 +425,28 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
     final employmentType = _employmentTypeController.text.trim();
     final sourceName = _sourceNameController.text.trim();
     final rawSourceUrl = _sourceUrlController.text.trim();
+    final contactName = _contactNameController.text.trim();
+    final rawContactEmail = _contactEmailController.text.trim();
+    final companyPhone = _companyPhoneController.text.trim();
+    final rawCompanyUrl = _companyUrlController.text.trim();
     final reason = _reasonController.text.trim();
+    final contactEmail = rawContactEmail;
     var sourceUrl = rawSourceUrl;
+    var companyUrl = rawCompanyUrl;
+
+    if (contactEmail.isNotEmpty) {
+      final emailPattern = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
+      if (!emailPattern.hasMatch(contactEmail)) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Contact Email looks invalid. Please check and try again.',
+            ),
+          ),
+        );
+        return;
+      }
+    }
 
     if (rawSourceUrl.isNotEmpty) {
       sourceUrl = rawSourceUrl.contains('://')
@@ -417,6 +462,27 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
           const SnackBar(
             content: Text(
               'Source URL looks invalid. Please check and try again.',
+            ),
+          ),
+        );
+        return;
+      }
+    }
+
+    if (rawCompanyUrl.isNotEmpty) {
+      companyUrl = rawCompanyUrl.contains('://')
+          ? rawCompanyUrl
+          : 'https://$rawCompanyUrl';
+      final parsed = Uri.tryParse(companyUrl);
+      final looksValid =
+          parsed != null &&
+          (parsed.scheme == 'http' || parsed.scheme == 'https') &&
+          (parsed.host.isNotEmpty);
+      if (!looksValid) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Company URL looks invalid. Please check and try again.',
             ),
           ),
         );
@@ -468,6 +534,11 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
         'Externally sourced listing posted by admin.',
       '',
       'External listing details:',
+      if (contactName.isNotEmpty) 'Contact Name: $contactName',
+      if (companyPhone.isNotEmpty) 'Contact Phone: $companyPhone',
+      if (contactEmail.isNotEmpty) 'Contact Email: $contactEmail',
+      if (companyUrl.isNotEmpty) 'Company URL: $companyUrl',
+      '',
       if (sourceName.isNotEmpty) 'Source: $sourceName',
       if (sourceUrl.isNotEmpty) 'Source URL: $sourceUrl',
       'Apply externally. Do not use in-app apply.',
@@ -489,6 +560,7 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
               ? _selectedCrewPosition
               : null,
           faaRules: _selectedFaaRules.toList(),
+          part135SubType: _part135SubType,
           faaCertificates: _selectedFaaCertificates.toList(),
           typeRatingsRequired: selectedTypeRatings,
           flightHours: selectedFlightHours,
@@ -505,6 +577,10 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
           reapplyWindowDays: 30,
           description: description,
           externalApplyUrl: sourceUrl.isEmpty ? null : sourceUrl,
+          contactName: contactName.isEmpty ? null : contactName,
+          contactEmail: contactEmail.isEmpty ? null : contactEmail,
+          companyPhone: companyPhone.isEmpty ? null : companyPhone,
+          companyUrl: companyUrl.isEmpty ? null : companyUrl,
           reason: reason.isEmpty ? 'Admin posted external listing' : reason,
         );
 
@@ -536,6 +612,7 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
               ? _selectedCrewPosition
               : null,
           faaRules: _selectedFaaRules.toList(),
+          part135SubType: _part135SubType,
           faaCertificates: _selectedFaaCertificates.toList(),
           typeRatingsRequired: selectedTypeRatings,
           flightExperience: [
@@ -557,6 +634,10 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
           reapplyWindowDays: 30,
           description: description,
           externalApplyUrl: sourceUrl.isEmpty ? null : sourceUrl,
+          contactName: contactName.isEmpty ? null : contactName,
+          contactEmail: contactEmail.isEmpty ? null : contactEmail,
+          companyPhone: companyPhone.isEmpty ? null : companyPhone,
+          companyUrl: companyUrl.isEmpty ? null : companyUrl,
           updatedAt: DateTime.now(),
         );
 
@@ -605,6 +686,10 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
     _locationCountryController.text = 'USA';
     _employmentTypeController.clear();
     _descriptionController.clear();
+    _contactNameController.clear();
+    _contactEmailController.clear();
+    _companyPhoneController.clear();
+    _companyUrlController.clear();
     _startingPayController.clear();
     _payForExperienceController.clear();
     _typeRatingsController.clear();
@@ -620,6 +705,7 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
     _deadlineDate = null;
     _selectedFaaCertificates.clear();
     _selectedFaaRules.clear();
+    _part135SubType = null;
     _selectedFlightHours.clear();
     _preferredFlightHours.clear();
     _selectedInstructorHours.clear();
@@ -739,6 +825,20 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
     final sourceUrl = (listing.externalApplyUrl?.trim().isNotEmpty ?? false)
         ? listing.externalApplyUrl!.trim()
         : _extractDetailLine(listing.description, 'Source URL:');
+    final contactName = (listing.contactName?.trim().isNotEmpty ?? false)
+      ? listing.contactName!.trim()
+      : _extractDetailLine(listing.description, 'Contact Name:');
+    final companyPhone = (listing.companyPhone?.trim().isNotEmpty ?? false)
+        ? listing.companyPhone!.trim()
+        : (_extractDetailLine(listing.description, 'Contact Phone:').isNotEmpty
+            ? _extractDetailLine(listing.description, 'Contact Phone:')
+            : _extractDetailLine(listing.description, 'Company Phone:'));
+    final contactEmail = (listing.contactEmail?.trim().isNotEmpty ?? false)
+        ? listing.contactEmail!.trim()
+        : _extractDetailLine(listing.description, 'Contact Email:');
+    final companyUrl = (listing.companyUrl?.trim().isNotEmpty ?? false)
+        ? listing.companyUrl!.trim()
+        : _extractDetailLine(listing.description, 'Company URL:');
 
     final positionOption = listing.crewRole == 'Single Pilot'
         ? 'Single Pilot'
@@ -757,6 +857,10 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
       _locationCountryController.text = parsedLocation.country;
       _employmentTypeController.text = listing.type;
       _descriptionController.text = summary;
+      _contactNameController.text = contactName;
+      _contactEmailController.text = contactEmail;
+      _companyPhoneController.text = companyPhone;
+      _companyUrlController.text = companyUrl;
       _typeRatingsController.text = listing.typeRatingsRequired.join(', ');
       _aircraftController.text = listing.aircraftFlown.join(', ');
       _sourceNameController.text = sourceName;
@@ -767,6 +871,7 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
       _selectedFaaRules
         ..clear()
         ..addAll(listing.faaRules);
+      _part135SubType = listing.part135SubType;
       _selectedFaaCertificates
         ..clear()
         ..addAll(listing.faaCertificates);
@@ -798,6 +903,48 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
 
   void _cancelEditing() {
     setState(_clearExternalListingForm);
+  }
+
+  void _applyPart135Minimums(String subType) {
+    // IFR/Commuter: 1,200 TT, 500 XC, 100 Night, 75 Instrument
+    // VFR Only: 500 TT, 100 XC, 25 Night (no Instrument)
+    final Map<String, int> minimums = subType == 'ifr'
+        ? {
+            'Total Time': 1200,
+            'Cross-Country': 500,
+            'Night': 100,
+            'Instrument': 75,
+          }
+        : {
+            'Total Time': 500,
+            'Cross-Country': 100,
+            'Night': 25,
+          };
+
+    setState(() {
+      _selectedFaaCertificates.removeWhere(
+        (cert) =>
+            cert == 'Airline Transport Pilot (ATP)' ||
+            cert == 'Private Pilot (PPL)',
+      );
+      _selectedFaaCertificates.add('Commercial Pilot (CPL)');
+      if (subType == 'ifr') {
+        _selectedFaaCertificates.add('Instrument Rating (IFR)');
+      } else {
+        _selectedFaaCertificates.remove('Instrument Rating (IFR)');
+      }
+
+      for (final entry in minimums.entries) {
+        final current = _selectedFlightHours[entry.key] ?? 0;
+        _selectedFlightHours[entry.key] = current < entry.value
+            ? entry.value
+            : current;
+      }
+      // For VFR, clear Instrument if it was previously set
+      if (subType == 'vfr') {
+        _selectedFlightHours.remove('Instrument');
+      }
+    });
   }
 
   Widget _buildLocationCountryField() {
@@ -891,10 +1038,33 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
                 itemCount: optionList.length,
                 itemBuilder: (context, index) {
                   final option = optionList[index];
-                  return ListTile(
-                    dense: true,
-                    title: Text(stateProvinceLabel(option)),
-                    onTap: () => onSelected(option),
+                  return Builder(
+                    builder: (itemContext) {
+                      final isHighlighted =
+                          AutocompleteHighlightedOption.of(itemContext) ==
+                          index;
+
+                      if (isHighlighted) {
+                        SchedulerBinding.instance.addPostFrameCallback((_) {
+                          Scrollable.ensureVisible(
+                            itemContext,
+                            alignment: 0.5,
+                            duration: Duration.zero,
+                          );
+                        });
+                      }
+
+                      return Container(
+                        color: isHighlighted
+                            ? Theme.of(itemContext).colorScheme.primaryContainer
+                            : null,
+                        child: ListTile(
+                          dense: true,
+                          title: Text(stateProvinceLabel(option)),
+                          onTap: () => onSelected(option),
+                        ),
+                      );
+                    },
                   );
                 },
               ),
@@ -919,6 +1089,7 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
                 labelText: 'State / Province',
                 border: OutlineInputBorder(),
               ),
+              onSubmitted: (_) => onFieldSubmitted(),
               onChanged: (value) {
                 _locationStateController.text = value;
               },
@@ -1169,6 +1340,44 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
     return cleaned.join(', ');
   }
 
+  String _formatFaaRulesDisplayWithFallback(JobListing listing) {
+    final formatted = listing.faaRules.map((rule) {
+      if (rule != 'Part 135') {
+        return rule;
+      }
+
+      final subType = listing.part135SubType?.trim().toLowerCase();
+      if (subType == 'ifr') {
+        return 'Part 135 IFR';
+      }
+      if (subType == 'vfr') {
+        return 'Part 135 VFR';
+      }
+
+      final total = listing.flightHours['Total Time'] ?? 0;
+      final crossCountry = listing.flightHours['Cross-Country'] ?? 0;
+      final night = listing.flightHours['Night'] ?? 0;
+      final instrument = listing.flightHours['Instrument'] ?? 0;
+
+      final matchesIfr =
+          total >= 1200 &&
+          crossCountry >= 500 &&
+          night >= 100 &&
+          instrument >= 75;
+      if (matchesIfr) {
+        return 'Part 135 IFR';
+      }
+
+      final matchesVfr = total >= 500 && crossCountry >= 100 && night >= 25;
+      if (matchesVfr) {
+        return 'Part 135 VFR';
+      }
+
+      return rule;
+    }).toList();
+    return formatted.isEmpty ? 'None' : formatted.join(', ');
+  }
+
   String _formatHoursMap(Map<String, int> values) {
     final entries = values.entries.where((entry) => entry.value > 0).toList();
     if (entries.isEmpty) {
@@ -1211,7 +1420,9 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
                       : listing.description,
                 ),
                 const SizedBox(height: 12),
-                Text('FAA Rules: ${_joinOrNone(listing.faaRules)}'),
+                Text(
+                  'FAA Rules: ${_formatFaaRulesDisplayWithFallback(listing)}',
+                ),
                 Text(
                   'FAA Certificates: ${_joinOrNone(listing.faaCertificates)}',
                 ),
@@ -1535,9 +1746,44 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
               ),
               const SizedBox(height: 12),
               TextField(
+                controller: _contactNameController,
+                decoration: const InputDecoration(
+                  labelText: 'Contact Name (optional)',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _companyPhoneController,
+                keyboardType: TextInputType.phone,
+                decoration: const InputDecoration(
+                  labelText: 'Contact Phone (optional)',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _contactEmailController,
+                keyboardType: TextInputType.emailAddress,
+                decoration: const InputDecoration(
+                  labelText: 'Contact Email (optional)',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _companyUrlController,
+                keyboardType: TextInputType.url,
+                decoration: const InputDecoration(
+                  labelText: 'Company URL (optional)',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 24),
+              TextField(
                 controller: _sourceNameController,
                 decoration: const InputDecoration(
-                  labelText: 'Source Name (optional)',
+                  labelText: 'Source (optional)',
                   border: OutlineInputBorder(),
                 ),
               ),
@@ -1642,12 +1888,74 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
                       _selectedFaaRules
                         ..clear()
                         ..add(option);
+                      if (option != 'Part 135') {
+                        _part135SubType = null;
+                        _selectedFaaCertificates.remove(
+                          'Commercial Pilot (CPL)',
+                        );
+                        _selectedFaaCertificates.remove(
+                          'Instrument Rating (IFR)',
+                        );
+                      }
                     } else {
                       _selectedFaaRules.remove(option);
+                      // Clear Part 135 sub-type if Part 135 is deselected
+                      if (option == 'Part 135') {
+                        _part135SubType = null;
+                        _selectedFaaCertificates.remove(
+                          'Commercial Pilot (CPL)',
+                        );
+                        _selectedFaaCertificates.remove(
+                          'Instrument Rating (IFR)',
+                        );
+                      }
                     }
                   });
                 },
               ),
+              if (_selectedFaaRules.contains('Part 135')) ...[
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: Colors.grey.shade300),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Part 135 Operating Type *',
+                        style: TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      RadioListTile<String>(
+                        title: const Text('IFR / Commuter'),
+                        subtitle: const Text('1,200 TT · 500 XC · 100 Night · 75 Instrument'),
+                        value: 'ifr',
+                        groupValue: _part135SubType,
+                        onChanged: (value) {
+                          setState(() {
+                            _part135SubType = value;
+                            _applyPart135Minimums('ifr');
+                          });
+                        },
+                      ),
+                      RadioListTile<String>(
+                        title: const Text('VFR Only'),
+                        subtitle: const Text('500 TT · 100 XC · 25 Night'),
+                        value: 'vfr',
+                        groupValue: _part135SubType,
+                        onChanged: (value) {
+                          setState(() {
+                            _part135SubType = value;
+                            _applyPart135Minimums('vfr');
+                          });
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+              ],
               const SizedBox(height: 12),
               _buildCheckboxCard(
                 title: 'Required FAA Certificates (optional)',

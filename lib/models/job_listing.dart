@@ -10,6 +10,7 @@ class JobListing {
   final String crewRole;
   final String? crewPosition;
   final List<String> faaRules;
+  final String? part135SubType; // 'ifr' or 'vfr' when faaRules contains 'Part 135'
   final String description;
   final List<String> faaCertificates;
   final List<String> requiredRatings;
@@ -34,6 +35,10 @@ class JobListing {
   final int reapplyWindowDays; // days a seeker must wait before re-applying
   final bool isExternal; // true when listing is sourced externally
   final String? externalApplyUrl; // optional external application URL
+  final String? contactName; // optional listing contact name
+  final String? contactEmail; // optional listing contact email
+  final String? companyPhone; // optional company contact phone
+  final String? companyUrl; // optional company website URL
   final bool isActive; // false = archived by employer
   final DateTime? archivedAt; // set when archived
 
@@ -46,6 +51,7 @@ class JobListing {
     required this.crewRole,
     this.crewPosition,
     required this.faaRules,
+    this.part135SubType,
     required this.description,
     required this.faaCertificates,
     this.requiredRatings = const [],
@@ -70,6 +76,10 @@ class JobListing {
     this.reapplyWindowDays = 30,
     this.isExternal = false,
     this.externalApplyUrl,
+    this.contactName,
+    this.contactEmail,
+    this.companyPhone,
+    this.companyUrl,
     this.isActive = true,
     this.archivedAt,
   });
@@ -127,6 +137,7 @@ class JobListing {
               ?.map((e) => e.toString())
               .toList() ??
           [],
+      part135SubType: json['part135SubType']?.toString(),
       description: json['description'] ?? '',
       faaCertificates:
           (json['faaCertificates'] as List<dynamic>?)
@@ -197,6 +208,10 @@ class JobListing {
       reapplyWindowDays: (json['reapplyWindowDays'] as num?)?.toInt() ?? 30,
       isExternal: (json['isExternal'] as bool?) ?? false,
       externalApplyUrl: json['externalApplyUrl']?.toString(),
+      contactName: json['contactName']?.toString(),
+      contactEmail: json['contactEmail']?.toString(),
+      companyPhone: json['companyPhone']?.toString(),
+      companyUrl: json['companyUrl']?.toString(),
       isActive: (json['isActive'] as bool?) ?? true,
       archivedAt: json['archivedAt'] != null
           ? DateTime.tryParse(json['archivedAt'].toString())
@@ -213,6 +228,7 @@ class JobListing {
     'crewRole': crewRole,
     'crewPosition': crewPosition,
     'faaRules': faaRules,
+    'part135SubType': part135SubType,
     'description': description,
     'faaCertificates': faaCertificates,
     'requiredRatings': requiredRatings,
@@ -237,6 +253,10 @@ class JobListing {
     'reapplyWindowDays': reapplyWindowDays,
     'isExternal': isExternal,
     'externalApplyUrl': externalApplyUrl,
+    'contactName': contactName,
+    'contactEmail': contactEmail,
+    'companyPhone': companyPhone,
+    'companyUrl': companyUrl,
     'isActive': isActive,
     'archivedAt': archivedAt?.toIso8601String(),
   };
@@ -289,6 +309,7 @@ class JobListing {
     String? crewRole,
     Object? crewPosition = _sentinel,
     List<String>? faaRules,
+    String? part135SubType,
     String? description,
     List<String>? faaCertificates,
     List<String>? requiredRatings,
@@ -313,6 +334,10 @@ class JobListing {
     int? reapplyWindowDays,
     bool? isExternal,
     Object? externalApplyUrl = _sentinel,
+    Object? contactName = _sentinel,
+    Object? contactEmail = _sentinel,
+    Object? companyPhone = _sentinel,
+    Object? companyUrl = _sentinel,
     bool? isActive,
     Object? archivedAt = _sentinel,
   }) {
@@ -327,6 +352,7 @@ class JobListing {
           ? this.crewPosition
           : crewPosition as String?,
       faaRules: faaRules ?? this.faaRules,
+      part135SubType: part135SubType ?? this.part135SubType,
       description: description ?? this.description,
       faaCertificates: faaCertificates ?? this.faaCertificates,
       requiredRatings: requiredRatings ?? this.requiredRatings,
@@ -367,6 +393,18 @@ class JobListing {
       externalApplyUrl: externalApplyUrl == _sentinel
           ? this.externalApplyUrl
           : externalApplyUrl as String?,
+      contactName: contactName == _sentinel
+          ? this.contactName
+          : contactName as String?,
+      contactEmail: contactEmail == _sentinel
+          ? this.contactEmail
+          : contactEmail as String?,
+      companyPhone: companyPhone == _sentinel
+          ? this.companyPhone
+          : companyPhone as String?,
+      companyUrl: companyUrl == _sentinel
+          ? this.companyUrl
+          : companyUrl as String?,
       isActive: isActive ?? this.isActive,
       archivedAt: archivedAt == _sentinel
           ? this.archivedAt

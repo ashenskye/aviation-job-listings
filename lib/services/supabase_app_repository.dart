@@ -655,6 +655,7 @@ class SupabaseAppRepository implements AppRepository {
       'crew_role': job.crewRole,
       'crew_position': job.crewPosition,
       'faa_rules': job.faaRules,
+      'part135_sub_type': job.part135SubType,
       'description': job.description,
       'faa_certificates': job.faaCertificates,
       'type_ratings_required': job.typeRatingsRequired,
@@ -675,6 +676,10 @@ class SupabaseAppRepository implements AppRepository {
       'reapply_window_days': job.reapplyWindowDays,
       'is_external': job.isExternal,
       'external_apply_url': job.externalApplyUrl,
+      'contact_name': job.contactName,
+      'contact_email': job.contactEmail,
+      'company_phone': job.companyPhone,
+      'company_url': job.companyUrl,
       'status': 'active',
     };
   }
@@ -690,6 +695,7 @@ class SupabaseAppRepository implements AppRepository {
       'crewRole': row['crew_role'],
       'crewPosition': row['crew_position'],
       'faaRules': List<String>.from((row['faa_rules'] as List?) ?? const []),
+      'part135SubType': row['part135_sub_type']?.toString(),
       'description': row['description'],
       'faaCertificates': List<String>.from(
         (row['faa_certificates'] as List?) ?? const [],
@@ -735,6 +741,10 @@ class SupabaseAppRepository implements AppRepository {
       'reapplyWindowDays': (row['reapply_window_days'] as num?)?.toInt() ?? 30,
       'isExternal': (row['is_external'] as bool?) ?? false,
       'externalApplyUrl': row['external_apply_url'],
+      'contactName': row['contact_name'],
+      'contactEmail': row['contact_email'],
+      'companyPhone': row['company_phone'],
+      'companyUrl': row['company_url'],
     };
   }
 

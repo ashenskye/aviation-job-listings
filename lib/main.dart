@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -228,6 +229,55 @@ String _formatPhoneNumber(String value) {
   }
 
   return base;
+}
+
+String _formatFaaRuleDisplay(String rule, String? part135SubType) {
+  if (rule == 'Part 135' && part135SubType != null) {
+    final normalizedSubType = part135SubType.trim().toLowerCase();
+    if (normalizedSubType == 'ifr') {
+      return 'Part 135 IFR';
+    }
+    if (normalizedSubType == 'vfr') {
+      return 'Part 135 VFR';
+    }
+  }
+  return rule;
+}
+
+String _formatFaaRuleDisplayWithFallback(
+  String rule,
+  String? part135SubType,
+  Map<String, int> flightHours,
+) {
+  final explicit = _formatFaaRuleDisplay(rule, part135SubType);
+  if (explicit != rule) {
+    return explicit;
+  }
+
+  if (rule != 'Part 135') {
+    return rule;
+  }
+
+  final total = flightHours['Total Time'] ?? 0;
+  final crossCountry = flightHours['Cross-Country'] ?? 0;
+  final night = flightHours['Night'] ?? 0;
+  final instrument = flightHours['Instrument'] ?? 0;
+
+  final matchesIfr =
+      total >= 1200 &&
+      crossCountry >= 500 &&
+      night >= 100 &&
+      instrument >= 75;
+  if (matchesIfr) {
+    return 'Part 135 IFR';
+  }
+
+  final matchesVfr = total >= 500 && crossCountry >= 100 && night >= 25;
+  if (matchesVfr) {
+    return 'Part 135 VFR';
+  }
+
+  return rule;
 }
 
 int _phoneCursorOffset(String formatted, int digitCount) {
@@ -489,6 +539,7 @@ class _MyHomePageState extends State<MyHomePage> {
     'Health Insurance',
     '401K',
     'Relocation Reinbursement',
+    'Company Housing',
     'Sign-On Bonus',
     'Longevity Bonus',
     'Flight Benefits',
@@ -567,10 +618,12 @@ class _MyHomePageState extends State<MyHomePage> {
   String _searchTabRatingFilter = 'all';
   String _searchTabFlightHoursFilter = 'all';
   String _searchTabInstructorHoursFilter = 'all';
-  String _searchTabPayMetricFilter = 'all';
   String _searchTabMatchFilter = 'all';
   String _searchTabSort = 'best_match';
   bool _searchTabExternalOnly = false;
+  bool _searchTabInstructorOnly = false;
+  bool _searchTabAdvancedFiltersExpanded = false;
+  bool _searchTabInstructorFiltersExpanded = false;
   int _page = 1;
   bool _loading = true;
   String? _loadingError;
@@ -667,9 +720,11 @@ class _MyHomePageState extends State<MyHomePage> {
   String _selectedCrewRole = 'Single Pilot';
   String _selectedCrewPosition = 'Captain';
   final List<String> _selectedFaaRules = [];
+  String? _part135SubType; // 'ifr' or 'vfr'
   final List<String> _selectedFaaCertificates = [];
   final List<String> _selectedRequiredRatings = [];
   final Map<String, int> _selectedFlightHours = {};
+  final Map<String, TextEditingController> _createFlightHourControllers = {};
   final Set<String> _preferredFlightHours = {};
   final Map<String, int> _selectedInstructorHours = {};
   final Set<String> _preferredInstructorHours = {};
@@ -1695,10 +1750,38 @@ class _MyHomePageState extends State<MyHomePage> {
                             itemCount: optionList.length,
                             itemBuilder: (context, index) {
                               final option = optionList[index];
-                              return ListTile(
-                                dense: true,
-                                title: Text(_stateProvinceLabel(option)),
-                                onTap: () => onSelected(option),
+                              return Builder(
+                                builder: (itemContext) {
+                                  final isHighlighted =
+                                      AutocompleteHighlightedOption.of(
+                                        itemContext,
+                                      ) ==
+                                      index;
+
+                                  if (isHighlighted) {
+                                    SchedulerBinding.instance
+                                        .addPostFrameCallback((_) {
+                                          Scrollable.ensureVisible(
+                                            itemContext,
+                                            alignment: 0.5,
+                                            duration: Duration.zero,
+                                          );
+                                        });
+                                  }
+
+                                  return Container(
+                                    color: isHighlighted
+                                        ? Theme.of(
+                                            itemContext,
+                                          ).colorScheme.primaryContainer
+                                        : null,
+                                    child: ListTile(
+                                      dense: true,
+                                      title: Text(_stateProvinceLabel(option)),
+                                      onTap: () => onSelected(option),
+                                    ),
+                                  );
+                                },
                               );
                             },
                           ),
@@ -1728,6 +1811,7 @@ class _MyHomePageState extends State<MyHomePage> {
                           decoration: const InputDecoration(
                             labelText: 'State / Province',
                           ),
+                          onSubmitted: (_) => onFieldSubmitted(),
                           onChanged: (value) {
                             setPageState(() {
                               stateController.text = value.trim();
@@ -2114,16 +2198,6 @@ class _MyHomePageState extends State<MyHomePage> {
     }
     if (specialtyCount > 0) {
       segments.add('Specialty $specialtyCount');
-    }
-
-    final totalHours = [
-      ..._selectedFlightHours.values,
-      ..._selectedInstructorHours.values,
-      ..._selectedSpecialtyHours.values,
-    ].fold<int>(0, (sum, value) => sum + value);
-
-    if (totalHours > 0) {
-      segments.add('${totalHours.toString()} min hrs');
     }
 
     return segments.join(' • ');
@@ -3692,6 +3766,7 @@ class _MyHomePageState extends State<MyHomePage> {
       requiredRatings: List<String>.from(_selectedRequiredRatings),
       typeRatingsRequired: typeRatingsRequired,
       faaRules: _selectedFaaRules.isNotEmpty ? [_selectedFaaRules.first] : [],
+      part135SubType: _part135SubType,
       flightExperience: [
         ..._selectedFlightHours.keys,
         ..._selectedInstructorHours.keys,
@@ -4257,11 +4332,7 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   List<String> get _searchTabFaaRuleOptions {
-    return ['all', ..._availableFaaRules];
-  }
-
-  List<String> get _searchTabPayMetricOptions {
-    return ['all', ..._availablePayRateMetrics];
+    return const ['all', 'Part 121', 'Part 135 IFR', 'Part 135 VFR', 'Part 91'];
   }
 
   List<String> get _searchTabCertificateOptions {
@@ -4396,6 +4467,57 @@ class _MyHomePageState extends State<MyHomePage> {
     return location == selected;
   }
 
+  bool _isInstructorFocusedJob(JobListing job) {
+    final title = job.title.toLowerCase();
+    final description = job.description.toLowerCase();
+    final position = (job.crewPosition ?? '').toLowerCase();
+    final hasInstructorKeyword =
+        title.contains('instructor') ||
+        description.contains('instructor') ||
+        position.contains('instructor') ||
+        title.contains('cfi') ||
+        description.contains('cfi') ||
+        title.contains('cfii') ||
+        description.contains('cfii') ||
+        title.contains('mei') ||
+        description.contains('mei');
+
+    final hasInstructorCertificate = job.faaCertificates.any((cert) {
+      final lower = cert.toLowerCase();
+      return lower.contains('instructor') ||
+          lower.contains('cfi') ||
+          lower.contains('cfii') ||
+          lower.contains('mei');
+    });
+
+    return hasInstructorKeyword ||
+        hasInstructorCertificate ||
+        job.instructorHoursByType.isNotEmpty ||
+        job.preferredInstructorHours.isNotEmpty;
+  }
+
+  bool _matchesSearchTabFaaRuleFilter(JobListing job, String filterValue) {
+    final selected = filterValue.trim().toLowerCase();
+    if (selected == 'all') {
+      return true;
+    }
+
+    if (selected.startsWith('part 135 ifr') ||
+        selected.startsWith('part 135 vfr')) {
+      if (!job.faaRules.contains('Part 135')) {
+        return false;
+      }
+      final normalized = _formatFaaRuleDisplayWithFallback(
+        'Part 135',
+        job.part135SubType,
+        job.flightHours,
+      ).toLowerCase();
+      return normalized == selected;
+    }
+
+    return job.faaRules.any((rule) => rule.trim().toLowerCase() == selected);
+  }
+
   List<JobListing> get _searchTabFilteredJobs {
     final typeFilter = _searchTabTypeOptions.contains(_searchTabTypeFilter)
         ? _searchTabTypeFilter
@@ -4411,10 +4533,6 @@ class _MyHomePageState extends State<MyHomePage> {
     final faaRuleFilter =
         _searchTabFaaRuleOptions.contains(_searchTabFaaRuleFilter)
         ? _searchTabFaaRuleFilter
-        : 'all';
-    final payMetricFilter =
-        _searchTabPayMetricOptions.contains(_searchTabPayMetricFilter)
-        ? _searchTabPayMetricFilter
         : 'all';
     final certificateFilter =
         _searchTabCertificateOptions.contains(_searchTabCertificateFilter)
@@ -4442,6 +4560,10 @@ class _MyHomePageState extends State<MyHomePage> {
         return false;
       }
 
+      if (_searchTabInstructorOnly && !_isInstructorFocusedJob(job)) {
+        return false;
+      }
+
       if (typeFilter != 'all' && job.type.trim() != typeFilter) {
         return false;
       }
@@ -4454,15 +4576,8 @@ class _MyHomePageState extends State<MyHomePage> {
         return false;
       }
 
-      if (faaRuleFilter != 'all' && !job.faaRules.contains(faaRuleFilter)) {
+      if (!_matchesSearchTabFaaRuleFilter(job, faaRuleFilter)) {
         return false;
-      }
-
-      if (payMetricFilter != 'all') {
-        final compensation = (job.salaryRange ?? '').toLowerCase();
-        if (!compensation.contains(payMetricFilter.toLowerCase())) {
-          return false;
-        }
       }
 
       if (certificateFilter != 'all' &&
@@ -4587,10 +4702,12 @@ class _MyHomePageState extends State<MyHomePage> {
       _searchTabRatingFilter = 'all';
       _searchTabFlightHoursFilter = 'all';
       _searchTabInstructorHoursFilter = 'all';
-      _searchTabPayMetricFilter = 'all';
       _searchTabMatchFilter = 'all';
       _searchTabSort = 'best_match';
       _searchTabExternalOnly = false;
+      _searchTabInstructorOnly = false;
+      _searchTabAdvancedFiltersExpanded = false;
+      _searchTabInstructorFiltersExpanded = false;
     });
   }
 
@@ -5837,6 +5954,7 @@ class _MyHomePageState extends State<MyHomePage> {
     String? selectedFaaRule = job.faaRules.isNotEmpty
         ? job.faaRules.first
         : null;
+    String? editPart135SubType;
     String selectedCrewRole = job.crewRole.toLowerCase() == 'crew'
         ? 'Crew'
         : 'Single Pilot';
@@ -6195,6 +6313,7 @@ class _MyHomePageState extends State<MyHomePage> {
         crewRole: selectedCrewRole,
         crewPosition: selectedCrewRole == 'Crew' ? selectedCrewPosition : null,
         faaRules: selectedFaaRule == null ? [] : [selectedFaaRule!],
+        part135SubType: editPart135SubType,
         description: descriptionController.text.trim(),
         faaCertificates: selectedFaaCertificates.toList(),
         requiredRatings: selectedRequiredRatings.toList(),
@@ -6451,21 +6570,113 @@ class _MyHomePageState extends State<MyHomePage> {
           _buildEditAccordionSection(
             title: 'FAA Operational Scope *',
             initiallyExpanded: true,
-            child: DropdownButtonFormField<String>(
-              initialValue: selectedFaaRule,
-              hint: const Text('Select FAA Operational Scope'),
-              decoration: const InputDecoration(
-                labelText: 'FAA Operational Scope *',
-              ),
-              items: [
-                ..._availableFaaRules.map(
-                  (rule) =>
-                      DropdownMenuItem<String>(value: rule, child: Text(rule)),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                DropdownButtonFormField<String>(
+                  initialValue: selectedFaaRule,
+                  hint: const Text('Select FAA Operational Scope'),
+                  decoration: const InputDecoration(
+                    labelText: 'FAA Operational Scope *',
+                  ),
+                  items: [
+                    ..._availableFaaRules.map(
+                      (rule) =>
+                          DropdownMenuItem<String>(value: rule, child: Text(rule)),
+                    ),
+                  ],
+                  onChanged: (value) {
+                    setModalState(() {
+                      selectedFaaRule = value;
+                      if (value != 'Part 135') {
+                        editPart135SubType = null;
+                        selectedFaaCertificates.remove(
+                          'Commercial Pilot (CPL)',
+                        );
+                        selectedFaaCertificates.remove(
+                          'Instrument Rating (IFR)',
+                        );
+                      }
+                    });
+                  },
                 ),
+                if (selectedFaaRule == 'Part 135') ...[
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Part 135 Operating Type',
+                    style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+                  ),
+                  RadioListTile<String>(
+                    title: const Text('IFR / Commuter'),
+                    subtitle: const Text(
+                      '1,200 TT · 500 XC · 100 Night · 75 Instrument',
+                    ),
+                    value: 'ifr',
+                    groupValue: editPart135SubType,
+                    onChanged: (value) {
+                      setModalState(() {
+                        editPart135SubType = value;
+                        selectedFaaCertificates.removeWhere(
+                          (c) =>
+                              c == 'Airline Transport Pilot (ATP)' ||
+                              c == 'Private Pilot (PPL)',
+                        );
+                        selectedFaaCertificates.add('Commercial Pilot (CPL)');
+                        selectedFaaCertificates.add('Instrument Rating (IFR)');
+                        selectedFlightHours
+                          ..add('Total Time')
+                          ..add('Cross-Country')
+                          ..add('Night')
+                          ..add('Instrument');
+                        flightHourControllers['Total Time']?.text = '1200';
+                        flightHourControllers['Cross-Country']?.text = '500';
+                        flightHourControllers['Night']?.text = '100';
+                        flightHourControllers['Instrument']?.text = '75';
+                      });
+                    },
+                  ),
+                  RadioListTile<String>(
+                    title: const Text('VFR Only'),
+                    subtitle: const Text('500 TT · 100 XC · 25 Night'),
+                    value: 'vfr',
+                    groupValue: editPart135SubType,
+                    onChanged: (value) {
+                      setModalState(() {
+                        editPart135SubType = value;
+                        selectedFaaCertificates.removeWhere(
+                          (c) =>
+                              c == 'Airline Transport Pilot (ATP)' ||
+                              c == 'Private Pilot (PPL)',
+                        );
+                        selectedFaaCertificates.add('Commercial Pilot (CPL)');
+                        selectedFaaCertificates.remove(
+                          'Instrument Rating (IFR)',
+                        );
+                        selectedFlightHours
+                          ..add('Total Time')
+                          ..add('Cross-Country')
+                          ..add('Night');
+                        selectedFlightHours.remove('Instrument');
+                        flightHourControllers['Total Time']?.text = '500';
+                        flightHourControllers['Cross-Country']?.text = '100';
+                        flightHourControllers['Night']?.text = '25';
+                      });
+                    },
+                  ),
+                  if (editPart135SubType != null)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 4, bottom: 8),
+                      child: Text(
+                        'Minimums auto-applied to flight hours below. Adjust as needed.',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey.shade600,
+                          fontStyle: FontStyle.italic,
+                        ),
+                      ),
+                    ),
+                ],
               ],
-              onChanged: (value) {
-                setModalState(() => selectedFaaRule = value);
-              },
             ),
           ),
           const SizedBox(height: 14),
@@ -6926,7 +7137,12 @@ class _MyHomePageState extends State<MyHomePage> {
     _selectedFaaCertificates.clear();
     _selectedRequiredRatings.clear();
     _selectedFaaRules.clear();
+    _part135SubType = null;
     _selectedFlightHours.clear();
+    for (final c in _createFlightHourControllers.values) {
+      c.dispose();
+    }
+    _createFlightHourControllers.clear();
     _preferredFlightHours.clear();
     _selectedInstructorHours.clear();
     _preferredInstructorHours.clear();
@@ -7066,6 +7282,9 @@ class _MyHomePageState extends State<MyHomePage> {
     final missing = <String>[];
     if (!hasOperationalScope) {
       missing.add('FAA Operational Scope');
+    }
+    if (_selectedFaaRules.contains('Part 135') && _part135SubType == null) {
+      missing.add('Part 135 Operating Type (IFR/Commuter or VFR Only)');
     }
     if (!hasCertificateSelection) {
       missing.add('At Least One Certificate Selection Required');
@@ -7594,7 +7813,9 @@ class _MyHomePageState extends State<MyHomePage> {
                                                         '${job.company} • ${job.location}',
                                                       ),
                                                       const SizedBox(height: 2),
-                                                      Text(job.type),
+                                                      Text(
+                                                        '${job.crewRole}${job.crewPosition != null && job.crewPosition!.isNotEmpty ? ' - ${job.crewPosition}' : ''} • ${job.type}',
+                                                      ),
                                                       if (deadlineText !=
                                                           null) ...[
                                                         const SizedBox(
@@ -8578,7 +8799,6 @@ class _MyHomePageState extends State<MyHomePage> {
     final locationOptions = _searchTabLocationOptions;
     final positionOptions = _searchTabPositionOptions;
     final faaRuleOptions = _searchTabFaaRuleOptions;
-    final payMetricOptions = _searchTabPayMetricOptions;
     final certificateOptions = _searchTabCertificateOptions;
     final ratingOptions = _searchTabRatingOptions;
     final flightHoursOptions = _searchTabFlightHoursOptions;
@@ -8595,10 +8815,6 @@ class _MyHomePageState extends State<MyHomePage> {
         : 'all';
     final selectedFaaRule = faaRuleOptions.contains(_searchTabFaaRuleFilter)
         ? _searchTabFaaRuleFilter
-        : 'all';
-    final selectedPayMetric =
-        payMetricOptions.contains(_searchTabPayMetricFilter)
-        ? _searchTabPayMetricFilter
         : 'all';
     final selectedCertificate =
         certificateOptions.contains(_searchTabCertificateFilter)
@@ -8635,6 +8851,7 @@ class _MyHomePageState extends State<MyHomePage> {
     return SafeArea(
       top: false,
       child: ListView.builder(
+        key: const ValueKey('search-tab-scroll'),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         itemCount: filteredJobs.length + 1,
         itemBuilder: (context, index) {
@@ -8642,6 +8859,31 @@ class _MyHomePageState extends State<MyHomePage> {
             return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                Text(
+                  'Job Search',
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Find aviation roles by keyword, location, and qualification fit.',
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Icon(
+                      Icons.search,
+                      size: 18,
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      'Search Query',
+                      style: Theme.of(context).textTheme.titleSmall,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
                 TextField(
                   key: const ValueKey('search-tab-query'),
                   controller: _searchTabController,
@@ -8666,6 +8908,39 @@ class _MyHomePageState extends State<MyHomePage> {
                   },
                 ),
                 const SizedBox(height: 10),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.blueGrey.shade50,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: Colors.blueGrey.shade100),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.tune,
+                        size: 18,
+                        color: Colors.blueGrey.shade700,
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        'Primary Filters',
+                        style: Theme.of(context).textTheme.titleSmall,
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Divider(
+                          thickness: 1,
+                          color: Colors.blueGrey.shade200,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 8),
                 Wrap(
                   spacing: 10,
                   runSpacing: 10,
@@ -8729,6 +9004,62 @@ class _MyHomePageState extends State<MyHomePage> {
                     SizedBox(
                       width: 260,
                       child: DropdownButtonFormField<String>(
+                        key: const ValueKey('search-tab-position-filter'),
+                        initialValue: selectedPosition,
+                        isExpanded: true,
+                        decoration: const InputDecoration(
+                          labelText: 'Position',
+                          border: OutlineInputBorder(),
+                        ),
+                        items: positionOptions
+                            .map(
+                              (value) => DropdownMenuItem<String>(
+                                value: value,
+                                child: Text(
+                                  value == 'all' ? 'All Positions' : value,
+                                ),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (value) {
+                          if (value == null) return;
+                          setState(() {
+                            _searchTabPositionFilter = value;
+                          });
+                        },
+                      ),
+                    ),
+                    SizedBox(
+                      width: 260,
+                      child: DropdownButtonFormField<String>(
+                        key: const ValueKey('search-tab-faa-rule-filter'),
+                        initialValue: selectedFaaRule,
+                        isExpanded: true,
+                        decoration: const InputDecoration(
+                          labelText: 'FAA Rule',
+                          border: OutlineInputBorder(),
+                        ),
+                        items: faaRuleOptions
+                            .map(
+                              (value) => DropdownMenuItem<String>(
+                                value: value,
+                                child: Text(
+                                  value == 'all' ? 'All FAA Rules' : value,
+                                ),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (value) {
+                          if (value == null) return;
+                          setState(() {
+                            _searchTabFaaRuleFilter = value;
+                          });
+                        },
+                      ),
+                    ),
+                    SizedBox(
+                      width: 260,
+                      child: DropdownButtonFormField<String>(
                         key: const ValueKey('search-tab-sort'),
                         initialValue: selectedSort,
                         isExpanded: true,
@@ -8764,85 +9095,245 @@ class _MyHomePageState extends State<MyHomePage> {
                     ),
                   ],
                 ),
-                const SizedBox(height: 10),
-                Card(
-                  child: ExpansionTile(
-                    tilePadding: const EdgeInsets.symmetric(horizontal: 12),
-                    childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-                    title: const Text('Employer Listing Filters'),
-                    subtitle: const Text(
-                      'Position and FAA Rule are pinned on top for now',
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    FilterChip(
+                      key: const ValueKey('search-tab-instructor-only'),
+                      label: const Text('Instructor roles only'),
+                      selected: _searchTabInstructorOnly,
+                      onSelected: (selected) {
+                        setState(() {
+                          _searchTabInstructorOnly = selected;
+                          if (selected) {
+                            _searchTabInstructorFiltersExpanded = true;
+                          } else {
+                            _searchTabInstructorFiltersExpanded = false;
+                          }
+                        });
+                      },
                     ),
-                    children: [
-                      // Top row (kept as requested)
-                      Wrap(
-                        spacing: 10,
-                        runSpacing: 10,
+                  ],
+                ),
+                const SizedBox(height: 10),
+                if (_searchTabInstructorOnly)
+                  Card(
+                    child: ExpansionTile(
+                      key: ValueKey(
+                        'search-tab-instructor-filters-${_searchTabInstructorFiltersExpanded ? 'open' : 'closed'}',
+                      ),
+                      initiallyExpanded: _searchTabInstructorFiltersExpanded,
+                      onExpansionChanged: (expanded) {
+                        setState(() {
+                          _searchTabInstructorFiltersExpanded = expanded;
+                        });
+                      },
+                      tilePadding: const EdgeInsets.symmetric(horizontal: 12),
+                      childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                      title: Row(
                         children: [
-                          SizedBox(
-                            width: 260,
-                            child: DropdownButtonFormField<String>(
-                              key: const ValueKey('search-tab-position-filter'),
-                              initialValue: selectedPosition,
-                              isExpanded: true,
-                              decoration: const InputDecoration(
-                                labelText: 'Position',
-                                border: OutlineInputBorder(),
-                              ),
-                              items: positionOptions
-                                  .map(
-                                    (value) => DropdownMenuItem<String>(
-                                      value: value,
-                                      child: Text(
-                                        value == 'all'
-                                            ? 'All Positions'
-                                            : value,
-                                      ),
-                                    ),
-                                  )
-                                  .toList(),
-                              onChanged: (value) {
-                                if (value == null) return;
-                                setState(() {
-                                  _searchTabPositionFilter = value;
-                                });
-                              },
-                            ),
+                          Icon(
+                            Icons.school,
+                            size: 18,
+                            color: Colors.teal.shade700,
                           ),
-                          SizedBox(
-                            width: 260,
-                            child: DropdownButtonFormField<String>(
-                              key: const ValueKey('search-tab-faa-rule-filter'),
-                              initialValue: selectedFaaRule,
-                              isExpanded: true,
-                              decoration: const InputDecoration(
-                                labelText: 'FAA Rule',
-                                border: OutlineInputBorder(),
-                              ),
-                              items: faaRuleOptions
-                                  .map(
-                                    (value) => DropdownMenuItem<String>(
-                                      value: value,
-                                      child: Text(
-                                        value == 'all'
-                                            ? 'All FAA Rules'
-                                            : value,
-                                      ),
-                                    ),
-                                  )
-                                  .toList(),
-                              onChanged: (value) {
-                                if (value == null) return;
-                                setState(() {
-                                  _searchTabFaaRuleFilter = value;
-                                });
-                              },
-                            ),
-                          ),
+                          const SizedBox(width: 6),
+                          const Text('Instructor Filters'),
                         ],
                       ),
-                      const SizedBox(height: 8),
-                      // Tweak-needed row
+                      subtitle: const Text(
+                        'Instructor certificates, ratings, and hour requirements',
+                      ),
+                      children: [
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: Colors.teal.shade50,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Use these filters to focus on instructor-specific qualifications and experience.',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.teal.shade700,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              Wrap(
+                                spacing: 10,
+                                runSpacing: 10,
+                                children: [
+                                  SizedBox(
+                                    width: 260,
+                                    child: DropdownButtonFormField<String>(
+                                      key: const ValueKey(
+                                        'search-tab-certificate-filter',
+                                      ),
+                                      initialValue: selectedCertificate,
+                                      isExpanded: true,
+                                      decoration: const InputDecoration(
+                                        labelText: 'Certificate',
+                                        border: OutlineInputBorder(),
+                                      ),
+                                      items: certificateOptions
+                                          .map(
+                                            (value) => DropdownMenuItem<String>(
+                                              value: value,
+                                              child: Text(
+                                                value == 'all'
+                                                    ? 'All Certificates'
+                                                    : value,
+                                              ),
+                                            ),
+                                          )
+                                          .toList(),
+                                      onChanged: (value) {
+                                        if (value == null) return;
+                                        setState(() {
+                                          _searchTabCertificateFilter = value;
+                                        });
+                                      },
+                                    ),
+                                  ),
+                                  SizedBox(
+                                    width: 260,
+                                    child: DropdownButtonFormField<String>(
+                                      key: const ValueKey(
+                                        'search-tab-instructor-hours-filter',
+                                      ),
+                                      initialValue: selectedInstructorHours,
+                                      isExpanded: true,
+                                      decoration: const InputDecoration(
+                                        labelText: 'Instructor Hours Category',
+                                        border: OutlineInputBorder(),
+                                      ),
+                                      items: instructorHoursOptions
+                                          .map(
+                                            (value) => DropdownMenuItem<String>(
+                                              value: value,
+                                              child: Text(
+                                                value == 'all'
+                                                    ? 'All Instructor Categories'
+                                                    : value,
+                                              ),
+                                            ),
+                                          )
+                                          .toList(),
+                                      onChanged: (value) {
+                                        if (value == null) return;
+                                        setState(() {
+                                          _searchTabInstructorHoursFilter = value;
+                                        });
+                                      },
+                                    ),
+                                  ),
+                                  SizedBox(
+                                    width: 260,
+                                    child: DropdownButtonFormField<String>(
+                                      key: const ValueKey(
+                                        'search-tab-rating-filter',
+                                      ),
+                                      initialValue: selectedRating,
+                                      isExpanded: true,
+                                      decoration: const InputDecoration(
+                                        labelText: 'Rating',
+                                        border: OutlineInputBorder(),
+                                      ),
+                                      items: ratingOptions
+                                          .map(
+                                            (value) => DropdownMenuItem<String>(
+                                              value: value,
+                                              child: Text(
+                                                value == 'all'
+                                                    ? 'All Ratings'
+                                                    : value,
+                                              ),
+                                            ),
+                                          )
+                                          .toList(),
+                                      onChanged: (value) {
+                                        if (value == null) return;
+                                        setState(() {
+                                          _searchTabRatingFilter = value;
+                                        });
+                                      },
+                                    ),
+                                  ),
+                                  SizedBox(
+                                    width: 260,
+                                    child: DropdownButtonFormField<String>(
+                                      key: const ValueKey(
+                                        'search-tab-flight-hours-filter',
+                                      ),
+                                      initialValue: selectedFlightHours,
+                                      isExpanded: true,
+                                      decoration: const InputDecoration(
+                                        labelText: 'Flight Hours Category',
+                                        border: OutlineInputBorder(),
+                                      ),
+                                      items: flightHoursOptions
+                                          .map(
+                                            (value) => DropdownMenuItem<String>(
+                                              value: value,
+                                              child: Text(
+                                                value == 'all'
+                                                    ? 'All Flight Hour Categories'
+                                                    : value,
+                                              ),
+                                            ),
+                                          )
+                                          .toList(),
+                                      onChanged: (value) {
+                                        if (value == null) return;
+                                        setState(() {
+                                          _searchTabFlightHoursFilter = value;
+                                        });
+                                      },
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                Card(
+                  child: ExpansionTile(
+                    key: ValueKey(
+                      'search-tab-advanced-filters-${_searchTabAdvancedFiltersExpanded ? 'open' : 'closed'}',
+                    ),
+                    initiallyExpanded: _searchTabAdvancedFiltersExpanded,
+                    onExpansionChanged: (expanded) {
+                      setState(() {
+                        _searchTabAdvancedFiltersExpanded = expanded;
+                      });
+                    },
+                    tilePadding: const EdgeInsets.symmetric(horizontal: 12),
+                    childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                    title: Row(
+                      children: [
+                        Icon(
+                          Icons.manage_search,
+                          size: 18,
+                          color: Colors.blueGrey.shade700,
+                        ),
+                        const SizedBox(width: 6),
+                        const Text('Advanced Filters'),
+                      ],
+                    ),
+                    subtitle: const Text(
+                      'General qualification and experience filters',
+                    ),
+                    children: [
                       Container(
                         width: double.infinity,
                         padding: const EdgeInsets.all(10),
@@ -8854,7 +9345,7 @@ class _MyHomePageState extends State<MyHomePage> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              'Needs tuning: Certificate/Ratings + Hours filters',
+                              'Use these broader filters for general aviation role matching.',
                               style: TextStyle(
                                 fontSize: 12,
                                 fontWeight: FontWeight.w600,
@@ -8962,87 +9453,48 @@ class _MyHomePageState extends State<MyHomePage> {
                                     },
                                   ),
                                 ),
-                                SizedBox(
-                                  width: 260,
-                                  child: DropdownButtonFormField<String>(
-                                    key: const ValueKey(
-                                      'search-tab-instructor-hours-filter',
-                                    ),
-                                    initialValue: selectedInstructorHours,
-                                    isExpanded: true,
-                                    decoration: const InputDecoration(
-                                      labelText: 'Instructor Hours Category',
-                                      border: OutlineInputBorder(),
-                                    ),
-                                    items: instructorHoursOptions
-                                        .map(
-                                          (value) => DropdownMenuItem<String>(
-                                            value: value,
-                                            child: Text(
-                                              value == 'all'
-                                                  ? 'All Instructor Categories'
-                                                  : value,
-                                            ),
-                                          ),
-                                        )
-                                        .toList(),
-                                    onChanged: (value) {
-                                      if (value == null) return;
-                                      setState(() {
-                                        _searchTabInstructorHoursFilter = value;
-                                      });
-                                    },
-                                  ),
-                                ),
                               ],
                             ),
                           ],
                         ),
                       ),
-                      const SizedBox(height: 8),
-                      // Bottom row (moved as requested)
-                      Wrap(
-                        spacing: 10,
-                        runSpacing: 10,
-                        children: [
-                          SizedBox(
-                            width: 260,
-                            child: DropdownButtonFormField<String>(
-                              key: const ValueKey(
-                                'search-tab-pay-metric-filter',
-                              ),
-                              initialValue: selectedPayMetric,
-                              isExpanded: true,
-                              decoration: const InputDecoration(
-                                labelText: 'Pay Metric',
-                                border: OutlineInputBorder(),
-                              ),
-                              items: payMetricOptions
-                                  .map(
-                                    (value) => DropdownMenuItem<String>(
-                                      value: value,
-                                      child: Text(
-                                        value == 'all'
-                                            ? 'All Pay Metrics'
-                                            : value,
-                                      ),
-                                    ),
-                                  )
-                                  .toList(),
-                              onChanged: (value) {
-                                if (value == null) return;
-                                setState(() {
-                                  _searchTabPayMetricFilter = value;
-                                });
-                              },
-                            ),
-                          ),
-                        ],
-                      ),
                     ],
                   ),
                 ),
                 const SizedBox(height: 10),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.green.shade50,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: Colors.green.shade100),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.fact_check,
+                        size: 18,
+                        color: Colors.green.shade700,
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        'Match & View Options',
+                        style: Theme.of(context).textTheme.titleSmall,
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Divider(
+                          thickness: 1,
+                          color: Colors.green.shade200,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 8),
                 Wrap(
                   spacing: 8,
                   runSpacing: 8,
@@ -9176,7 +9628,9 @@ class _MyHomePageState extends State<MyHomePage> {
                               const SizedBox(height: 4),
                               Text('${job.company} • ${job.location}'),
                               const SizedBox(height: 2),
-                              Text(job.type),
+                              Text(
+                                '${job.crewRole}${job.crewPosition != null && job.crewPosition!.isNotEmpty ? ' - ${job.crewPosition}' : ''} • ${job.type}',
+                              ),
                               if (deadlineText != null)
                                 Text(
                                   'Deadline: $deadlineText',
@@ -9514,10 +9968,33 @@ class _MyHomePageState extends State<MyHomePage> {
                 itemCount: optionList.length,
                 itemBuilder: (context, index) {
                   final option = optionList[index];
-                  return ListTile(
-                    dense: true,
-                    title: Text(_stateProvinceLabel(option)),
-                    onTap: () => onSelected(option),
+                  return Builder(
+                    builder: (itemContext) {
+                      final isHighlighted =
+                          AutocompleteHighlightedOption.of(itemContext) ==
+                          index;
+
+                      if (isHighlighted) {
+                        SchedulerBinding.instance.addPostFrameCallback((_) {
+                          Scrollable.ensureVisible(
+                            itemContext,
+                            alignment: 0.5,
+                            duration: Duration.zero,
+                          );
+                        });
+                      }
+
+                      return Container(
+                        color: isHighlighted
+                            ? Theme.of(itemContext).colorScheme.primaryContainer
+                            : null,
+                        child: ListTile(
+                          dense: true,
+                          title: Text(_stateProvinceLabel(option)),
+                          onTap: () => onSelected(option),
+                        ),
+                      );
+                    },
                   );
                 },
               ),
@@ -9539,6 +10016,7 @@ class _MyHomePageState extends State<MyHomePage> {
               controller: textEditingController,
               focusNode: focusNode,
               decoration: const InputDecoration(labelText: 'State / Province'),
+              onSubmitted: (_) => onFieldSubmitted(),
               onChanged: (value) {
                 _employerStateController.text = value;
               },
@@ -10386,11 +10864,32 @@ class _MyHomePageState extends State<MyHomePage> {
     );
   }
 
+  Map<String, int> _part135Minimums() {
+    if (!_selectedFaaRules.contains('Part 135') || _part135SubType == null) {
+      return {};
+    }
+    if (_part135SubType == 'ifr') {
+      return {
+        'Total Time': 1200,
+        'Cross-Country': 500,
+        'Night': 100,
+        'Instrument': 75,
+      };
+    }
+    return {
+      'Total Time': 500,
+      'Cross-Country': 100,
+      'Night': 25,
+    };
+  }
+
   Widget _buildHoursRequirementSection({
     required String title,
     required List<String> options,
     required Map<String, int> selectedHours,
     required Set<String> preferredHours,
+    Map<String, int> minimums = const {},
+    Map<String, TextEditingController>? controllers,
   }) {
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 4),
@@ -10421,10 +10920,20 @@ class _MyHomePageState extends State<MyHomePage> {
                   onChanged: (bool? selected) {
                     setState(() {
                       if (selected == true) {
-                        selectedHours.putIfAbsent(option, () => 0);
+                        final minVal = minimums[option] ?? 0;
+                        selectedHours.putIfAbsent(option, () => minVal);
+                        if (controllers != null) {
+                          controllers.putIfAbsent(
+                            option,
+                            () => TextEditingController(
+                              text: minVal > 0 ? minVal.toString() : '',
+                            ),
+                          );
+                        }
                       } else {
                         selectedHours.remove(option);
                         preferredHours.remove(option);
+                        controllers?.remove(option)?.dispose();
                       }
                     });
                   },
@@ -10438,22 +10947,32 @@ class _MyHomePageState extends State<MyHomePage> {
                     ),
                     child: Column(
                       children: [
-                        TextFormField(
-                          key: ValueKey('create-hours-$title-$option'),
-                          keyboardType: TextInputType.number,
-                          initialValue: hours > 0 ? hours.toString() : '',
-                          decoration: InputDecoration(
-                            labelText: 'Hours for $option',
-                            hintText: '0',
-                            isDense: true,
-                          ),
-                          onChanged: (value) {
-                            final parsed = int.tryParse(value.trim()) ?? 0;
-                            setState(() {
-                              selectedHours[option] = parsed;
-                            });
-                          },
-                        ),
+                        Builder(builder: (context) {
+                          final minVal = minimums[option] ?? 0;
+                          final ctrl = controllers?[option];
+                          return TextFormField(
+                            key: ValueKey('create-hours-$title-$option'),
+                            controller: ctrl,
+                            keyboardType: TextInputType.number,
+                            initialValue: ctrl != null
+                                ? null
+                                : (hours > 0 ? hours.toString() : ''),
+                            decoration: InputDecoration(
+                              labelText: minVal > 0
+                                  ? 'Hours for $option (min $minVal)'
+                                  : 'Hours for $option',
+                              hintText: minVal > 0 ? '$minVal' : '0',
+                              isDense: true,
+                            ),
+                            onChanged: (value) {
+                              final parsed = int.tryParse(value.trim()) ?? 0;
+                              final enforced = parsed < minVal ? minVal : parsed;
+                              setState(() {
+                                selectedHours[option] = enforced;
+                              });
+                            },
+                          );
+                        }),
                         CheckboxListTile(
                           contentPadding: EdgeInsets.zero,
                           dense: true,
@@ -10489,24 +11008,129 @@ class _MyHomePageState extends State<MyHomePage> {
         borderRadius: BorderRadius.circular(8),
       ),
       child: Column(
-        children: _availableFaaRules.map((rule) {
-          return CheckboxListTile(
-            title: Text(rule),
-            value: _selectedFaaRules.contains(rule),
-            onChanged: (bool? selected) {
-              if (selected != true) {
-                return;
-              }
-              setState(() {
-                _selectedFaaRules
-                  ..clear()
-                  ..add(rule);
-              });
-            },
-          );
-        }).toList(),
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          ..._availableFaaRules.map((rule) {
+            return CheckboxListTile(
+              title: Text(rule),
+              value: _selectedFaaRules.contains(rule),
+              onChanged: (bool? selected) {
+                if (selected != true) {
+                  return;
+                }
+                setState(() {
+                  _selectedFaaRules
+                    ..clear()
+                    ..add(rule);
+                  if (rule != 'Part 135') {
+                    _part135SubType = null;
+                    _selectedFaaCertificates.remove('Commercial Pilot (CPL)');
+                    _selectedFaaCertificates.remove('Instrument Rating (IFR)');
+                    _selectedFlightHours.clear();
+                    for (final c in _createFlightHourControllers.values) {
+                      c.dispose();
+                    }
+                    _createFlightHourControllers.clear();
+                  }
+                });
+              },
+            );
+          }),
+          if (_selectedFaaRules.contains('Part 135')) ...[
+            const Divider(),
+            const Padding(
+              padding: EdgeInsets.only(left: 16, bottom: 4),
+              child: Text(
+                'Part 135 Operating Type',
+                style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+              ),
+            ),
+            RadioListTile<String>(
+              title: const Text('IFR / Commuter'),
+              subtitle: const Text(
+                '1,200 TT · 500 XC · 100 Night · 75 Instrument',
+              ),
+              value: 'ifr',
+              groupValue: _part135SubType,
+              onChanged: (value) {
+                setState(() {
+                  _part135SubType = value;
+                  _applyPart135Minimums(value!);
+                });
+              },
+            ),
+            RadioListTile<String>(
+              title: const Text('VFR Only'),
+              subtitle: const Text('500 TT · 100 XC · 25 Night'),
+              value: 'vfr',
+              groupValue: _part135SubType,
+              onChanged: (value) {
+                setState(() {
+                  _part135SubType = value;
+                  _applyPart135Minimums(value!);
+                });
+              },
+            ),
+            if (_part135SubType != null)
+              Padding(
+                padding: const EdgeInsets.only(left: 16, right: 16, bottom: 8),
+                child: Text(
+                  'Minimums auto-applied to Hours Requirements. '
+                  'You can still adjust them manually.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Colors.grey.shade600,
+                    fontStyle: FontStyle.italic,
+                  ),
+                ),
+              ),
+          ],
+        ],
       ),
     );
+  }
+
+  void _applyPart135Minimums(String subType) {
+    final Map<String, int> minimums;
+    if (subType == 'ifr') {
+      minimums = {
+        'Total Time': 1200,
+        'Cross-Country': 500,
+        'Night': 100,
+        'Instrument': 75,
+      };
+    } else if (subType == 'vfr') {
+      minimums = {
+        'Total Time': 500,
+        'Cross-Country': 100,
+        'Night': 25,
+      };
+      _selectedFlightHours.remove('Instrument');
+      _createFlightHourControllers['Instrument']?.text = '';
+    } else {
+      return;
+    }
+
+    _selectedFaaCertificates.removeWhere(
+      (cert) =>
+          cert == 'Airline Transport Pilot (ATP)' ||
+          cert == 'Private Pilot (PPL)',
+    );
+    _selectedFaaCertificates.add('Commercial Pilot (CPL)');
+    if (subType == 'ifr') {
+      _selectedFaaCertificates.add('Instrument Rating (IFR)');
+    } else {
+      _selectedFaaCertificates.remove('Instrument Rating (IFR)');
+    }
+
+    for (final entry in minimums.entries) {
+      _selectedFlightHours[entry.key] = entry.value;
+      final ctrl = _createFlightHourControllers.putIfAbsent(
+        entry.key,
+        () => TextEditingController(),
+      );
+      ctrl.text = entry.value.toString();
+    }
   }
 
   List<String> _selectedCreateRequiredFaaCertificates() {
@@ -10723,6 +11347,8 @@ class _MyHomePageState extends State<MyHomePage> {
                 options: _availableEmployerFlightHours,
                 selectedHours: _selectedFlightHours,
                 preferredHours: _preferredFlightHours,
+                minimums: _part135Minimums(),
+                controllers: _createFlightHourControllers,
               ),
               const SizedBox(height: 12),
               _buildHoursRequirementSection(
@@ -11537,10 +12163,12 @@ class _MyHomePageState extends State<MyHomePage> {
                   _searchTabRatingFilter = 'all';
                   _searchTabFlightHoursFilter = 'all';
                   _searchTabInstructorHoursFilter = 'all';
-                  _searchTabPayMetricFilter = 'all';
                   _searchTabMatchFilter = 'all';
                   _searchTabSort = 'best_match';
                   _searchTabExternalOnly = false;
+                  _searchTabInstructorOnly = false;
+                  _searchTabAdvancedFiltersExpanded = false;
+                  _searchTabInstructorFiltersExpanded = false;
                   _page = 1;
                 });
               },
@@ -11726,12 +12354,14 @@ class JobDetailsPage extends StatelessWidget {
                                   ),
                                   const SizedBox(height: 4),
                                   TextButton.icon(
-                                    onPressed: () => _openCompanyInfo(context),
+                                    onPressed: job.isExternal ? null : () => _openCompanyInfo(context),
                                     icon: const Icon(
                                       Icons.business_outlined,
                                       size: 18,
                                     ),
-                                    label: const Text('View Company Info'),
+                                    label: job.isExternal
+                                        ? const Text('View Company Info (External - No Profile)')
+                                        : const Text('View Company Info'),
                                     style: TextButton.styleFrom(
                                       padding: EdgeInsets.zero,
                                       minimumSize: const Size(0, 32),
@@ -11740,9 +12370,21 @@ class JobDetailsPage extends StatelessWidget {
                                       alignment: Alignment.centerLeft,
                                     ),
                                   ),
+                                  if (job.isExternal)
+                                    Padding(
+                                      padding: const EdgeInsets.only(top: 4),
+                                      child: Text(
+                                        'Is this your company? Claim it to post verified listings.',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: Colors.grey.shade600,
+                                          fontStyle: FontStyle.italic,
+                                        ),
+                                      ),
+                                    ),
                                   const SizedBox(height: 6),
                                   Text(
-                                    '${job.location} • ${job.type}',
+                                    job.location,
                                     style: TextStyle(
                                       color: Colors.grey.shade700,
                                     ),
@@ -11841,6 +12483,18 @@ class JobDetailsPage extends StatelessWidget {
                                           ),
                                         ),
                                       Chip(label: Text(crewLabel)),
+                                      Chip(label: Text(job.type)),
+                                      ...job.faaRules.map(
+                                        (rule) => Chip(
+                                          label: Text(
+                                            _formatFaaRuleDisplayWithFallback(
+                                              rule,
+                                              job.part135SubType,
+                                              job.flightHours,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
                                     ],
                                   ),
                                   if (timelineLabels.isNotEmpty) ...[
@@ -11877,82 +12531,29 @@ class JobDetailsPage extends StatelessWidget {
                               ),
                             ),
                             const SizedBox(height: 12),
+                            if (profile != null)
+                              _buildDetailSection(
+                                context: context,
+                                title: 'Your Match',
+                                icon: Icons.analytics_outlined,
+                                child: _buildComparisonView(context),
+                              ),
                             _buildDetailSection(
                               context: context,
-                              title: 'Job Description',
-                              icon: Icons.description_outlined,
-                              child: Text(
-                                job.description,
-                                style: Theme.of(context).textTheme.bodyLarge,
+                              title: 'Required FAA Certificates',
+                              icon: Icons.badge_outlined,
+                              child: _buildChipWrap(
+                                job.faaCertificates
+                                    .map(
+                                      (cert) => Chip(
+                                        label: Text(
+                                          canonicalCertificateLabel(cert),
+                                        ),
+                                      ),
+                                    )
+                                    .toList(),
                               ),
                             ),
-                            if (job.benefits.isNotEmpty)
-                              _buildDetailSection(
-                                context: context,
-                                title: 'Benefits',
-                                icon: Icons.card_giftcard,
-                                child: _buildChipWrap(
-                                  job.benefits
-                                      .map(
-                                        (benefit) => Chip(label: Text(benefit)),
-                                      )
-                                      .toList(),
-                                ),
-                              ),
-                            if (job.faaCertificates.isNotEmpty)
-                              _buildDetailSection(
-                                context: context,
-                                title: 'Required FAA Certificates',
-                                icon: Icons.badge_outlined,
-                                child: _buildChipWrap(
-                                  job.faaCertificates
-                                      .map(
-                                        (cert) => Chip(
-                                          label: Text(
-                                            canonicalCertificateLabel(cert),
-                                          ),
-                                        ),
-                                      )
-                                      .toList(),
-                                ),
-                              ),
-                            if (job.requiredRatings.isNotEmpty)
-                              _buildDetailSection(
-                                context: context,
-                                title: 'Required Ratings',
-                                icon: Icons.fact_check_outlined,
-                                child: _buildChipWrap(
-                                  job.requiredRatings
-                                      .map(
-                                        (rating) => Chip(label: Text(rating)),
-                                      )
-                                      .toList(),
-                                ),
-                              ),
-                            if (job.typeRatingsRequired.isNotEmpty)
-                              _buildDetailSection(
-                                context: context,
-                                title: 'Required Type Ratings',
-                                icon: Icons.confirmation_number_outlined,
-                                child: _buildChipWrap(
-                                  job.typeRatingsRequired
-                                      .map(
-                                        (rating) => Chip(label: Text(rating)),
-                                      )
-                                      .toList(),
-                                ),
-                              ),
-                            if (job.faaRules.isNotEmpty)
-                              _buildDetailSection(
-                                context: context,
-                                title: 'FAA Rules',
-                                icon: Icons.rule,
-                                child: _buildChipWrap(
-                                  job.faaRules
-                                      .map((rule) => Chip(label: Text(rule)))
-                                      .toList(),
-                                ),
-                              ),
                             if (standardFlightHourEntries.isNotEmpty)
                               _buildDetailSection(
                                 context: context,
@@ -11976,6 +12577,54 @@ class JobDetailsPage extends StatelessWidget {
                                       .toList(),
                                 ),
                               ),
+                                _buildDetailSection(
+                                  context: context,
+                                  title: 'Job Description',
+                                  icon: Icons.description_outlined,
+                                  child: Text(
+                                    job.description,
+                                    style: Theme.of(context).textTheme.bodyLarge,
+                                  ),
+                                ),
+                                if (job.benefits.isNotEmpty)
+                                  _buildDetailSection(
+                                    context: context,
+                                    title: 'Benefits',
+                                    icon: Icons.card_giftcard,
+                                    child: _buildChipWrap(
+                                      job.benefits
+                                          .map(
+                                            (benefit) => Chip(label: Text(benefit)),
+                                          )
+                                          .toList(),
+                                    ),
+                                  ),
+                                if (job.requiredRatings.isNotEmpty)
+                                  _buildDetailSection(
+                                    context: context,
+                                    title: 'Required Ratings',
+                                    icon: Icons.fact_check_outlined,
+                                    child: _buildChipWrap(
+                                      job.requiredRatings
+                                          .map(
+                                            (rating) => Chip(label: Text(rating)),
+                                          )
+                                          .toList(),
+                                    ),
+                                  ),
+                                if (job.typeRatingsRequired.isNotEmpty)
+                                  _buildDetailSection(
+                                    context: context,
+                                    title: 'Required Type Ratings',
+                                    icon: Icons.confirmation_number_outlined,
+                                    child: _buildChipWrap(
+                                      job.typeRatingsRequired
+                                          .map(
+                                            (rating) => Chip(label: Text(rating)),
+                                          )
+                                          .toList(),
+                                    ),
+                                  ),
                             if (instructorHourEntries.isNotEmpty)
                               _buildDetailSection(
                                 context: context,
@@ -12036,17 +12685,6 @@ class JobDetailsPage extends StatelessWidget {
                                       .toList(),
                                 ),
                               ),
-                            if (profile != null) ...[
-                              const SizedBox(height: 24),
-                              const Divider(),
-                              const SizedBox(height: 16),
-                              _buildDetailSection(
-                                context: context,
-                                title: 'Your Match',
-                                icon: Icons.analytics_outlined,
-                                child: _buildComparisonView(context),
-                              ),
-                            ],
                           ],
                         ),
                       ),

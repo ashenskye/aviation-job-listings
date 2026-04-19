@@ -343,6 +343,7 @@ class SupabaseAdminRepository implements AdminRepository {
     String crewRole = 'Single Pilot',
     String? crewPosition,
     List<String> faaRules = const [],
+    String? part135SubType,
     List<String> faaCertificates = const [],
     List<String> typeRatingsRequired = const [],
     Map<String, int> flightHours = const {},
@@ -359,6 +360,10 @@ class SupabaseAdminRepository implements AdminRepository {
     int autoRejectThreshold = 0,
     int reapplyWindowDays = 30,
     String? externalApplyUrl,
+    String? contactName,
+    String? contactEmail,
+    String? companyPhone,
+    String? companyUrl,
     String? reason,
   }) async {
     final now = DateTime.now();
@@ -373,6 +378,7 @@ class SupabaseAdminRepository implements AdminRepository {
       'crew_role': crewRole,
       'crew_position': crewPosition,
       'faa_rules': faaRules,
+      'part135_sub_type': part135SubType,
       'description': description,
       'faa_certificates': faaCertificates,
       'type_ratings_required': typeRatingsRequired,
@@ -392,6 +398,10 @@ class SupabaseAdminRepository implements AdminRepository {
       'reapply_window_days': reapplyWindowDays,
       'is_external': true,
       'external_apply_url': externalApplyUrl,
+      'contact_name': contactName,
+      'contact_email': contactEmail,
+      'company_phone': companyPhone,
+      'company_url': companyUrl,
       'deadline_date': deadlineDate?.toIso8601String(),
       'status': 'active',
     };
@@ -868,6 +878,7 @@ class SupabaseAdminRepository implements AdminRepository {
       'crew_role': job.crewRole,
       'crew_position': job.crewPosition,
       'faa_rules': job.faaRules,
+      'part135_sub_type': job.part135SubType,
       'description': job.description,
       'faa_certificates': job.faaCertificates,
       'type_ratings_required': job.typeRatingsRequired,
@@ -888,6 +899,10 @@ class SupabaseAdminRepository implements AdminRepository {
       'reapply_window_days': job.reapplyWindowDays,
       'is_external': job.isExternal,
       'external_apply_url': job.externalApplyUrl,
+      'contact_name': job.contactName,
+      'contact_email': job.contactEmail,
+      'company_phone': job.companyPhone,
+      'company_url': job.companyUrl,
       'status': job.isActive ? 'active' : 'archived',
     };
   }
@@ -903,6 +918,7 @@ class SupabaseAdminRepository implements AdminRepository {
       'crewRole': row['crew_role'],
       'crewPosition': row['crew_position'],
       'faaRules': List<String>.from((row['faa_rules'] as List?) ?? const []),
+      'part135SubType': row['part135_sub_type']?.toString(),
       'description': row['description'],
       'faaCertificates': List<String>.from(
         (row['faa_certificates'] as List?) ?? const [],
@@ -948,6 +964,10 @@ class SupabaseAdminRepository implements AdminRepository {
       'reapplyWindowDays': (row['reapply_window_days'] as num?)?.toInt() ?? 30,
       'isExternal': (row['is_external'] as bool?) ?? false,
       'externalApplyUrl': row['external_apply_url'],
+      'contactName': row['contact_name'],
+      'contactEmail': row['contact_email'],
+      'companyPhone': row['company_phone'],
+      'companyUrl': row['company_url'],
       'isActive': row['status'] == 'active',
       'archivedAt': row['status'] == 'archived' ? row['updated_at'] : null,
     };

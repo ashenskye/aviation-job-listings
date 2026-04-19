@@ -18,6 +18,10 @@ void main() {
       'aircraftFlown': const <String>[],
       'isExternal': true,
       'externalApplyUrl': 'https://example.com/apply',
+      'contactName': 'Hiring Team',
+      'companyPhone': '+1-208-555-0100',
+      'contactEmail': 'hiring@mountainaircharter.com',
+      'companyUrl': 'https://mountainaircharter.com',
     });
 
     final encoded = source.toJson();
@@ -25,6 +29,10 @@ void main() {
 
     expect(decoded.isExternal, isTrue);
     expect(decoded.externalApplyUrl, 'https://example.com/apply');
+    expect(decoded.contactName, 'Hiring Team');
+    expect(decoded.companyPhone, '+1-208-555-0100');
+    expect(decoded.contactEmail, 'hiring@mountainaircharter.com');
+    expect(decoded.companyUrl, 'https://mountainaircharter.com');
   });
 
   test('JobListing.copyWith keeps external fields unless explicitly changed', () {
@@ -42,14 +50,33 @@ void main() {
       aircraftFlown: [],
       isExternal: true,
       externalApplyUrl: 'https://example.com/apply',
+      contactName: 'Hiring Team',
+      companyPhone: '+1-208-555-0100',
+      contactEmail: 'hiring@mountainaircharter.com',
+      companyUrl: 'https://mountainaircharter.com',
     );
 
     final unchanged = source.copyWith(title: 'Updated Title');
     expect(unchanged.isExternal, isTrue);
     expect(unchanged.externalApplyUrl, 'https://example.com/apply');
+    expect(unchanged.contactName, 'Hiring Team');
+    expect(unchanged.companyPhone, '+1-208-555-0100');
+    expect(unchanged.contactEmail, 'hiring@mountainaircharter.com');
+    expect(unchanged.companyUrl, 'https://mountainaircharter.com');
 
-    final changed = source.copyWith(isExternal: false, externalApplyUrl: null);
+    final changed = source.copyWith(
+      isExternal: false,
+      externalApplyUrl: null,
+      contactName: null,
+      companyPhone: null,
+      contactEmail: null,
+      companyUrl: null,
+    );
     expect(changed.isExternal, isFalse);
     expect(changed.externalApplyUrl, isNull);
+    expect(changed.contactName, isNull);
+    expect(changed.companyPhone, isNull);
+    expect(changed.contactEmail, isNull);
+    expect(changed.companyUrl, isNull);
   });
 }
