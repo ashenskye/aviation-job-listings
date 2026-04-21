@@ -94,12 +94,16 @@ class JobListing {
             .toList() ??
         [];
 
-    final parsedInstructorHours = Map<String, int>.from(
-      (json['instructorHours'] as Map<String, dynamic>?) ?? {},
-    );
+    final parsedInstructorHours = <String, int>{
+      for (final entry
+          in ((json['instructorHours'] as Map<String, dynamic>?) ?? {})
+              .entries)
+        normalizeInstructorHourLabel(entry.key):
+            int.tryParse(entry.value.toString()) ?? 0,
+    };
     final parsedPreferredInstructorHours =
         (json['preferredInstructorHours'] as List<dynamic>?)
-            ?.map((e) => e.toString())
+            ?.map((e) => normalizeInstructorHourLabel(e.toString()))
             .toList() ??
         [];
 
@@ -107,21 +111,33 @@ class JobListing {
         ? parsedInstructorHours
         : {
             for (final entry in rawFlightHours.entries)
-              if (instructorHourOptionSet.contains(entry.key))
-                entry.key: entry.value,
+              if (instructorHourOptionSet.contains(
+                normalizeInstructorHourLabel(entry.key),
+              ))
+                normalizeInstructorHourLabel(entry.key): entry.value,
           };
 
     final preferredInstructorHours = parsedPreferredInstructorHours.isNotEmpty
         ? parsedPreferredInstructorHours
-        : rawPreferredFlightHours.where(instructorHourOptionSet.contains).toList();
+        : rawPreferredFlightHours
+              .map(normalizeInstructorHourLabel)
+              .where(instructorHourOptionSet.contains)
+              .toList();
 
     final flightHours = {
       for (final entry in rawFlightHours.entries)
-        if (!instructorHourOptionSet.contains(entry.key)) entry.key: entry.value,
+        if (!instructorHourOptionSet.contains(
+          normalizeInstructorHourLabel(entry.key),
+        ))
+          entry.key: entry.value,
     };
 
     final preferredFlightHours = rawPreferredFlightHours
-        .where((name) => !instructorHourOptionSet.contains(name))
+        .where(
+          (name) => !instructorHourOptionSet.contains(
+            normalizeInstructorHourLabel(name),
+          ),
+        )
         .toList();
 
     return JobListing(
@@ -297,7 +313,14 @@ class JobListing {
   /// Days remaining until the deadline (negative if already passed).
   int? get daysUntilDeadline {
     if (deadlineDate == null) return null;
-    return deadlineDate!.difference(DateTime.now()).inDays;
+    final deadline = DateTime(
+      deadlineDate!.year,
+      deadlineDate!.month,
+      deadlineDate!.day,
+    );
+    final today = DateTime.now();
+    final nowDate = DateTime(today.year, today.month, today.day);
+    return deadline.difference(nowDate).inDays;
   }
 
   JobListing copyWith({

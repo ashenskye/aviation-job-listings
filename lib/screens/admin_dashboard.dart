@@ -2213,7 +2213,7 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
         return 1500;
       case 'PIC Jet':
       case 'SIC Jet':
-      case 'Total Instructor Hours':
+      case 'Flight Instruction (CFI)':
       case 'Cross-Country':
       case 'Alaska Time':
         return 1000;

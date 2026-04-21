@@ -1,3 +1,6 @@
+const String legacyTotalInstructorHoursLabel = 'Total Instructor Hours';
+const String flightInstructionCfiHourLabel = 'Flight Instruction (CFI)';
+
 const List<String> availableFaaCertificateOptions = [
   'Airline Transport Pilot (ATP)',
   'Commercial Pilot (CPL)',
@@ -35,13 +38,19 @@ const List<String> availableEmployerFlightHourOptions = [
 ];
 
 const List<String> availableInstructorHourOptions = [
-  'Total Instructor Hours',
+  flightInstructionCfiHourLabel,
   'Instrument (CFII)',
   'Multi-Engine (MEI)',
 ];
 
 final Set<String> instructorHourOptionSet =
-    availableInstructorHourOptions.toSet();
+    {...availableInstructorHourOptions, legacyTotalInstructorHoursLabel};
+
+String normalizeInstructorHourLabel(String label) {
+  return label == legacyTotalInstructorHoursLabel
+      ? flightInstructionCfiHourLabel
+      : label;
+}
 
 const List<String> availableSpecialtyExperienceOptions = [
   'Fire Fighting',

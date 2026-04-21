@@ -28,8 +28,9 @@ void main() {
     expect(flattened.toList(), availableRatingSelectionOptions);
   });
 
-  test('instructor hour option set matches instructor hour list', () {
-    expect(instructorHourOptionSet, availableInstructorHourOptions.toSet());
+  test('instructor hour option set includes UI options and legacy alias', () {
+    expect(instructorHourOptionSet, containsAll(availableInstructorHourOptions));
+    expect(instructorHourOptionSet, contains(legacyTotalInstructorHoursLabel));
   });
 
   test('flight hour options keep Instrument below Multi-engine, Cross-Country and Night below Instrument', () {

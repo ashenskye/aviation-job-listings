@@ -2419,27 +2419,136 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   String _hoursRequirementSummary() {
-    final flightCount = _selectedFlightHours.length;
-    final instructorCount = _selectedInstructorHours.length;
-    final specialtyCount = _selectedSpecialtyHours.length;
-    final totalCount = flightCount + instructorCount + specialtyCount;
+    final hourLabels = <String>[
+      ..._selectedFlightHours.keys,
+      ..._selectedInstructorHours.keys,
+      ..._selectedSpecialtyHours.keys,
+    ];
 
-    if (totalCount == 0) {
+    if (hourLabels.isEmpty) {
       return 'Add only the hour categories required for the job.';
     }
 
-    final segments = <String>[];
-    if (flightCount > 0) {
-      segments.add('Flight $flightCount');
-    }
-    if (instructorCount > 0) {
-      segments.add('Instructor $instructorCount');
-    }
-    if (specialtyCount > 0) {
-      segments.add('Specialty $specialtyCount');
+    final uniqueLabels = <String>[];
+    for (final label in hourLabels) {
+      if (!uniqueLabels.contains(label)) {
+        uniqueLabels.add(label);
+      }
     }
 
-    return segments.join(' • ');
+    final totalTimeIndex = uniqueLabels.indexOf('Total Time');
+    if (totalTimeIndex >= 0) {
+      uniqueLabels.removeAt(totalTimeIndex);
+      uniqueLabels.insert(0, 'Total Time required');
+    }
+
+    final previewLimit = totalTimeIndex >= 0 ? 3 : 2;
+    final previewItems = uniqueLabels.take(previewLimit).toList();
+    final remaining = uniqueLabels.length - previewItems.length;
+    final summary = previewItems.join(', ');
+
+    if (remaining > 0) {
+      return '$summary +$remaining more';
+    }
+
+    return summary;
+  }
+
+  List<String> _requiredInstructorCertificatesForHours(
+    Iterable<String> requiredInstructorHourLabels,
+  ) {
+    final needed = <String>[];
+
+    void addIfMissing(String certificate) {
+      if (!needed.contains(certificate)) {
+        needed.add(certificate);
+      }
+    }
+
+    for (final label in requiredInstructorHourLabels) {
+      final normalized = normalizeInstructorHourLabel(label);
+      if (normalized == flightInstructionCfiHourLabel) {
+        addIfMissing('Flight Instructor (CFI)');
+      } else if (normalized == 'Instrument (CFII)') {
+        addIfMissing('Instrument Instructor (CFII)');
+      } else if (normalized == 'Multi-Engine (MEI)') {
+        addIfMissing('Multi-Engine Instructor (MEI)');
+      }
+    }
+
+    return needed;
+  }
+
+  List<String> _missingImpliedRatings({
+    required Iterable<String> selectedRatings,
+    required Iterable<String> requiredFlightHourLabels,
+    required Iterable<String> requiredSpecialtyHourLabels,
+  }) {
+    final selected = selectedRatings.toSet();
+    final requiredFlight = requiredFlightHourLabels.toSet();
+    final requiredSpecialty = requiredSpecialtyHourLabels.toSet();
+    final missing = <String>[];
+
+    if (requiredFlight.contains('Multi-engine') &&
+        !selected.contains('Multi-Engine Land') &&
+        !selected.contains('Multi-Engine Sea')) {
+      missing.addAll(const ['Multi-Engine Land', 'Multi-Engine Sea']);
+    }
+
+    if (requiredSpecialty.contains('Floatplane') &&
+        !selected.contains('Single-Engine Sea') &&
+        !selected.contains('Multi-Engine Sea')) {
+      missing.addAll(const ['Single-Engine Sea', 'Multi-Engine Sea']);
+    }
+
+    final needsTailwheel =
+        requiredSpecialty.contains('Ski-plane') ||
+        requiredSpecialty.contains('Tailwheel') ||
+        requiredSpecialty.contains('Banner Towing');
+    if (needsTailwheel && !selected.contains('Tailwheel Endorsement')) {
+      missing.add('Tailwheel Endorsement');
+    }
+
+    return missing.toSet().toList();
+  }
+
+  List<String> _missingImpliedRatingRuleMessages({
+    required Iterable<String> selectedRatings,
+    required Iterable<String> requiredFlightHourLabels,
+    required Iterable<String> requiredSpecialtyHourLabels,
+  }) {
+    final selected = selectedRatings.toSet();
+    final requiredFlight = requiredFlightHourLabels.toSet();
+    final requiredSpecialty = requiredSpecialtyHourLabels.toSet();
+    final messages = <String>[];
+
+    if (requiredFlight.contains('Multi-engine') &&
+        !selected.contains('Multi-Engine Land') &&
+        !selected.contains('Multi-Engine Sea')) {
+      messages.add(
+        'Multi-engine hours require Multi-Engine Land or Multi-Engine Sea',
+      );
+    }
+
+    if (requiredSpecialty.contains('Floatplane') &&
+        !selected.contains('Single-Engine Sea') &&
+        !selected.contains('Multi-Engine Sea')) {
+      messages.add(
+        'Floatplane hours require Single-Engine Sea or Multi-Engine Sea',
+      );
+    }
+
+    final needsTailwheel =
+        requiredSpecialty.contains('Ski-plane') ||
+        requiredSpecialty.contains('Tailwheel') ||
+        requiredSpecialty.contains('Banner Towing');
+    if (needsTailwheel && !selected.contains('Tailwheel Endorsement')) {
+      messages.add(
+        'Ski-plane, Tailwheel, or Banner Towing hours require Tailwheel Endorsement',
+      );
+    }
+
+    return messages;
   }
 
   Widget _buildCreateStepPill({
@@ -2858,7 +2967,7 @@ class _MyHomePageState extends State<MyHomePage> {
     required String title,
     required String summary,
     required Widget child,
-    int? count,
+    bool? isSatisfied,
     bool initiallyExpanded = false,
   }) {
     final useAccordion = MediaQuery.sizeOf(context).width < 700;
@@ -2900,7 +3009,18 @@ class _MyHomePageState extends State<MyHomePage> {
                   ),
                 ),
               ),
-              if (count != null) _buildSummaryCountBadge(count),
+              if (isSatisfied == true)
+                const Padding(
+                  padding: EdgeInsets.only(right: 6),
+                  child: Tooltip(
+                    message: 'Minimum requirement met',
+                    child: Icon(
+                      Icons.check_circle,
+                      color: Colors.green,
+                      size: 20,
+                    ),
+                  ),
+                ),
             ],
           ),
           subtitle: Padding(
@@ -2958,6 +3078,7 @@ class _MyHomePageState extends State<MyHomePage> {
     required Iterable<String> options,
     required bool Function(String option) isSelected,
     required void Function(String option, bool selected) onChanged,
+    Widget Function(String option)? titleBuilder,
     EdgeInsetsGeometry margin = const EdgeInsets.symmetric(vertical: 4),
     EdgeInsetsGeometry padding = const EdgeInsets.all(10),
     bool dense = false,
@@ -2976,7 +3097,7 @@ class _MyHomePageState extends State<MyHomePage> {
           return CheckboxListTile(
             dense: dense,
             contentPadding: contentPadding,
-            title: Text(option),
+            title: titleBuilder?.call(option) ?? Text(option),
             value: isSelected(option),
             onChanged: (bool? selected) {
               onChanged(option, selected == true);
@@ -6381,6 +6502,103 @@ class _MyHomePageState extends State<MyHomePage> {
         ),
     };
 
+    bool editOperationalScopeSatisfied() {
+      return selectedFaaRule != null &&
+          selectedFaaRule!.isNotEmpty &&
+          (selectedFaaRule != 'Part 135' || editPart135SubType != null);
+    }
+
+    bool editCertificatesSatisfied() {
+      return selectedFaaCertificates.any(_availableFaaCertificates.contains);
+    }
+
+    List<String> editMissingImpliedRatings() {
+      return _missingImpliedRatings(
+        selectedRatings: selectedRequiredRatings,
+        requiredFlightHourLabels: selectedFlightHours.where(
+          (name) => !preferredFlightHours.contains(name),
+        ),
+        requiredSpecialtyHourLabels: selectedSpecialtyHours.where(
+          (name) => !preferredSpecialtyHours.contains(name),
+        ),
+      );
+    }
+
+    bool editRatingsSatisfied() {
+      return selectedRequiredRatings.any(_availableRatingSelections.contains) &&
+          editMissingImpliedRatings().isEmpty;
+    }
+
+    List<String> editRequiredInstructorCerts() {
+      return _requiredInstructorCertificatesForHours(
+        selectedInstructorHours.where(
+          (name) => !preferredInstructorHours.contains(name),
+        ),
+      );
+    }
+
+    bool editInstructorCertsSatisfied() {
+      final requiredCerts = editRequiredInstructorCerts();
+      if (requiredCerts.isEmpty) {
+        return selectedFaaCertificates.any(
+          _availableInstructorCertificates.contains,
+        );
+      }
+      return requiredCerts.every(selectedFaaCertificates.contains);
+    }
+
+    bool editHoursSatisfied() {
+      final hasAnyHoursSelection =
+          selectedFlightHours.isNotEmpty ||
+          selectedInstructorHours.isNotEmpty ||
+          selectedSpecialtyHours.isNotEmpty;
+      if (!hasAnyHoursSelection) {
+        return false;
+      }
+
+      bool hasMissingHoursValues(
+        Set<String> selected,
+        Map<String, TextEditingController> controllers,
+      ) {
+        for (final option in selected) {
+          final value =
+              int.tryParse(controllers[option]?.text.trim() ?? '0') ?? 0;
+          if (value <= 0) {
+            return true;
+          }
+        }
+        return false;
+      }
+
+      final missingHoursValue =
+          hasMissingHoursValues(selectedFlightHours, flightHourControllers) ||
+          hasMissingHoursValues(
+            selectedInstructorHours,
+            instructorHourControllers,
+          ) ||
+          hasMissingHoursValues(
+            selectedSpecialtyHours,
+            specialtyHourControllers,
+          );
+      if (missingHoursValue) {
+        return false;
+      }
+
+      final hasRequiredFlightHour = selectedFlightHours.any(
+        (name) => !preferredFlightHours.contains(name),
+      );
+      final hasRequiredInstructorHour = selectedInstructorHours.any(
+        (name) => !preferredInstructorHours.contains(name),
+      );
+      final hasRequiredSpecialtyHour = selectedSpecialtyHours.any(
+        (name) => !preferredSpecialtyHours.contains(name),
+      );
+
+      return hasRequiredFlightHour ||
+          hasRequiredInstructorHour ||
+          hasRequiredSpecialtyHour;
+    }
+
     void setEditHourValue({
       required String label,
       required int value,
@@ -6833,6 +7051,45 @@ class _MyHomePageState extends State<MyHomePage> {
           hasRequiredFlightHour ||
           hasRequiredInstructorHour ||
           hasRequiredSpecialtyHour;
+      final missingImpliedRatings = _missingImpliedRatings(
+        selectedRatings: selectedRequiredRatings,
+        requiredFlightHourLabels: selectedFlightHours.where(
+          (name) => !preferredFlightHours.contains(name),
+        ),
+        requiredSpecialtyHourLabels: selectedSpecialtyHours.where(
+          (name) => !preferredSpecialtyHours.contains(name),
+        ),
+      );
+      final missingImpliedRatingRules = _missingImpliedRatingRuleMessages(
+        selectedRatings: selectedRequiredRatings,
+        requiredFlightHourLabels: selectedFlightHours.where(
+          (name) => !preferredFlightHours.contains(name),
+        ),
+        requiredSpecialtyHourLabels: selectedSpecialtyHours.where(
+          (name) => !preferredSpecialtyHours.contains(name),
+        ),
+      );
+      final requiredInstructorCertificates =
+          _requiredInstructorCertificatesForHours(
+            selectedInstructorHours.where(
+              (name) => !preferredInstructorHours.contains(name),
+            ),
+          );
+      final missingRequiredInstructorCertificates =
+          requiredInstructorCertificates
+              .where((cert) => !selectedFaaCertificates.contains(cert))
+              .toList();
+
+      if (missingImpliedRatings.isNotEmpty) {
+        missingRequirements.addAll(missingImpliedRatingRules);
+      }
+
+      if (missingRequiredInstructorCertificates.isNotEmpty) {
+        missingRequirements.add(
+          'Instructor Certificate(s) required by selected instructor hours: '
+          '${missingRequiredInstructorCertificates.join(', ')}',
+        );
+      }
 
       if (hasAnyHoursSelection && !hasRequiredHoursSelection) {
         missingRequirements.add(
@@ -7088,7 +7345,7 @@ class _MyHomePageState extends State<MyHomePage> {
           const SizedBox(height: 12),
           _buildEditAccordionSection(
             title: 'Salary Range *',
-            initiallyExpanded: true,
+            initiallyExpanded: false,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -7152,8 +7409,11 @@ class _MyHomePageState extends State<MyHomePage> {
           ),
           const SizedBox(height: 10),
           _buildEditAccordionSection(
-            title: 'FAA Operational Scope *',
-            initiallyExpanded: true,
+            title: editOperationalScopeSatisfied()
+                ? 'FAA Operational Scope'
+                : 'FAA Operational Scope *',
+            isSatisfied: editOperationalScopeSatisfied(),
+            initiallyExpanded: false,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -7267,8 +7527,11 @@ class _MyHomePageState extends State<MyHomePage> {
           ),
           const SizedBox(height: 14),
           _buildEditAccordionSection(
-            title: 'Required FAA Certificates *',
-            initiallyExpanded: true,
+            title: editCertificatesSatisfied()
+                ? 'Required FAA Certificates'
+                : 'Required FAA Certificates *',
+            isSatisfied: editCertificatesSatisfied(),
+            initiallyExpanded: false,
             child: Column(
               children: _availableFaaCertificates.map((cert) {
                 return CheckboxListTile(
@@ -7302,8 +7565,80 @@ class _MyHomePageState extends State<MyHomePage> {
           ),
           const SizedBox(height: 10),
           _buildEditAccordionSection(
-            title: 'Instructor Certificates',
-            initiallyExpanded: true,
+            title: editRatingsSatisfied()
+                ? 'Required Ratings'
+                : editMissingImpliedRatings().isNotEmpty
+                ? 'Required Ratings * (Review implied ratings)'
+                : 'Required Ratings *',
+            isSatisfied: editRatingsSatisfied(),
+            initiallyExpanded: false,
+            child: Column(
+              children: _availableRatingSelections.map((rating) {
+                final isMissingImpliedRating =
+                    editMissingImpliedRatings().contains(rating) &&
+                    !selectedRequiredRatings.contains(rating);
+                return CheckboxListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  title: isMissingImpliedRating
+                      ? Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                rating,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 3,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.orange.shade100,
+                                borderRadius: BorderRadius.circular(999),
+                                border: Border.all(
+                                  color: Colors.orange.shade300,
+                                ),
+                              ),
+                              child: Text(
+                                'Required by hours',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w700,
+                                  color: Colors.orange.shade900,
+                                ),
+                              ),
+                            ),
+                          ],
+                        )
+                      : Text(rating),
+                  value: selectedRequiredRatings.contains(rating),
+                  onChanged: (selected) {
+                    setModalState(() {
+                      if (selected == true) {
+                        selectedRequiredRatings.add(rating);
+                      } else {
+                        selectedRequiredRatings.remove(rating);
+                      }
+                    });
+                  },
+                );
+              }).toList(),
+            ),
+          ),
+          const SizedBox(height: 10),
+          _buildEditAccordionSection(
+            title: editInstructorCertsSatisfied()
+                ? 'Instructor Certificates'
+                : editRequiredInstructorCerts().isNotEmpty
+                ? 'Instructor Certificates *'
+                : 'Instructor Certificates (Optional)',
+            isSatisfied: editInstructorCertsSatisfied(),
+            initiallyExpanded: false,
             child: Column(
               children: _availableInstructorCertificates.map((cert) {
                 return CheckboxListTile(
@@ -7324,34 +7659,13 @@ class _MyHomePageState extends State<MyHomePage> {
               }).toList(),
             ),
           ),
-          const SizedBox(height: 10),
-          _buildEditAccordionSection(
-            title: 'Required Ratings *',
-            initiallyExpanded: true,
-            child: Column(
-              children: _availableRatingSelections.map((rating) {
-                return CheckboxListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  title: Text(rating),
-                  value: selectedRequiredRatings.contains(rating),
-                  onChanged: (selected) {
-                    setModalState(() {
-                      if (selected == true) {
-                        selectedRequiredRatings.add(rating);
-                      } else {
-                        selectedRequiredRatings.remove(rating);
-                      }
-                    });
-                  },
-                );
-              }).toList(),
-            ),
-          ),
           const SizedBox(height: 14),
           _buildEditAccordionSection(
-            title: 'Hours Requirements *',
-            initiallyExpanded: true,
+            title: editHoursSatisfied()
+                ? 'Hours Requirements'
+                : 'Hours Requirements *',
+            isSatisfied: editHoursSatisfied(),
+            initiallyExpanded: false,
             child: buildEditCategorizedHoursSection(setModalState),
           ),
           const SizedBox(height: 10),
@@ -7536,6 +7850,7 @@ class _MyHomePageState extends State<MyHomePage> {
   Widget _buildEditAccordionSection({
     required String title,
     required Widget child,
+    bool? isSatisfied,
     bool initiallyExpanded = false,
   }) {
     return Container(
@@ -7551,9 +7866,27 @@ class _MyHomePageState extends State<MyHomePage> {
           initiallyExpanded: initiallyExpanded,
           tilePadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
           childrenPadding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-          title: Text(
-            title,
-            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+          title: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  title,
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+              if (isSatisfied == true)
+                const Tooltip(
+                  message: 'Minimum requirement met',
+                  child: Icon(
+                    Icons.check_circle,
+                    color: Colors.green,
+                    size: 20,
+                  ),
+                ),
+            ],
           ),
           children: [child],
         ),
@@ -7759,6 +8092,33 @@ class _MyHomePageState extends State<MyHomePage> {
         hasRequiredFlightHour ||
         hasRequiredInstructorHour ||
         hasRequiredSpecialtyHour;
+    final missingImpliedRatings = _missingImpliedRatings(
+      selectedRatings: _selectedRequiredRatings,
+      requiredFlightHourLabels: _selectedFlightHours.keys.where(
+        (name) => !_preferredFlightHours.contains(name),
+      ),
+      requiredSpecialtyHourLabels: _selectedSpecialtyHours.keys.where(
+        (name) => !_preferredSpecialtyHours.contains(name),
+      ),
+    );
+    final missingImpliedRatingRules = _missingImpliedRatingRuleMessages(
+      selectedRatings: _selectedRequiredRatings,
+      requiredFlightHourLabels: _selectedFlightHours.keys.where(
+        (name) => !_preferredFlightHours.contains(name),
+      ),
+      requiredSpecialtyHourLabels: _selectedSpecialtyHours.keys.where(
+        (name) => !_preferredSpecialtyHours.contains(name),
+      ),
+    );
+    final requiredInstructorCertificates =
+        _requiredInstructorCertificatesForHours(
+          _selectedInstructorHours.keys.where(
+            (name) => !_preferredInstructorHours.contains(name),
+          ),
+        );
+    final missingRequiredInstructorCertificates = requiredInstructorCertificates
+        .where((cert) => !_selectedFaaCertificates.contains(cert))
+        .toList();
 
     final missing = <String>[];
     if (!hasOperationalScope) {
@@ -7772,6 +8132,15 @@ class _MyHomePageState extends State<MyHomePage> {
     }
     if (!hasRatingSelection) {
       missing.add('At Least One Rating Selection Required');
+    }
+    if (missingImpliedRatings.isNotEmpty) {
+      missing.addAll(missingImpliedRatingRules);
+    }
+    if (missingRequiredInstructorCertificates.isNotEmpty) {
+      missing.add(
+        'Instructor Certificate(s) required by selected instructor hours: '
+        '${missingRequiredInstructorCertificates.join(', ')}',
+      );
     }
     if (!hasAnyHoursSelection) {
       missing.add('Enter At Least One Minimum Hours Requirement');
@@ -9862,7 +10231,7 @@ class _MyHomePageState extends State<MyHomePage> {
                               ),
                               children: [
                                 _buildSearchHourSliderRow(
-                                  label: 'Total Instructor Hours',
+                                  label: 'Flight Instruction (CFI)',
                                   sliderMax: 2000,
                                   map: _searchTabInstructorHourMinimums,
                                 ),
@@ -10150,6 +10519,7 @@ class _MyHomePageState extends State<MyHomePage> {
                             SizedBox(
                               width: 88,
                               child: TextFormField(
+                                key: const ValueKey('search-tab-match-percent'),
                                 controller: _searchTabMatchPercentController,
                                 keyboardType: TextInputType.number,
                                 textAlign: TextAlign.right,
@@ -11839,7 +12209,7 @@ class _MyHomePageState extends State<MyHomePage> {
         return 2000;
       case 'Cross-Country':
       case 'Alaska Time':
-      case 'Total Instructor Hours':
+      case 'Flight Instruction (CFI)':
         return 1000;
       case 'Instrument':
       case 'Night':
@@ -12417,11 +12787,59 @@ class _MyHomePageState extends State<MyHomePage> {
     const rotorRatings = rotorRatingSelectionOptions;
     const otherRatings = otherRatingSelectionOptions;
 
+    final missingImpliedRatings = _missingImpliedRatings(
+      selectedRatings: _selectedRequiredRatings,
+      requiredFlightHourLabels: _selectedFlightHours.keys.where(
+        (name) => !_preferredFlightHours.contains(name),
+      ),
+      requiredSpecialtyHourLabels: _selectedSpecialtyHours.keys.where(
+        (name) => !_preferredSpecialtyHours.contains(name),
+      ),
+    ).toSet();
+
+    Widget ratingTitle(String rating) {
+      final isMissing =
+          missingImpliedRatings.contains(rating) &&
+          !_selectedRequiredRatings.contains(rating);
+      if (!isMissing) {
+        return Text(rating);
+      }
+
+      return Row(
+        children: [
+          Expanded(
+            child: Text(
+              rating,
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(
+              color: Colors.orange.shade100,
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(color: Colors.orange.shade300),
+            ),
+            child: Text(
+              'Required by hours',
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                color: Colors.orange.shade900,
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+
     Widget buildRatingCard(List<String> options) {
       return _buildCheckboxCard(
         options: options,
         margin: const EdgeInsets.symmetric(vertical: 4),
         padding: const EdgeInsets.all(8),
+        titleBuilder: ratingTitle,
         isSelected: (cert) => _selectedRequiredRatings.contains(cert),
         onChanged: (cert, selected) {
           setState(() {
@@ -12447,6 +12865,64 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Widget _buildCreateQualificationsStep() {
+    final createOperationalScopeSatisfied =
+        _selectedFaaRules.isNotEmpty &&
+        (!_selectedFaaRules.contains('Part 135') || _part135SubType != null);
+    final createCertificatesSatisfied = _selectedFaaCertificates.any(
+      _availableFaaCertificates.contains,
+    );
+    final selectedFlightHourEntries = _selectedFlightHours.entries.toList();
+    final selectedInstructorHourEntries = _selectedInstructorHours.entries
+        .toList();
+    final selectedSpecialtyHourEntries = _selectedSpecialtyHours.entries
+        .toList();
+    final createHasAnyHoursSelection =
+        selectedFlightHourEntries.isNotEmpty ||
+        selectedInstructorHourEntries.isNotEmpty ||
+        selectedSpecialtyHourEntries.isNotEmpty;
+    final createHasMissingHoursValues =
+        selectedFlightHourEntries.any((entry) => entry.value <= 0) ||
+        selectedInstructorHourEntries.any((entry) => entry.value <= 0) ||
+        selectedSpecialtyHourEntries.any((entry) => entry.value <= 0);
+    final createHasRequiredFlightHour = _selectedFlightHours.keys.any(
+      (name) => !_preferredFlightHours.contains(name),
+    );
+    final createHasRequiredInstructorHour = _selectedInstructorHours.keys.any(
+      (name) => !_preferredInstructorHours.contains(name),
+    );
+    final createHasRequiredSpecialtyHour = _selectedSpecialtyHours.keys.any(
+      (name) => !_preferredSpecialtyHours.contains(name),
+    );
+    final createRequiredFlightHourLabels = _selectedFlightHours.keys.where(
+      (name) => !_preferredFlightHours.contains(name),
+    );
+    final createRequiredSpecialtyHourLabels = _selectedSpecialtyHours.keys
+        .where((name) => !_preferredSpecialtyHours.contains(name));
+    final createMissingImpliedRatings = _missingImpliedRatings(
+      selectedRatings: _selectedRequiredRatings,
+      requiredFlightHourLabels: createRequiredFlightHourLabels,
+      requiredSpecialtyHourLabels: createRequiredSpecialtyHourLabels,
+    );
+    final createHoursSatisfied =
+        createHasAnyHoursSelection &&
+        !createHasMissingHoursValues &&
+        (createHasRequiredFlightHour ||
+            createHasRequiredInstructorHour ||
+            createHasRequiredSpecialtyHour);
+    final createRequiredInstructorCerts =
+        _requiredInstructorCertificatesForHours(
+          _selectedInstructorHours.keys.where(
+            (name) => !_preferredInstructorHours.contains(name),
+          ),
+        );
+    final createInstructorCertsSatisfied =
+        createRequiredInstructorCerts.isEmpty
+        ? _selectedCreateInstructorCertificates().isNotEmpty
+      : createRequiredInstructorCerts.every(_selectedFaaCertificates.contains);
+    final createRatingsSatisfied =
+      _selectedRequiredRatings.any(_availableRatingSelections.contains) &&
+      createMissingImpliedRatings.isEmpty;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -12457,57 +12933,68 @@ class _MyHomePageState extends State<MyHomePage> {
         const SizedBox(height: 12),
         _buildExpandableRequirementSection(
           sectionKey: 'FAA Operational Scope',
-          title: 'FAA Operational Scope *',
+          title: createOperationalScopeSatisfied
+              ? 'FAA Operational Scope'
+              : 'FAA Operational Scope *',
           summary: _previewSelectionSummary(
             items: _selectedFaaRules,
             emptyLabel: 'Choose one FAA operational scope.',
           ),
-          count: _selectedFaaRules.length,
-          initiallyExpanded: true,
+          isSatisfied: createOperationalScopeSatisfied,
+          initiallyExpanded: false,
           child: _buildCreateFaaRulesCard(),
         ),
         const SizedBox(height: 12),
         _buildExpandableRequirementSection(
           sectionKey: 'Required FAA Certs',
-          title: 'Required FAA Certificates *',
+          title: createCertificatesSatisfied
+              ? 'Required FAA Certificates'
+              : 'Required FAA Certificates *',
           summary: _previewSelectionSummary(
             items: _selectedCreateRequiredFaaCertificates(),
             emptyLabel: 'Choose required FAA certificates.',
           ),
-          count: _selectedCreateRequiredFaaCertificates().length,
-          initiallyExpanded: true,
+          isSatisfied: createCertificatesSatisfied,
+          initiallyExpanded: false,
           child: _buildCreateRequiredFaaCertsContent(),
         ),
         _buildExpandableRequirementSection(
-          sectionKey: 'Instructor Certs',
-          title: 'Instructor Certificates',
-          summary: _previewSelectionSummary(
-            items: _selectedCreateInstructorCertificates(),
-            emptyLabel: 'Choose instructor certificates as needed.',
-          ),
-          count: _selectedCreateInstructorCertificates().length,
-          initiallyExpanded: true,
-          child: _buildCreateInstructorCertsContent(),
-        ),
-        _buildExpandableRequirementSection(
           sectionKey: 'Ratings',
-          title: 'Required Ratings *',
+          title: createRatingsSatisfied
+              ? 'Required Ratings'
+              : createMissingImpliedRatings.isNotEmpty
+              ? 'Required Ratings * (Review implied ratings)'
+              : 'Required Ratings *',
           summary: _previewSelectionSummary(
             items: _selectedCreateRatings(),
             emptyLabel: 'Choose rating requirements.',
           ),
-          count: _selectedCreateRatings().length,
-          initiallyExpanded: true,
+          isSatisfied: createRatingsSatisfied,
+          initiallyExpanded: false,
           child: _buildCreateRatingsContent(),
         ),
         _buildExpandableRequirementSection(
+          sectionKey: 'Instructor Certs',
+          title: createInstructorCertsSatisfied
+              ? 'Instructor Certificates'
+              : createRequiredInstructorCerts.isNotEmpty
+              ? 'Instructor Certificates *'
+              : 'Instructor Certificates (Optional)',
+          summary: _previewSelectionSummary(
+            items: _selectedCreateInstructorCertificates(),
+            emptyLabel: 'Choose instructor certificates as needed.',
+          ),
+          isSatisfied: createInstructorCertsSatisfied,
+          initiallyExpanded: false,
+          child: _buildCreateInstructorCertsContent(),
+        ),
+        _buildExpandableRequirementSection(
           sectionKey: 'Hours Requirements',
-          title: 'Hours Requirements *',
+          title: createHoursSatisfied
+              ? 'Hours Requirements'
+              : 'Hours Requirements *',
           summary: _hoursRequirementSummary(),
-          count:
-              _selectedFlightHours.length +
-              _selectedInstructorHours.length +
-              _selectedSpecialtyHours.length,
+          isSatisfied: createHoursSatisfied,
           child: _buildCreateCategorizedHoursSection(),
         ),
         _buildExpandableRequirementSection(

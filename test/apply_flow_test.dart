@@ -68,6 +68,10 @@ void main() {
 
       await tester.ensureVisible(find.text('Create Job Listing'));
 
+      await tester.ensureVisible(find.textContaining('FAA Operational Scope'));
+      await tester.tap(find.textContaining('FAA Operational Scope').first);
+      await tester.pumpAndSettle();
+
       await tester.ensureVisible(find.text('Part 135'));
       await tester.tap(find.text('Part 135').hitTestable());
       await tester.pumpAndSettle();
@@ -77,11 +81,20 @@ void main() {
       await tester.tap(find.text('IFR / Commuter').hitTestable());
       await tester.pumpAndSettle();
 
+      await tester.ensureVisible(find.textContaining('Required FAA Certificates'));
+      await tester.tap(find.textContaining('Required FAA Certificates').first);
+      await tester.pumpAndSettle();
+
       await tester.ensureVisible(
         find.text('Airline Transport Pilot (ATP)').first,
       );
       await tester.tap(find.text('Airline Transport Pilot (ATP)').first);
       await tester.pumpAndSettle();
+
+      await tester.ensureVisible(find.textContaining('Required Ratings'));
+      await tester.tap(find.textContaining('Required Ratings').first);
+      await tester.pumpAndSettle();
+
       await tester.ensureVisible(find.text('Multi-Engine Land').first);
       await tester.tap(find.text('Multi-Engine Land').first);
       await tester.pumpAndSettle();
@@ -310,7 +323,11 @@ void main() {
       expect(
         find.descendant(
           of: find.byType(Card),
-          matching: find.text('External Label Regression Role'),
+          matching: find.byWidgetPredicate(
+            (widget) =>
+                widget is Text &&
+                widget.data == 'External Label Regression Role',
+          ),
         ),
         findsOneWidget,
       );

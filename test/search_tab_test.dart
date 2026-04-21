@@ -211,13 +211,18 @@ void main() {
   ) async {
     await _pumpSearchTab(tester);
 
-    final stretchChip = find.widgetWithText(ChoiceChip, '<70%');
-    await tester.ensureVisible(stretchChip);
-    await tester.pumpAndSettle();
-    await tester.tap(stretchChip.hitTestable().first);
+    final matchField = find.byKey(const ValueKey('search-tab-match-percent'));
+    await tester.ensureVisible(matchField);
     await tester.pumpAndSettle();
 
-    expect(find.text('Showing 2 of 5 jobs'), findsOneWidget);
+    await tester.enterText(matchField, '70');
+    await tester.pumpAndSettle();
+    expect(find.text('Qualifications Match: 70%+'), findsOneWidget);
+
+    await tester.enterText(matchField, '0');
+    await tester.pumpAndSettle();
+    expect(find.text('Qualifications Match: 70%+'), findsNothing);
+    expect(find.text('Showing 5 of 5 jobs'), findsOneWidget);
   });
 
   testWidgets('search tab supports certificate filter category', (
@@ -264,7 +269,7 @@ void main() {
         description: 'Train student pilots and run CFI checkout flights.',
         faaCertificates: ['Flight Instructor (CFI)'],
         flightExperience: [],
-        instructorHours: {'Total Instructor Hours': 300},
+        instructorHours: {'Flight Instruction (CFI)': 300},
         aircraftFlown: ['Cessna 172'],
       ),
     );
