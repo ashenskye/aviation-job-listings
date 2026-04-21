@@ -296,7 +296,7 @@ void main() {
       const ValueKey('search-tab-instructor-only'),
     );
     await tester.ensureVisible(instructorOnlyChip);
-    await tester.tap(instructorOnlyChip.hitTestable().first);
+    await tester.tap(instructorOnlyChip.first);
     await tester.pumpAndSettle();
 
     expect(find.text('Showing 1 of 2 jobs'), findsOneWidget);

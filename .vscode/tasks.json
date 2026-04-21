@@ -12,7 +12,12 @@
 				"--dart-define=SUPABASE_URL=https://agwwrrzemmuztzciuamn.supabase.co",
 				"--dart-define=SUPABASE_PUBLISHABLE_KEY=sb_publishable_ohxdWpUf_-SJpk-5JpNG0g_KcblPeAO"
 			],
-			"isBackground": true
+			"isBackground": true,
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated",
+				"focus": true
+			}
 		},
 		{
 			"label": "Run Flutter Phone Debug (SM S928U)",
@@ -25,7 +30,29 @@
 				"--dart-define=SUPABASE_URL=https://agwwrrzemmuztzciuamn.supabase.co",
 				"--dart-define=SUPABASE_PUBLISHABLE_KEY=sb_publishable_ohxdWpUf_-SJpk-5JpNG0g_KcblPeAO"
 			],
-			"isBackground": true
+			"isBackground": true,
+			"group": {
+				"kind": "build",
+				"isDefault": true
+			},
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated",
+				"focus": true
+			}
+		},
+		{
+			"label": "Compare: Phone + Chrome",
+			"dependsOn": [
+				"Run Flutter Phone Debug (SM S928U)",
+				"Run Flutter Web (Chrome) with Supabase"
+			],
+			"dependsOrder": "parallel",
+			"group": "build",
+			"presentation": {
+				"reveal": "silent",
+				"panel": "shared"
+			}
 		}
 	]
 }

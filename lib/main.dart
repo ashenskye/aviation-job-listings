@@ -2,6 +2,7 @@ import 'dart:math' as math;
 import 'dart:convert';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
@@ -28,6 +29,9 @@ import 'services/app_repository_factory.dart';
 import 'services/supabase_admin_repository.dart';
 import 'services/supabase_bootstrap.dart';
 import 'services/web_image_file_picker.dart';
+
+/// Logical-pixel width below which phone-optimized layouts are applied.
+const double kPhoneBreakpoint = 430.0;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -85,6 +89,103 @@ ProfileType _profileTypeFromMetadata(Object? value) {
     return ProfileType.employer;
   }
   return ProfileType.jobSeeker;
+}
+
+final RegExp _linkifiedUrlPattern = RegExp(
+  r'((?:https?:\/\/|www\.)[^\s<>()]+)',
+  caseSensitive: false,
+);
+
+String _trimTrailingUrlPunctuation(String value) {
+  var trimmed = value;
+  const trailingChars = '.,;:!?)]}';
+  while (trimmed.isNotEmpty && trailingChars.contains(trimmed[trimmed.length - 1])) {
+    trimmed = trimmed.substring(0, trimmed.length - 1);
+  }
+  return trimmed;
+}
+
+Uri? _parseLaunchableHttpUri(String rawUrl) {
+  final trimmed = _trimTrailingUrlPunctuation(rawUrl.trim());
+  if (trimmed.isEmpty) {
+    return null;
+  }
+
+  final normalized = trimmed.startsWith('http://') || trimmed.startsWith('https://')
+      ? trimmed
+      : 'https://$trimmed';
+  final uri = Uri.tryParse(normalized);
+  if (uri == null || !uri.hasScheme || uri.host.trim().isEmpty) {
+    return null;
+  }
+
+  final scheme = uri.scheme.toLowerCase();
+  if (scheme != 'http' && scheme != 'https') {
+    return null;
+  }
+  return uri;
+}
+
+class _LinkifiedText extends StatelessWidget {
+  const _LinkifiedText({
+    required this.text,
+    this.style,
+    this.maxLines,
+    this.overflow,
+    this.onTapUrl,
+  });
+
+  final String text;
+  final TextStyle? style;
+  final int? maxLines;
+  final TextOverflow? overflow;
+  final ValueChanged<String>? onTapUrl;
+
+  @override
+  Widget build(BuildContext context) {
+    final baseStyle = style ?? DefaultTextStyle.of(context).style;
+    final linkStyle = baseStyle.copyWith(
+      color: Colors.blue,
+      decoration: TextDecoration.underline,
+      decorationColor: Colors.blue,
+    );
+
+    final spans = <InlineSpan>[];
+    var start = 0;
+    for (final match in _linkifiedUrlPattern.allMatches(text)) {
+      if (match.start > start) {
+        spans.add(TextSpan(text: text.substring(start, match.start), style: baseStyle));
+      }
+
+      final matchedText = match.group(0) ?? '';
+      if (matchedText.isNotEmpty) {
+        final launchTarget = _trimTrailingUrlPunctuation(matchedText);
+        spans.add(
+          TextSpan(
+            text: matchedText,
+            style: linkStyle,
+            recognizer: onTapUrl == null
+                ? null
+                : (TapGestureRecognizer()..onTap = () => onTapUrl!(launchTarget)),
+          ),
+        );
+      }
+      start = match.end;
+    }
+
+    if (start < text.length) {
+      spans.add(TextSpan(text: text.substring(start), style: baseStyle));
+    }
+    if (spans.isEmpty) {
+      spans.add(TextSpan(text: text, style: baseStyle));
+    }
+
+    return RichText(
+      maxLines: maxLines,
+      overflow: overflow ?? TextOverflow.clip,
+      text: TextSpan(children: spans),
+    );
+  }
 }
 
 class _AuthGate extends StatelessWidget {
@@ -206,6 +307,31 @@ int? _parsePositiveInt(String value) {
 
 String _phoneDigits(String value) => value.replaceAll(RegExp(r'\D'), '');
 
+bool _isMobileDialPlatform() {
+  if (kIsWeb) {
+    return false;
+  }
+
+  return defaultTargetPlatform == TargetPlatform.android ||
+      defaultTargetPlatform == TargetPlatform.iOS;
+}
+
+Uri? _parseLaunchablePhoneUri(String rawPhone) {
+  final trimmed = rawPhone.trim();
+  if (trimmed.isEmpty) {
+    return null;
+  }
+
+  final hasLeadingPlus = trimmed.startsWith('+');
+  final digits = _phoneDigits(trimmed);
+  if (digits.isEmpty) {
+    return null;
+  }
+
+  final normalized = hasLeadingPlus ? '+$digits' : digits;
+  return Uri(scheme: 'tel', path: normalized);
+}
+
 String _formatPhoneNumber(String value) {
   final digits = _phoneDigits(value);
   if (digits.isEmpty) {
@@ -264,10 +390,7 @@ String _formatFaaRuleDisplayWithFallback(
   final instrument = flightHours['Instrument'] ?? 0;
 
   final matchesIfr =
-      total >= 1200 &&
-      crossCountry >= 500 &&
-      night >= 100 &&
-      instrument >= 75;
+      total >= 1200 && crossCountry >= 500 && night >= 100 && instrument >= 75;
   if (matchesIfr) {
     return 'Part 135 IFR';
   }
@@ -561,6 +684,8 @@ class _MyHomePageState extends State<MyHomePage> {
 
   final TextEditingController _searchController = TextEditingController();
   final TextEditingController _searchTabController = TextEditingController();
+  final TextEditingController _searchTabMatchPercentController =
+      TextEditingController(text: '0');
   final TextEditingController _createTitleController = TextEditingController();
   final FocusNode _createTitleFocusNode = FocusNode();
   final TextEditingController _createCompanyController =
@@ -618,12 +743,21 @@ class _MyHomePageState extends State<MyHomePage> {
   String _searchTabRatingFilter = 'all';
   String _searchTabFlightHoursFilter = 'all';
   String _searchTabInstructorHoursFilter = 'all';
-  String _searchTabMatchFilter = 'all';
+  int _searchTabMinimumMatchPercent = 0;
   String _searchTabSort = 'best_match';
   bool _searchTabExternalOnly = false;
   bool _searchTabInstructorOnly = false;
   bool _searchTabAdvancedFiltersExpanded = false;
   bool _searchTabInstructorFiltersExpanded = false;
+  bool _searchTabFlightHoursExpanded = false;
+  bool _searchTabFlightHoursOtherExpanded = false;
+  bool _searchTabFlightInstructionExpanded = false;
+  bool _searchTabSpecialtyHoursExpanded = false;
+  bool _searchTabPicSicExpanded = false;
+  final Map<String, int> _searchTabSpecialtyHourMinimums = {};
+  String _searchTabFlightHourGroupFilter = 'all';
+  final Map<String, int> _searchTabFlightHourMinimums = {};
+  final Map<String, int> _searchTabInstructorHourMinimums = {};
   int _page = 1;
   bool _loading = true;
   String? _loadingError;
@@ -730,6 +864,11 @@ class _MyHomePageState extends State<MyHomePage> {
   final Set<String> _preferredInstructorHours = {};
   final Map<String, int> _selectedSpecialtyHours = {};
   final Set<String> _preferredSpecialtyHours = {};
+  bool _createHoursPicSicExpanded = false;
+  bool _createHoursOtherExpanded = false;
+  bool _createHoursSpecialtyExpanded = false;
+  bool _createHoursInstructionExpanded = false;
+  String _createHoursGroupFilter = 'all';
   DateTime? _createDeadlineDate;
   bool _createOpenListing = true;
   final Set<String> _selectedEmployerBenefits = {};
@@ -812,7 +951,25 @@ class _MyHomePageState extends State<MyHomePage> {
     _loadEmployerApplications();
     _loadAllFeedback();
     _loadCookieConsentPreference();
+    _syncSearchTabMatchPercentController();
     _fetchJobs();
+  }
+
+  void _syncSearchTabMatchPercentController() {
+    final text = '$_searchTabMinimumMatchPercent';
+    if (_searchTabMatchPercentController.text == text) {
+      return;
+    }
+
+    _searchTabMatchPercentController.value = TextEditingValue(
+      text: text,
+      selection: TextSelection.collapsed(offset: text.length),
+    );
+  }
+
+  void _setSearchTabMinimumMatchPercent(int value) {
+    _searchTabMinimumMatchPercent = value.clamp(0, 100);
+    _syncSearchTabMatchPercentController();
   }
 
   Future<void> _loadCookieConsentPreference() async {
@@ -1059,11 +1216,6 @@ class _MyHomePageState extends State<MyHomePage> {
       return _buildProfileSummaryRow('Website', '');
     }
 
-    final normalized = url.startsWith('http://') || url.startsWith('https://')
-        ? url
-        : 'https://$url';
-    final uri = Uri.tryParse(normalized);
-
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: Row(
@@ -1081,15 +1233,60 @@ class _MyHomePageState extends State<MyHomePage> {
           ),
           Expanded(
             child: GestureDetector(
-              onTap: uri == null
-                  ? null
-                  : () => launchUrl(uri, mode: LaunchMode.externalApplication),
-              child: Text(
-                url,
+              onTap: () {
+                _openDetectedLink(
+                  url,
+                  failureMessage: 'Could not open the company website.',
+                );
+              },
+              child: _LinkifiedText(
+                text: url,
                 style: const TextStyle(
                   color: Colors.blue,
-                  decoration: TextDecoration.underline,
-                  decorationColor: Colors.blue,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPhoneSummaryRow(String rawPhone) {
+    final formatted = _formatPhoneNumber(rawPhone);
+    if (formatted.isEmpty) {
+      return _buildProfileSummaryRow('Phone', '');
+    }
+
+    final enableTap = _isMobileDialPlatform();
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 140,
+            child: Text(
+              'Phone',
+              style: TextStyle(
+                fontWeight: FontWeight.w600,
+                color: Colors.grey.shade700,
+              ),
+            ),
+          ),
+          Expanded(
+            child: GestureDetector(
+              onTap: enableTap
+                  ? () {
+                      _openPhoneCall(rawPhone);
+                    }
+                  : null,
+              child: Text(
+                formatted,
+                style: TextStyle(
+                  color: enableTap ? Colors.blue : null,
+                  decoration: enableTap ? TextDecoration.underline : null,
+                  decorationColor: enableTap ? Colors.blue : null,
                 ),
               ),
             ),
@@ -1538,14 +1735,56 @@ class _MyHomePageState extends State<MyHomePage> {
     }
   }
 
+  Future<void> _openDetectedLink(
+    String rawUrl, {
+    String failureMessage = 'Could not open this link.',
+  }) async {
+    final uri = _parseLaunchableHttpUri(rawUrl);
+    if (uri == null) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(failureMessage)));
+      return;
+    }
+
+    final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!launched && mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(failureMessage)));
+    }
+  }
+
+  Future<void> _openPhoneCall(
+    String rawPhone, {
+    String failureMessage = 'Could not start a phone call.',
+  }) async {
+    final uri = _parseLaunchablePhoneUri(rawPhone);
+    if (uri == null) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(failureMessage)));
+      return;
+    }
+
+    final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!launched && mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(failureMessage)));
+    }
+  }
+
   Future<void> _contactExternalEmployer(JobListing job) async {
     final rawUrl = job.externalApplyUrl?.trim() ?? '';
     if (rawUrl.isNotEmpty) {
-      Uri? uri = Uri.tryParse(rawUrl);
-      if (uri != null && !uri.hasScheme) {
-        uri = Uri.tryParse('https://$rawUrl');
-      }
-
+      final uri = _parseLaunchableHttpUri(rawUrl);
       if (uri != null) {
         final launched = await launchUrl(
           uri,
@@ -2750,13 +2989,18 @@ class _MyHomePageState extends State<MyHomePage> {
 
   Future<void> _openEditQualifications() async {
     var draftProfile = _jobSeekerProfile;
-    String? expandedQualificationsSection = 'Certificates';
+    String? expandedQualificationsSection;
     final typeRatingsController = TextEditingController(
       text: draftProfile.typeRatings.join(', '),
     );
     final aircraftController = TextEditingController(
       text: draftProfile.aircraftFlown.join(', '),
     );
+    var seekerHoursPicSicExpanded = false;
+    var seekerHoursOtherExpanded = false;
+    var seekerHoursSpecialtyExpanded = false;
+    var seekerHoursInstructionExpanded = false;
+    var seekerHoursGroupFilter = 'all';
 
     final updatedProfile = await Navigator.of(context).push<JobSeekerProfile>(
       MaterialPageRoute(
@@ -2809,181 +3053,267 @@ class _MyHomePageState extends State<MyHomePage> {
               },
             );
 
-            Widget hoursSection({
-              required String title,
-              required List<String> options,
-              required String keyPrefix,
+            void updateDraftFlightHours(String label, int value) {
+              final newHours = Map<String, int>.from(draftProfile.flightHours);
+              final newTypes = List<String>.from(draftProfile.flightHoursTypes);
+              if (value <= 0) {
+                newHours.remove(label);
+                newTypes.remove(label);
+              } else {
+                newHours[label] = value;
+                if (!newTypes.contains(label)) {
+                  newTypes.add(label);
+                }
+              }
+              draftProfile = draftProfile.copyWith(
+                flightHours: newHours,
+                flightHoursTypes: newTypes,
+              );
+            }
+
+            void updateDraftSpecialtyHours(String label, int value) {
+              final newHours = Map<String, int>.from(
+                draftProfile.specialtyFlightHoursMap,
+              );
+              final newTypes = List<String>.from(
+                draftProfile.specialtyFlightHours,
+              );
+              if (value <= 0) {
+                newHours.remove(label);
+                newTypes.remove(label);
+              } else {
+                newHours[label] = value;
+                if (!newTypes.contains(label)) {
+                  newTypes.add(label);
+                }
+              }
+              draftProfile = draftProfile.copyWith(
+                specialtyFlightHoursMap: newHours,
+                specialtyFlightHours: newTypes,
+              );
+            }
+
+            Widget seekerHourInputRow({
+              required String label,
+              required int value,
+              required void Function(int value) onChanged,
             }) {
-              return Container(
-                margin: const EdgeInsets.symmetric(vertical: 4),
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  border: Border.all(color: Colors.grey.shade300),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Column(
-                  children: [
-                    Text(
-                      title,
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
+              return _SearchHourSliderRow(
+                label: label,
+                sliderMax: _hourSliderMax(label),
+                value: value,
+                onChanged: (val) => setPageState(() => onChanged(val)),
+              );
+            }
+
+            Widget seekerCategorizedHoursSection() {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'MINIMUM EXPERIENCE (HOURS)',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.9,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  seekerHourInputRow(
+                    label: 'Total Time',
+                    value: draftProfile.flightHours['Total Time'] ?? 0,
+                    onChanged: (val) => updateDraftFlightHours('Total Time', val),
+                  ),
+                  ExpansionTile(
+                    key: ValueKey(
+                      'seeker-hours-picsic-${seekerHoursPicSicExpanded ? 'open' : 'closed'}',
+                    ),
+                    initiallyExpanded: seekerHoursPicSicExpanded,
+                    onExpansionChanged: (expanded) {
+                      setPageState(() => seekerHoursPicSicExpanded = expanded);
+                    },
+                    tilePadding: EdgeInsets.zero,
+                    title: const Text(
+                      'PIC / SIC TIME',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 0.8,
                       ),
                     ),
-                    ...options.map((exp) {
-                      final isSelected = draftProfile.flightHoursTypes.contains(
-                        exp,
-                      );
-                      final experienceHours =
-                          draftProfile.flightHours[exp] ?? 0;
-                      return Column(
-                        children: [
-                          CheckboxListTile(
-                            title: Text(exp),
-                            value: isSelected,
-                            onChanged: (bool? value) {
-                              setPageState(() {
-                                final newExp = List<String>.from(
-                                  draftProfile.flightHoursTypes,
-                                );
-                                final newHours = Map<String, int>.from(
-                                  draftProfile.flightHours,
-                                );
-                                if (value == true) {
-                                  newExp.add(exp);
-                                } else {
-                                  newExp.remove(exp);
-                                  newHours.remove(exp);
-                                }
-                                draftProfile = draftProfile.copyWith(
-                                  flightHours: newHours,
-                                  flightHoursTypes: newExp,
-                                );
-                              });
-                            },
-                          ),
-                          if (isSelected)
-                            Padding(
-                              padding: const EdgeInsets.only(
-                                left: 16,
-                                right: 16,
-                                bottom: 8,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 4),
+                        child: Row(
+                          children: [
+                            const Text(
+                              'Show:',
+                              style: TextStyle(
+                                fontWeight: FontWeight.w600,
+                                fontSize: 13,
                               ),
-                              child: TextFormField(
-                                key: ValueKey('$keyPrefix-$exp'),
-                                keyboardType: TextInputType.number,
-                                initialValue: experienceHours > 0
-                                    ? experienceHours.toString()
-                                    : '',
-                                decoration: InputDecoration(
-                                  labelText: 'Hours for $exp',
-                                  hintText: '0',
-                                  isDense: true,
+                            ),
+                            const SizedBox(width: 8),
+                            Wrap(
+                              spacing: 6,
+                              children: [
+                                ChoiceChip(
+                                  label: const Text('ALL'),
+                                  selected: seekerHoursGroupFilter == 'all',
+                                  onSelected: (_) => setPageState(
+                                    () => seekerHoursGroupFilter = 'all',
+                                  ),
                                 ),
-                                onChanged: (value) {
-                                  final hours = int.tryParse(value) ?? 0;
-                                  setPageState(() {
-                                    final newHours = Map<String, int>.from(
-                                      draftProfile.flightHours,
-                                    );
-                                    newHours[exp] = hours;
-                                    draftProfile = draftProfile.copyWith(
-                                      flightHours: newHours,
-                                    );
-                                  });
-                                },
-                              ),
+                                ChoiceChip(
+                                  label: const Text('PIC'),
+                                  selected: seekerHoursGroupFilter == 'pic',
+                                  onSelected: (_) => setPageState(
+                                    () => seekerHoursGroupFilter = 'pic',
+                                  ),
+                                ),
+                                ChoiceChip(
+                                  label: const Text('SIC'),
+                                  selected: seekerHoursGroupFilter == 'sic',
+                                  onSelected: (_) => setPageState(
+                                    () => seekerHoursGroupFilter = 'sic',
+                                  ),
+                                ),
+                              ],
                             ),
-                        ],
-                      );
-                    }),
-                  ],
-                ),
-              );
-            }
-
-            Widget specialtyHoursSection() {
-              return Container(
-                margin: const EdgeInsets.symmetric(vertical: 4),
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  border: Border.all(color: Colors.grey.shade300),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Column(
-                  children: _availableSpecialtyExperience.map((exp) {
-                    final isSelected = draftProfile.specialtyFlightHours
-                        .contains(exp);
-                    final specialtyHours =
-                        draftProfile.specialtyFlightHoursMap[exp] ?? 0;
-                    return Column(
-                      children: [
-                        CheckboxListTile(
-                          title: Text(exp),
-                          value: isSelected,
-                          onChanged: (bool? value) {
-                            setPageState(() {
-                              final newExp = List<String>.from(
-                                draftProfile.specialtyFlightHours,
-                              );
-                              final newHours = Map<String, int>.from(
-                                draftProfile.specialtyFlightHoursMap,
-                              );
-                              if (value == true) {
-                                newExp.add(exp);
-                              } else {
-                                newExp.remove(exp);
-                                newHours.remove(exp);
-                              }
-                              draftProfile = draftProfile.copyWith(
-                                specialtyFlightHours: newExp,
-                                specialtyFlightHoursMap: newHours,
-                              );
-                            });
-                          },
+                          ],
                         ),
-                        if (isSelected)
-                          Padding(
-                            padding: const EdgeInsets.only(
-                              left: 16,
-                              right: 16,
-                              bottom: 8,
-                            ),
-                            child: TextFormField(
-                              key: ValueKey('specialty-hours-$exp'),
-                              keyboardType: TextInputType.number,
-                              initialValue: specialtyHours > 0
-                                  ? specialtyHours.toString()
-                                  : '',
-                              decoration: InputDecoration(
-                                labelText: 'Hours for $exp',
-                                hintText: '0',
-                                isDense: true,
-                              ),
-                              onChanged: (value) {
-                                final hours = int.tryParse(value) ?? 0;
-                                setPageState(() {
-                                  final newHours = Map<String, int>.from(
-                                    draftProfile.specialtyFlightHoursMap,
-                                  );
-                                  newHours[exp] = hours;
-                                  draftProfile = draftProfile.copyWith(
-                                    specialtyFlightHoursMap: newHours,
-                                  );
-                                });
-                              },
-                            ),
+                      ),
+                      if (seekerHoursGroupFilter != 'sic')
+                        seekerHourInputRow(
+                          label: 'Total PIC Time',
+                          value: draftProfile.flightHours['Total PIC Time'] ?? 0,
+                          onChanged: (val) =>
+                              updateDraftFlightHours('Total PIC Time', val),
+                        ),
+                      if (seekerHoursGroupFilter != 'pic')
+                        seekerHourInputRow(
+                          label: 'Total SIC Time',
+                          value: draftProfile.flightHours['Total SIC Time'] ?? 0,
+                          onChanged: (val) =>
+                              updateDraftFlightHours('Total SIC Time', val),
+                        ),
+                      if (seekerHoursGroupFilter != 'sic')
+                        seekerHourInputRow(
+                          label: 'PIC Turbine',
+                          value: draftProfile.flightHours['PIC Turbine'] ?? 0,
+                          onChanged: (val) =>
+                              updateDraftFlightHours('PIC Turbine', val),
+                        ),
+                      if (seekerHoursGroupFilter != 'pic')
+                        seekerHourInputRow(
+                          label: 'SIC Turbine',
+                          value: draftProfile.flightHours['SIC Turbine'] ?? 0,
+                          onChanged: (val) =>
+                              updateDraftFlightHours('SIC Turbine', val),
+                        ),
+                      if (seekerHoursGroupFilter != 'sic')
+                        seekerHourInputRow(
+                          label: 'PIC Jet',
+                          value: draftProfile.flightHours['PIC Jet'] ?? 0,
+                          onChanged: (val) => updateDraftFlightHours('PIC Jet', val),
+                        ),
+                      if (seekerHoursGroupFilter != 'pic')
+                        seekerHourInputRow(
+                          label: 'SIC Jet',
+                          value: draftProfile.flightHours['SIC Jet'] ?? 0,
+                          onChanged: (val) => updateDraftFlightHours('SIC Jet', val),
+                        ),
+                    ],
+                  ),
+                  ExpansionTile(
+                    key: ValueKey(
+                      'seeker-hours-other-${seekerHoursOtherExpanded ? 'open' : 'closed'}',
+                    ),
+                    initiallyExpanded: seekerHoursOtherExpanded,
+                    onExpansionChanged: (expanded) {
+                      setPageState(() => seekerHoursOtherExpanded = expanded);
+                    },
+                    tilePadding: EdgeInsets.zero,
+                    title: const Text(
+                      'OTHER CATEGORIES',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 0.8,
+                      ),
+                    ),
+                    children: [
+                      for (final label
+                          in const ['Multi-engine', 'Instrument', 'Cross-Country', 'Night'])
+                        seekerHourInputRow(
+                          label: label,
+                          value: draftProfile.flightHours[label] ?? 0,
+                          onChanged: (val) => updateDraftFlightHours(label, val),
+                        ),
+                    ],
+                  ),
+                  ExpansionTile(
+                    key: ValueKey(
+                      'seeker-hours-specialty-${seekerHoursSpecialtyExpanded ? 'open' : 'closed'}',
+                    ),
+                    initiallyExpanded: seekerHoursSpecialtyExpanded,
+                    onExpansionChanged: (expanded) {
+                      setPageState(
+                        () => seekerHoursSpecialtyExpanded = expanded,
+                      );
+                    },
+                    tilePadding: EdgeInsets.zero,
+                    title: const Text(
+                      'SPECIALTY HOURS',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 0.8,
+                      ),
+                    ),
+                    children: _availableSpecialtyExperience
+                        .map(
+                          (label) => seekerHourInputRow(
+                            label: label,
+                            value: draftProfile.specialtyFlightHoursMap[label] ?? 0,
+                            onChanged: (val) =>
+                                updateDraftSpecialtyHours(label, val),
                           ),
-                      ],
-                    );
-                  }).toList(),
-                ),
+                        )
+                        .toList(),
+                  ),
+                  ExpansionTile(
+                    key: ValueKey(
+                      'seeker-hours-instruction-${seekerHoursInstructionExpanded ? 'open' : 'closed'}',
+                    ),
+                    initiallyExpanded: seekerHoursInstructionExpanded,
+                    onExpansionChanged: (expanded) {
+                      setPageState(
+                        () => seekerHoursInstructionExpanded = expanded,
+                      );
+                    },
+                    tilePadding: EdgeInsets.zero,
+                    title: const Text(
+                      'FLIGHT INSTRUCTION',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 0.8,
+                      ),
+                    ),
+                    children: _availableInstructorHours
+                        .map(
+                          (label) => seekerHourInputRow(
+                            label: label,
+                            value: draftProfile.flightHours[label] ?? 0,
+                            onChanged: (val) => updateDraftFlightHours(label, val),
+                          ),
+                        )
+                        .toList(),
+                  ),
+                ],
               );
             }
-
-            final useAccordion = MediaQuery.sizeOf(pageContext).width < 700;
 
             Widget qualificationSection({
               required String sectionKey,
@@ -2992,15 +3322,6 @@ class _MyHomePageState extends State<MyHomePage> {
               required IconData icon,
               required Widget child,
             }) {
-              if (!useAccordion) {
-                return _buildSummarySectionCard(
-                  title: title,
-                  subtitle: subtitle,
-                  icon: icon,
-                  child: child,
-                );
-              }
-
               final isExpanded = expandedQualificationsSection == sectionKey;
               return Container(
                 margin: const EdgeInsets.symmetric(vertical: 6),
@@ -3029,12 +3350,20 @@ class _MyHomePageState extends State<MyHomePage> {
                             : null;
                       });
                     },
-                    title: Text(
-                      title,
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                      ),
+                    title: Row(
+                      children: [
+                        Icon(icon, size: 18, color: Colors.blueGrey.shade700),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            title,
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                     subtitle: Padding(
                       padding: const EdgeInsets.only(top: 4),
@@ -3094,8 +3423,7 @@ class _MyHomePageState extends State<MyHomePage> {
                       qualificationSection(
                         sectionKey: 'Certificates',
                         title: 'Certificates',
-                        subtitle:
-                            'Select FAA and instructor credentials you hold.',
+                        subtitle: 'Select FAA certificates you hold.',
                         icon: Icons.badge_outlined,
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -3126,33 +3454,34 @@ class _MyHomePageState extends State<MyHomePage> {
                                 });
                               },
                             ),
-                            const SizedBox(height: 12),
-                            const Text(
-                              'Instructor Certificates',
-                              style: TextStyle(fontWeight: FontWeight.bold),
-                            ),
-                            const SizedBox(height: 8),
-                            _buildCheckboxCard(
-                              options: _availableInstructorCertificates,
-                              isSelected: (cert) =>
-                                  draftProfile.faaCertificates.contains(cert),
-                              onChanged: (cert, selected) {
-                                setPageState(() {
-                                  final newCerts = List<String>.from(
-                                    draftProfile.faaCertificates,
-                                  );
-                                  if (selected) {
-                                    newCerts.add(cert);
-                                  } else {
-                                    newCerts.remove(cert);
-                                  }
-                                  draftProfile = draftProfile.copyWith(
-                                    faaCertificates: newCerts,
-                                  );
-                                });
-                              },
-                            ),
                           ],
+                        ),
+                      ),
+                      qualificationSection(
+                        sectionKey: 'InstructorCertificates',
+                        title: 'Instructor Certificates',
+                        subtitle:
+                            'Select instructor credentials you currently hold.',
+                        icon: Icons.school_outlined,
+                        child: _buildCheckboxCard(
+                          options: _availableInstructorCertificates,
+                          isSelected: (cert) =>
+                              draftProfile.faaCertificates.contains(cert),
+                          onChanged: (cert, selected) {
+                            setPageState(() {
+                              final newCerts = List<String>.from(
+                                draftProfile.faaCertificates,
+                              );
+                              if (selected) {
+                                newCerts.add(cert);
+                              } else {
+                                newCerts.remove(cert);
+                              }
+                              draftProfile = draftProfile.copyWith(
+                                faaCertificates: newCerts,
+                              );
+                            });
+                          },
                         ),
                       ),
                       qualificationSection(
@@ -3176,35 +3505,7 @@ class _MyHomePageState extends State<MyHomePage> {
                         subtitle:
                             'Select categories and add your logged hours.',
                         icon: Icons.schedule_outlined,
-                        child: Column(
-                          children: [
-                            hoursSection(
-                              title: 'Flight Hours',
-                              options: _availableEmployerFlightHours,
-                              keyPrefix: 'flight-experience-hours',
-                            ),
-                            const SizedBox(height: 10),
-                            hoursSection(
-                              title: 'Instructor Hours',
-                              options: _availableInstructorHours,
-                              keyPrefix: 'instructor-hours',
-                            ),
-                            const SizedBox(height: 10),
-                            Align(
-                              alignment: Alignment.centerLeft,
-                              child: Text(
-                                'Specialty Flight Hours',
-                                style: TextStyle(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w600,
-                                  color: Colors.grey.shade700,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            specialtyHoursSection(),
-                          ],
-                        ),
+                        child: seekerCategorizedHoursSection(),
                       ),
                       qualificationSection(
                         sectionKey: 'Aircraft',
@@ -3549,9 +3850,9 @@ class _MyHomePageState extends State<MyHomePage> {
           'Teach student pilots fundamental flying skills, safety procedures, and FAA knowledge. Conduct flight training in various aircraft.',
       faaCertificates: ['Commercial Pilot', 'Flight Instructor'],
       typeRatingsRequired: const [],
-      flightExperience: ['PIC', 'Instruction', 'Multi-engine'],
-      flightHours: const {'PIC': 500, 'Instruction': 250, 'Multi-engine': 150},
-      preferredFlightHours: const ['SIC'],
+      flightExperience: ['Total PIC Time', 'Instruction', 'Multi-engine'],
+      flightHours: const {'Total PIC Time': 500, 'Instruction': 250, 'Multi-engine': 150},
+      preferredFlightHours: const ['Total SIC Time'],
       specialtyExperience: ['Tailwheel'],
       specialtyHours: const {'Tailwheel': 50},
       aircraftFlown: ['Cessna 172', 'PA-18 "Super Cub"', 'Piper Cherokee'],
@@ -3574,7 +3875,7 @@ class _MyHomePageState extends State<MyHomePage> {
       typeRatingsRequired: const ['Embraer E-175'],
       flightExperience: ['SIC Jet', 'SIC Turbine'],
       flightHours: const {'SIC Jet': 700, 'SIC Turbine': 500},
-      preferredFlightHours: const ['PIC'],
+      preferredFlightHours: const ['Total PIC Time'],
       specialtyExperience: ['Aerial Survey'],
       specialtyHours: const {'Aerial Survey': 80},
       aircraftFlown: ['Cessna "Caravan" 208'],
@@ -3598,8 +3899,8 @@ class _MyHomePageState extends State<MyHomePage> {
         'Inspection Authorization (IA)',
       ],
       typeRatingsRequired: const [],
-      flightExperience: ['PIC', 'Multi-engine'],
-      flightHours: const {'PIC': 1200, 'Multi-engine': 400},
+      flightExperience: ['Total PIC Time', 'Multi-engine'],
+      flightHours: const {'Total PIC Time': 1200, 'Multi-engine': 400},
       specialtyExperience: ['Low Altitude', 'Off Airport'],
       specialtyHours: const {'Low Altitude': 100, 'Off Airport': 40},
       aircraftFlown: ['Cessna 172', 'Beechcraft Bonanza', 'Cirrus SR22'],
@@ -3613,6 +3914,7 @@ class _MyHomePageState extends State<MyHomePage> {
   void dispose() {
     _searchController.dispose();
     _searchTabController.dispose();
+    _searchTabMatchPercentController.dispose();
     _createTitleController.dispose();
     _createTitleFocusNode.dispose();
     _createCompanyController.dispose();
@@ -4602,6 +4904,27 @@ class _MyHomePageState extends State<MyHomePage> {
         return false;
       }
 
+      for (final entry in _searchTabFlightHourMinimums.entries) {
+        if (entry.value > 0 &&
+            (job.flightHoursByType[entry.key] ?? 0) < entry.value) {
+          return false;
+        }
+      }
+
+      for (final entry in _searchTabInstructorHourMinimums.entries) {
+        if (entry.value > 0 &&
+            (job.instructorHoursByType[entry.key] ?? 0) < entry.value) {
+          return false;
+        }
+      }
+
+      for (final entry in _searchTabSpecialtyHourMinimums.entries) {
+        if (entry.value > 0 &&
+            (job.specialtyHoursByType[entry.key] ?? 0) < entry.value) {
+          return false;
+        }
+      }
+
       if (query.isNotEmpty) {
         final searchableFields = [
           job.title,
@@ -4625,22 +4948,9 @@ class _MyHomePageState extends State<MyHomePage> {
         }
       }
 
-      if (_searchTabMatchFilter != 'all') {
-        final percent = _evaluateJobMatch(job).matchPercentage;
-        switch (_searchTabMatchFilter) {
-          case 'perfect':
-            if (percent < 90) {
-              return false;
-            }
-          case 'good':
-            if (percent < 70 || percent >= 90) {
-              return false;
-            }
-          case 'stretch':
-            if (percent >= 70) {
-              return false;
-            }
-        }
+      final percent = _evaluateJobMatch(job).matchPercentage;
+      if (percent < _searchTabMinimumMatchPercent) {
+        return false;
       }
 
       return true;
@@ -4689,28 +4999,6 @@ class _MyHomePageState extends State<MyHomePage> {
 
     return filtered;
   }
-
-  void _clearSearchTabFilters() {
-    _searchTabController.clear();
-    setState(() {
-      _searchTabQuery = '';
-      _searchTabTypeFilter = 'all';
-      _searchTabLocationFilter = 'all';
-      _searchTabPositionFilter = 'all';
-      _searchTabFaaRuleFilter = 'all';
-      _searchTabCertificateFilter = 'all';
-      _searchTabRatingFilter = 'all';
-      _searchTabFlightHoursFilter = 'all';
-      _searchTabInstructorHoursFilter = 'all';
-      _searchTabMatchFilter = 'all';
-      _searchTabSort = 'best_match';
-      _searchTabExternalOnly = false;
-      _searchTabInstructorOnly = false;
-      _searchTabAdvancedFiltersExpanded = false;
-      _searchTabInstructorFiltersExpanded = false;
-    });
-  }
-
   List<JobListing> get _pagedJobs {
     final filtered = _filteredJobs;
     final start = (_page - 1) * _pageSize;
@@ -5963,6 +6251,11 @@ class _MyHomePageState extends State<MyHomePage> {
         : 'Captain';
     bool isOpenListing = job.deadlineDate == null;
     DateTime? selectedDeadlineDate = job.deadlineDate;
+    bool editHoursPicSicExpanded = false;
+    bool editHoursOtherExpanded = false;
+    bool editHoursSpecialtyExpanded = false;
+    bool editHoursInstructionExpanded = false;
+    String editHoursGroupFilter = 'all';
 
     String extractNumericValue(String value) {
       return value.replaceAll(RegExp(r'\D'), '');
@@ -6087,6 +6380,297 @@ class _MyHomePageState extends State<MyHomePage> {
               : '',
         ),
     };
+
+    void setEditHourValue({
+      required String label,
+      required int value,
+      required Set<String> selectedSet,
+      required Set<String> preferredSet,
+      required Map<String, TextEditingController> controllers,
+      required void Function(VoidCallback fn) setModalState,
+    }) {
+      setModalState(() {
+        if (value <= 0) {
+          selectedSet.remove(label);
+          preferredSet.remove(label);
+          controllers[label]?.text = '';
+        } else {
+          selectedSet.add(label);
+          controllers[label]?.text = value.toString();
+        }
+      });
+    }
+
+    Widget editHourRow({
+      required String label,
+      required Set<String> selectedSet,
+      required Set<String> preferredSet,
+      required Map<String, TextEditingController> controllers,
+      required void Function(VoidCallback fn) setModalState,
+    }) {
+      final current = int.tryParse(controllers[label]?.text.trim() ?? '0') ?? 0;
+      final isSelected = selectedSet.contains(label) && current > 0;
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _SearchHourSliderRow(
+            label: label,
+            sliderMax: _hourSliderMax(label),
+            value: current.clamp(0, _hourSliderMax(label).toInt()),
+            onChanged: (value) {
+              setEditHourValue(
+                label: label,
+                value: value,
+                selectedSet: selectedSet,
+                preferredSet: preferredSet,
+                controllers: controllers,
+                setModalState: setModalState,
+              );
+            },
+          ),
+          if (isSelected)
+            Padding(
+              padding: const EdgeInsets.only(left: 116, right: 4, bottom: 8),
+              child: DropdownButtonFormField<String>(
+                initialValue: preferredSet.contains(label)
+                    ? 'Preferred'
+                    : 'Required',
+                isDense: true,
+                decoration: const InputDecoration(
+                  labelText: 'Requirement',
+                  border: OutlineInputBorder(),
+                ),
+                items: const [
+                  DropdownMenuItem(value: 'Required', child: Text('Required')),
+                  DropdownMenuItem(
+                    value: 'Preferred',
+                    child: Text('Preferred'),
+                  ),
+                ],
+                onChanged: (value) {
+                  setModalState(() {
+                    if (value == 'Preferred') {
+                      preferredSet.add(label);
+                    } else {
+                      preferredSet.remove(label);
+                    }
+                  });
+                },
+              ),
+            ),
+        ],
+      );
+    }
+
+    Widget buildEditCategorizedHoursSection(
+      void Function(VoidCallback fn) setModalState,
+    ) {
+      final extraFlight = flightOptions
+          .where(
+            (item) => !const [
+              'Total Time',
+              'Total PIC Time',
+              'Total SIC Time',
+              'PIC Turbine',
+              'SIC Turbine',
+              'PIC Jet',
+              'SIC Jet',
+              'Multi-engine',
+              'Instrument',
+              'Cross-Country',
+              'Night',
+            ].contains(item),
+          )
+          .toList();
+
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'MINIMUM EXPERIENCE (HOURS)',
+            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 0.9),
+          ),
+          const SizedBox(height: 6),
+          editHourRow(
+            label: 'Total Time',
+            selectedSet: selectedFlightHours,
+            preferredSet: preferredFlightHours,
+            controllers: flightHourControllers,
+            setModalState: setModalState,
+          ),
+          ExpansionTile(
+            key: ValueKey('edit-hours-picsic-${editHoursPicSicExpanded ? 'open' : 'closed'}'),
+            initiallyExpanded: editHoursPicSicExpanded,
+            onExpansionChanged: (expanded) {
+              setModalState(() => editHoursPicSicExpanded = expanded);
+            },
+            tilePadding: EdgeInsets.zero,
+            title: const Text(
+              'PIC / SIC TIME',
+              style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: 0.8),
+            ),
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Row(
+                  children: [
+                    const Text('Show:', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                    const SizedBox(width: 8),
+                    Wrap(
+                      spacing: 6,
+                      children: [
+                        ChoiceChip(
+                          label: const Text('ALL'),
+                          selected: editHoursGroupFilter == 'all',
+                          onSelected: (_) =>
+                              setModalState(() => editHoursGroupFilter = 'all'),
+                        ),
+                        ChoiceChip(
+                          label: const Text('PIC'),
+                          selected: editHoursGroupFilter == 'pic',
+                          onSelected: (_) =>
+                              setModalState(() => editHoursGroupFilter = 'pic'),
+                        ),
+                        ChoiceChip(
+                          label: const Text('SIC'),
+                          selected: editHoursGroupFilter == 'sic',
+                          onSelected: (_) =>
+                              setModalState(() => editHoursGroupFilter = 'sic'),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              if (editHoursGroupFilter != 'sic')
+                editHourRow(
+                  label: 'Total PIC Time',
+                  selectedSet: selectedFlightHours,
+                  preferredSet: preferredFlightHours,
+                  controllers: flightHourControllers,
+                  setModalState: setModalState,
+                ),
+              if (editHoursGroupFilter != 'pic')
+                editHourRow(
+                  label: 'Total SIC Time',
+                  selectedSet: selectedFlightHours,
+                  preferredSet: preferredFlightHours,
+                  controllers: flightHourControllers,
+                  setModalState: setModalState,
+                ),
+              if (editHoursGroupFilter != 'sic')
+                editHourRow(
+                  label: 'PIC Turbine',
+                  selectedSet: selectedFlightHours,
+                  preferredSet: preferredFlightHours,
+                  controllers: flightHourControllers,
+                  setModalState: setModalState,
+                ),
+              if (editHoursGroupFilter != 'pic')
+                editHourRow(
+                  label: 'SIC Turbine',
+                  selectedSet: selectedFlightHours,
+                  preferredSet: preferredFlightHours,
+                  controllers: flightHourControllers,
+                  setModalState: setModalState,
+                ),
+              if (editHoursGroupFilter != 'sic')
+                editHourRow(
+                  label: 'PIC Jet',
+                  selectedSet: selectedFlightHours,
+                  preferredSet: preferredFlightHours,
+                  controllers: flightHourControllers,
+                  setModalState: setModalState,
+                ),
+              if (editHoursGroupFilter != 'pic')
+                editHourRow(
+                  label: 'SIC Jet',
+                  selectedSet: selectedFlightHours,
+                  preferredSet: preferredFlightHours,
+                  controllers: flightHourControllers,
+                  setModalState: setModalState,
+                ),
+            ],
+          ),
+          ExpansionTile(
+            key: ValueKey('edit-hours-other-${editHoursOtherExpanded ? 'open' : 'closed'}'),
+            initiallyExpanded: editHoursOtherExpanded,
+            onExpansionChanged: (expanded) {
+              setModalState(() => editHoursOtherExpanded = expanded);
+            },
+            tilePadding: EdgeInsets.zero,
+            title: const Text(
+              'OTHER CATEGORIES',
+              style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: 0.8),
+            ),
+            children: [
+              for (final label in const ['Multi-engine', 'Instrument', 'Cross-Country', 'Night'])
+                editHourRow(
+                  label: label,
+                  selectedSet: selectedFlightHours,
+                  preferredSet: preferredFlightHours,
+                  controllers: flightHourControllers,
+                  setModalState: setModalState,
+                ),
+              for (final label in extraFlight)
+                editHourRow(
+                  label: label,
+                  selectedSet: selectedFlightHours,
+                  preferredSet: preferredFlightHours,
+                  controllers: flightHourControllers,
+                  setModalState: setModalState,
+                ),
+            ],
+          ),
+          ExpansionTile(
+            key: ValueKey('edit-hours-specialty-${editHoursSpecialtyExpanded ? 'open' : 'closed'}'),
+            initiallyExpanded: editHoursSpecialtyExpanded,
+            onExpansionChanged: (expanded) {
+              setModalState(() => editHoursSpecialtyExpanded = expanded);
+            },
+            tilePadding: EdgeInsets.zero,
+            title: const Text(
+              'SPECIALTY HOURS',
+              style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: 0.8),
+            ),
+            children: specialtyOptions
+                .map(
+                  (label) => editHourRow(
+                    label: label,
+                    selectedSet: selectedSpecialtyHours,
+                    preferredSet: preferredSpecialtyHours,
+                    controllers: specialtyHourControllers,
+                    setModalState: setModalState,
+                  ),
+                )
+                .toList(),
+          ),
+          ExpansionTile(
+            key: ValueKey('edit-hours-instruction-${editHoursInstructionExpanded ? 'open' : 'closed'}'),
+            initiallyExpanded: editHoursInstructionExpanded,
+            onExpansionChanged: (expanded) {
+              setModalState(() => editHoursInstructionExpanded = expanded);
+            },
+            tilePadding: EdgeInsets.zero,
+            title: const Text(
+              'FLIGHT INSTRUCTION',
+              style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: 0.8),
+            ),
+            children: instructorOptions
+                .map(
+                  (label) => editHourRow(
+                    label: label,
+                    selectedSet: selectedInstructorHours,
+                    preferredSet: preferredInstructorHours,
+                    controllers: instructorHourControllers,
+                    setModalState: setModalState,
+                  ),
+                )
+                .toList(),
+          ),
+        ],
+      );
+    }
 
     final lockedCompanyName = _currentEmployer.companyName.trim().isNotEmpty
         ? _currentEmployer.companyName.trim()
@@ -6581,8 +7165,10 @@ class _MyHomePageState extends State<MyHomePage> {
                   ),
                   items: [
                     ..._availableFaaRules.map(
-                      (rule) =>
-                          DropdownMenuItem<String>(value: rule, child: Text(rule)),
+                      (rule) => DropdownMenuItem<String>(
+                        value: rule,
+                        child: Text(rule),
+                      ),
                     ),
                   ],
                   onChanged: (value) {
@@ -6606,62 +7192,62 @@ class _MyHomePageState extends State<MyHomePage> {
                     'Part 135 Operating Type',
                     style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
                   ),
-                  RadioListTile<String>(
-                    title: const Text('IFR / Commuter'),
-                    subtitle: const Text(
-                      '1,200 TT · 500 XC · 100 Night · 75 Instrument',
+                  RadioGroup<String>(
+                    groupValue: editPart135SubType,
+                    onChanged: (value) {
+                      setModalState(() {
+                        editPart135SubType = value;
+                        selectedFaaCertificates.removeWhere(
+                          (c) =>
+                              c == 'Airline Transport Pilot (ATP)' ||
+                              c == 'Private Pilot (PPL)',
+                        );
+                        selectedFaaCertificates.add('Commercial Pilot (CPL)');
+
+                        if (value == 'ifr') {
+                          selectedFaaCertificates.add(
+                            'Instrument Rating (IFR)',
+                          );
+                          selectedFlightHours
+                            ..add('Total Time')
+                            ..add('Cross-Country')
+                            ..add('Night')
+                            ..add('Instrument');
+                          flightHourControllers['Total Time']?.text = '1200';
+                          flightHourControllers['Cross-Country']?.text = '500';
+                          flightHourControllers['Night']?.text = '100';
+                          flightHourControllers['Instrument']?.text = '75';
+                        } else {
+                          selectedFaaCertificates.remove(
+                            'Instrument Rating (IFR)',
+                          );
+                          selectedFlightHours
+                            ..add('Total Time')
+                            ..add('Cross-Country')
+                            ..add('Night');
+                          selectedFlightHours.remove('Instrument');
+                          flightHourControllers['Total Time']?.text = '500';
+                          flightHourControllers['Cross-Country']?.text = '100';
+                          flightHourControllers['Night']?.text = '25';
+                        }
+                      });
+                    },
+                    child: Column(
+                      children: const [
+                        RadioListTile<String>(
+                          title: Text('IFR / Commuter'),
+                          subtitle: Text(
+                            '1,200 TT · 500 XC · 100 Night · 75 Instrument',
+                          ),
+                          value: 'ifr',
+                        ),
+                        RadioListTile<String>(
+                          title: Text('VFR Only'),
+                          subtitle: Text('500 TT · 100 XC · 25 Night'),
+                          value: 'vfr',
+                        ),
+                      ],
                     ),
-                    value: 'ifr',
-                    groupValue: editPart135SubType,
-                    onChanged: (value) {
-                      setModalState(() {
-                        editPart135SubType = value;
-                        selectedFaaCertificates.removeWhere(
-                          (c) =>
-                              c == 'Airline Transport Pilot (ATP)' ||
-                              c == 'Private Pilot (PPL)',
-                        );
-                        selectedFaaCertificates.add('Commercial Pilot (CPL)');
-                        selectedFaaCertificates.add('Instrument Rating (IFR)');
-                        selectedFlightHours
-                          ..add('Total Time')
-                          ..add('Cross-Country')
-                          ..add('Night')
-                          ..add('Instrument');
-                        flightHourControllers['Total Time']?.text = '1200';
-                        flightHourControllers['Cross-Country']?.text = '500';
-                        flightHourControllers['Night']?.text = '100';
-                        flightHourControllers['Instrument']?.text = '75';
-                      });
-                    },
-                  ),
-                  RadioListTile<String>(
-                    title: const Text('VFR Only'),
-                    subtitle: const Text('500 TT · 100 XC · 25 Night'),
-                    value: 'vfr',
-                    groupValue: editPart135SubType,
-                    onChanged: (value) {
-                      setModalState(() {
-                        editPart135SubType = value;
-                        selectedFaaCertificates.removeWhere(
-                          (c) =>
-                              c == 'Airline Transport Pilot (ATP)' ||
-                              c == 'Private Pilot (PPL)',
-                        );
-                        selectedFaaCertificates.add('Commercial Pilot (CPL)');
-                        selectedFaaCertificates.remove(
-                          'Instrument Rating (IFR)',
-                        );
-                        selectedFlightHours
-                          ..add('Total Time')
-                          ..add('Cross-Country')
-                          ..add('Night');
-                        selectedFlightHours.remove('Instrument');
-                        flightHourControllers['Total Time']?.text = '500';
-                        flightHourControllers['Cross-Country']?.text = '100';
-                        flightHourControllers['Night']?.text = '25';
-                      });
-                    },
                   ),
                   if (editPart135SubType != null)
                     Padding(
@@ -6763,31 +7349,10 @@ class _MyHomePageState extends State<MyHomePage> {
             ),
           ),
           const SizedBox(height: 14),
-          _buildEditHourRequirementSection(
-            title: 'Flight Hours Required *',
-            options: flightOptions,
-            selectedOptions: selectedFlightHours,
-            preferredOptions: preferredFlightHours,
-            hourControllers: flightHourControllers,
-            setModalState: setModalState,
-          ),
-          const SizedBox(height: 14),
-          _buildEditHourRequirementSection(
-            title: 'Instructor Hours',
-            options: instructorOptions,
-            selectedOptions: selectedInstructorHours,
-            preferredOptions: preferredInstructorHours,
-            hourControllers: instructorHourControllers,
-            setModalState: setModalState,
-          ),
-          const SizedBox(height: 14),
-          _buildEditHourRequirementSection(
-            title: 'Specialty Hours',
-            options: specialtyOptions,
-            selectedOptions: selectedSpecialtyHours,
-            preferredOptions: preferredSpecialtyHours,
-            hourControllers: specialtyHourControllers,
-            setModalState: setModalState,
+          _buildEditAccordionSection(
+            title: 'Hours Requirements *',
+            initiallyExpanded: true,
+            child: buildEditCategorizedHoursSection(setModalState),
           ),
           const SizedBox(height: 10),
           _buildEditAccordionSection(
@@ -6996,95 +7561,6 @@ class _MyHomePageState extends State<MyHomePage> {
     );
   }
 
-  Widget _buildEditHourRequirementSection({
-    required String title,
-    required List<String> options,
-    required Set<String> selectedOptions,
-    required Set<String> preferredOptions,
-    required Map<String, TextEditingController> hourControllers,
-    required void Function(VoidCallback fn) setModalState,
-  }) {
-    return _buildEditAccordionSection(
-      title: title,
-      initiallyExpanded: true,
-      child: Column(
-        children: options.map((option) {
-          final isSelected = selectedOptions.contains(option);
-          return Padding(
-            padding: const EdgeInsets.symmetric(vertical: 4),
-            child: Column(
-              children: [
-                CheckboxListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  title: Text(option),
-                  value: isSelected,
-                  onChanged: (checked) {
-                    setModalState(() {
-                      if (checked == true) {
-                        selectedOptions.add(option);
-                      } else {
-                        selectedOptions.remove(option);
-                        preferredOptions.remove(option);
-                      }
-                    });
-                  },
-                ),
-                if (isSelected)
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          controller: hourControllers[option],
-                          keyboardType: TextInputType.number,
-                          onChanged: (_) => setModalState(() {}),
-                          decoration: const InputDecoration(
-                            labelText: 'Hours',
-                            isDense: true,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: DropdownButtonFormField<String>(
-                          initialValue: preferredOptions.contains(option)
-                              ? 'Preferred'
-                              : 'Required',
-                          isDense: true,
-                          decoration: const InputDecoration(
-                            labelText: 'Requirement',
-                          ),
-                          items: const [
-                            DropdownMenuItem(
-                              value: 'Required',
-                              child: Text('Required'),
-                            ),
-                            DropdownMenuItem(
-                              value: 'Preferred',
-                              child: Text('Preferred'),
-                            ),
-                          ],
-                          onChanged: (value) {
-                            setModalState(() {
-                              if (value == 'Preferred') {
-                                preferredOptions.add(option);
-                              } else {
-                                preferredOptions.remove(option);
-                              }
-                            });
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
-              ],
-            ),
-          );
-        }).toList(),
-      ),
-    );
-  }
-
   bool _canDeleteJob(JobListing job) {
     return _profileType == ProfileType.employer &&
         job.employerId == _currentEmployer.id;
@@ -7148,6 +7624,11 @@ class _MyHomePageState extends State<MyHomePage> {
     _preferredInstructorHours.clear();
     _selectedSpecialtyHours.clear();
     _preferredSpecialtyHours.clear();
+    _createHoursPicSicExpanded = false;
+    _createHoursOtherExpanded = false;
+    _createHoursSpecialtyExpanded = false;
+    _createHoursInstructionExpanded = false;
+    _createHoursGroupFilter = 'all';
     _createAircraftController.clear();
     _expandedCreateRequirementsSection = 'Certificates and Ratings';
     _createAutoRejectEnabled = false;
@@ -7785,12 +8266,13 @@ class _MyHomePageState extends State<MyHomePage> {
                                                         children: [
                                                           Text(
                                                             job.title,
-                                                            style: const TextStyle(
-                                                              fontSize: 16,
-                                                              fontWeight:
-                                                                  FontWeight
-                                                                      .w600,
-                                                            ),
+                                                            style:
+                                                                const TextStyle(
+                                                                  fontSize: 16,
+                                                                  fontWeight:
+                                                                      FontWeight
+                                                                          .w600,
+                                                                ),
                                                           ),
                                                           if (job.isExternal)
                                                             const Text(
@@ -7800,8 +8282,8 @@ class _MyHomePageState extends State<MyHomePage> {
                                                                 fontWeight:
                                                                     FontWeight
                                                                         .w800,
-                                                                color: Colors
-                                                                    .teal,
+                                                                color:
+                                                                    Colors.teal,
                                                                 letterSpacing:
                                                                     0.5,
                                                               ),
@@ -7914,13 +8396,16 @@ class _MyHomePageState extends State<MyHomePage> {
                                       },
                                     ),
                                     const SizedBox(height: 8),
-                                    Text(
-                                      job.description,
+                                    _LinkifiedText(
+                                      text: job.description,
                                       maxLines: 2,
                                       overflow: TextOverflow.ellipsis,
                                       style: TextStyle(
                                         color: Colors.grey.shade800,
                                       ),
+                                      onTapUrl: (url) {
+                                        _openDetectedLink(url);
+                                      },
                                     ),
                                     const SizedBox(height: 8),
                                     Align(
@@ -8803,6 +9288,7 @@ class _MyHomePageState extends State<MyHomePage> {
     final ratingOptions = _searchTabRatingOptions;
     final flightHoursOptions = _searchTabFlightHoursOptions;
     final instructorHoursOptions = _searchTabInstructorHoursOptions;
+    final colorScheme = Theme.of(context).colorScheme;
 
     final selectedType = typeOptions.contains(_searchTabTypeFilter)
         ? _searchTabTypeFilter
@@ -8848,6 +9334,170 @@ class _MyHomePageState extends State<MyHomePage> {
       );
     }
 
+    Widget buildAdaptiveFieldWrap(List<Widget> fields) {
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          final columns = constraints.maxWidth >= 1100
+              ? 4
+              : constraints.maxWidth >= 780
+              ? 2
+              : 1;
+          const spacing = 10.0;
+          final rawWidth =
+              (constraints.maxWidth - ((columns - 1) * spacing)) / columns;
+          final fieldWidth = columns == 1 ? constraints.maxWidth : rawWidth;
+
+          return Wrap(
+            spacing: spacing,
+            runSpacing: spacing,
+            children: fields
+                .map((field) => SizedBox(width: fieldWidth, child: field))
+                .toList(),
+          );
+        },
+      );
+    }
+
+    final activeFilters = <Widget>[];
+
+    void addActiveFilter(String label, VoidCallback onDeleted) {
+      activeFilters.add(
+        InputChip(
+          label: Text(label),
+          onDeleted: onDeleted,
+          deleteIcon: const Icon(Icons.close, size: 18),
+        ),
+      );
+    }
+
+    if (_searchTabQuery.isNotEmpty) {
+      addActiveFilter('Query: "$_searchTabQuery"', () {
+        setState(() {
+          _searchTabQuery = '';
+          _searchTabController.clear();
+        });
+      });
+    }
+    if (selectedType != 'all') {
+      addActiveFilter('Type: $selectedType', () {
+        setState(() {
+          _searchTabTypeFilter = 'all';
+        });
+      });
+    }
+    if (selectedLocation != 'all') {
+      addActiveFilter('Location: $selectedLocation', () {
+        setState(() {
+          _searchTabLocationFilter = 'all';
+        });
+      });
+    }
+    if (selectedPosition != 'all') {
+      addActiveFilter('Position: $selectedPosition', () {
+        setState(() {
+          _searchTabPositionFilter = 'all';
+        });
+      });
+    }
+    if (selectedFaaRule != 'all') {
+      addActiveFilter('FAA: $selectedFaaRule', () {
+        setState(() {
+          _searchTabFaaRuleFilter = 'all';
+        });
+      });
+    }
+    if (selectedCertificate != 'all') {
+      addActiveFilter('Certificate: $selectedCertificate', () {
+        setState(() {
+          _searchTabCertificateFilter = 'all';
+        });
+      });
+    }
+    if (selectedRating != 'all') {
+      addActiveFilter('Rating: $selectedRating', () {
+        setState(() {
+          _searchTabRatingFilter = 'all';
+        });
+      });
+    }
+    if (selectedFlightHours != 'all') {
+      addActiveFilter('Flight Hours: $selectedFlightHours', () {
+        setState(() {
+          _searchTabFlightHoursFilter = 'all';
+        });
+      });
+    }
+    if (selectedInstructorHours != 'all') {
+      addActiveFilter('Instructor Hours: $selectedInstructorHours', () {
+        setState(() {
+          _searchTabInstructorHoursFilter = 'all';
+        });
+      });
+    }
+    for (final entry in _searchTabFlightHourMinimums.entries) {
+      if (entry.value > 0) {
+        addActiveFilter('${entry.key}: ${entry.value}+ hrs', () {
+          setState(() {
+            _searchTabFlightHourMinimums.remove(entry.key);
+          });
+        });
+      }
+    }
+    for (final entry in _searchTabSpecialtyHourMinimums.entries) {
+      if (entry.value > 0) {
+        addActiveFilter('${entry.key}: ${entry.value}+ hrs', () {
+          setState(() {
+            _searchTabSpecialtyHourMinimums.remove(entry.key);
+          });
+        });
+      }
+    }
+    for (final entry in _searchTabInstructorHourMinimums.entries) {
+      if (entry.value > 0) {
+        addActiveFilter('${entry.key}: ${entry.value}+ hrs', () {
+          setState(() {
+            _searchTabInstructorHourMinimums.remove(entry.key);
+          });
+        });
+      }
+    }
+    if (_searchTabMinimumMatchPercent != 0) {
+      final label = 'Qualifications Match: $_searchTabMinimumMatchPercent%+';
+      addActiveFilter(label, () {
+        setState(() {
+          _setSearchTabMinimumMatchPercent(0);
+        });
+      });
+    }
+    if (_searchTabInstructorOnly) {
+      addActiveFilter('Instructor roles only', () {
+        setState(() {
+          _searchTabInstructorOnly = false;
+          _searchTabInstructorFiltersExpanded = false;
+        });
+      });
+    }
+    if (_searchTabExternalOnly) {
+      addActiveFilter('External postings only', () {
+        setState(() {
+          _searchTabExternalOnly = false;
+        });
+      });
+    }
+    if (selectedSort != 'best_match') {
+      final label = switch (selectedSort) {
+        'newest' => 'Sort: Newest',
+        'deadline' => 'Sort: Deadline',
+        'company' => 'Sort: Company A-Z',
+        _ => 'Sort: Best Match',
+      };
+      addActiveFilter(label, () {
+        setState(() {
+          _searchTabSort = 'best_match';
+        });
+      });
+    }
+
     return SafeArea(
       top: false,
       child: ListView.builder(
@@ -8859,241 +9509,430 @@ class _MyHomePageState extends State<MyHomePage> {
             return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  'Job Search',
-                  style: Theme.of(context).textTheme.titleLarge,
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  'Find aviation roles by keyword, location, and qualification fit.',
-                  style: Theme.of(context).textTheme.bodyMedium,
-                ),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Icon(
-                      Icons.search,
-                      size: 18,
-                      color: Theme.of(context).colorScheme.primary,
-                    ),
-                    const SizedBox(width: 6),
-                    Text(
-                      'Search Query',
-                      style: Theme.of(context).textTheme.titleSmall,
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                TextField(
-                  key: const ValueKey('search-tab-query'),
-                  controller: _searchTabController,
-                  decoration: InputDecoration(
-                    labelText: 'Search jobs and keywords',
-                    hintText: 'Part 135, Captain, Dallas, turbine...',
-                    prefixIcon: const Icon(Icons.search),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    suffixIcon: _searchTabQuery.isNotEmpty
-                        ? IconButton(
-                            onPressed: _clearSearchTabFilters,
-                            icon: const Icon(Icons.clear),
-                          )
-                        : null,
-                  ),
-                  onChanged: (value) {
-                    setState(() {
-                      _searchTabQuery = value.trim();
-                    });
-                  },
-                ),
-                const SizedBox(height: 10),
                 Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 8,
-                  ),
+                  width: double.infinity,
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
                   decoration: BoxDecoration(
-                    color: Colors.blueGrey.shade50,
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: Colors.blueGrey.shade100),
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        colorScheme.primaryContainer,
+                        colorScheme.secondaryContainer,
+                      ],
+                    ),
+                    borderRadius: BorderRadius.circular(16),
                   ),
-                  child: Row(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Icon(
-                        Icons.tune,
-                        size: 18,
-                        color: Colors.blueGrey.shade700,
-                      ),
-                      const SizedBox(width: 6),
                       Text(
-                        'Primary Filters',
-                        style: Theme.of(context).textTheme.titleSmall,
+                        'Job Search',
+                        style: Theme.of(context).textTheme.headlineSmall
+                            ?.copyWith(fontWeight: FontWeight.w700),
                       ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Divider(
-                          thickness: 1,
-                          color: Colors.blueGrey.shade200,
+                      const SizedBox(height: 4),
+                      Text(
+                        'Find aviation roles by keyword, location, and qualification fit.',
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
+                      const SizedBox(height: 10),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          Chip(
+                            avatar: const Icon(Icons.work_outline, size: 16),
+                            label: Text('${allVisibleJobs.length} total jobs'),
+                          ),
+                          Chip(
+                            avatar: const Icon(Icons.filter_alt, size: 16),
+                            label: Text(
+                              '${activeFilters.length} active filters',
+                            ),
+                          ),
+                          Chip(
+                            avatar: const Icon(Icons.travel_explore, size: 16),
+                            label: Text('${filteredJobs.length} results'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Card(
+                  child: ExpansionTile(
+                    key: ValueKey(
+                      'search-flight-hours-${_searchTabFlightHoursExpanded ? 'open' : 'closed'}',
+                    ),
+                    initiallyExpanded: _searchTabFlightHoursExpanded,
+                    onExpansionChanged: (expanded) {
+                      setState(() {
+                        _searchTabFlightHoursExpanded = expanded;
+                      });
+                    },
+                    leading: Icon(Icons.flight, color: colorScheme.primary),
+                    title: const Text('Flight Hour Filters'),
+                    subtitle: Builder(
+                      builder: (context) {
+                        final activeCount =
+                            _searchTabFlightHourMinimums.values
+                                .where((v) => v > 0)
+                                .length +
+                            _searchTabInstructorHourMinimums.values
+                                .where((v) => v > 0)
+                                .length;
+                        return Text(
+                          activeCount > 0
+                              ? '$activeCount minimum(s) set'
+                              : 'Filter by minimum hour requirements',
+                        );
+                      },
+                    ),
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'MINIMUM EXPERIENCE (HOURS)',
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                letterSpacing: 0.8,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            _buildSearchHourSliderRow(
+                              label: 'Total Time',
+                              sliderMax: 5000,
+                              map: _searchTabFlightHourMinimums,
+                            ),
+                            const SizedBox(height: 4),
+                            ExpansionTile(
+                              key: ValueKey(
+                                'search-hours-picsic-${_searchTabPicSicExpanded ? 'open' : 'closed'}',
+                              ),
+                              initiallyExpanded: _searchTabPicSicExpanded,
+                              onExpansionChanged: (expanded) {
+                                setState(() {
+                                  _searchTabPicSicExpanded = expanded;
+                                });
+                              },
+                              tilePadding: EdgeInsets.zero,
+                              title: const Text(
+                                'PIC / SIC TIME',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                  letterSpacing: 0.8,
+                                ),
+                              ),
+                              children: [
+                                Padding(
+                                  padding: const EdgeInsets.only(bottom: 4),
+                                  child: Row(
+                                    children: [
+                                      const Text(
+                                        'Show:',
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.w600,
+                                          fontSize: 13,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Wrap(
+                                        spacing: 6,
+                                        children: [
+                                          ChoiceChip(
+                                            label: const Text('ALL'),
+                                            selected:
+                                                _searchTabFlightHourGroupFilter ==
+                                                'all',
+                                            onSelected: (_) => setState(() {
+                                              _searchTabFlightHourGroupFilter =
+                                                  'all';
+                                            }),
+                                          ),
+                                          ChoiceChip(
+                                            label: const Text('PIC'),
+                                            selected:
+                                                _searchTabFlightHourGroupFilter ==
+                                                'pic',
+                                            onSelected: (_) => setState(() {
+                                              _searchTabFlightHourGroupFilter =
+                                                  'pic';
+                                            }),
+                                          ),
+                                          ChoiceChip(
+                                            label: const Text('SIC'),
+                                            selected:
+                                                _searchTabFlightHourGroupFilter ==
+                                                'sic',
+                                            onSelected: (_) => setState(() {
+                                              _searchTabFlightHourGroupFilter =
+                                                  'sic';
+                                            }),
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                if (_searchTabFlightHourGroupFilter != 'sic')
+                                  _buildSearchHourSliderRow(
+                                    label: 'Total PIC Time',
+                                    sliderMax: 3000,
+                                    map: _searchTabFlightHourMinimums,
+                                  ),
+                                if (_searchTabFlightHourGroupFilter != 'pic')
+                                  _buildSearchHourSliderRow(
+                                    label: 'Total SIC Time',
+                                    sliderMax: 3000,
+                                    map: _searchTabFlightHourMinimums,
+                                  ),
+                                if (_searchTabFlightHourGroupFilter != 'sic')
+                                  _buildSearchHourSliderRow(
+                                    label: 'PIC Turbine',
+                                    sliderMax: 1500,
+                                    map: _searchTabFlightHourMinimums,
+                                  ),
+                                if (_searchTabFlightHourGroupFilter != 'pic')
+                                  _buildSearchHourSliderRow(
+                                    label: 'SIC Turbine',
+                                    sliderMax: 1500,
+                                    map: _searchTabFlightHourMinimums,
+                                  ),
+                                if (_searchTabFlightHourGroupFilter != 'sic')
+                                  _buildSearchHourSliderRow(
+                                    label: 'PIC Jet',
+                                    sliderMax: 1000,
+                                    map: _searchTabFlightHourMinimums,
+                                  ),
+                                if (_searchTabFlightHourGroupFilter != 'pic')
+                                  _buildSearchHourSliderRow(
+                                    label: 'SIC Jet',
+                                    sliderMax: 1000,
+                                    map: _searchTabFlightHourMinimums,
+                                  ),
+                              ],
+                            ),
+                            const SizedBox(height: 4),
+                            ExpansionTile(
+                              key: ValueKey(
+                                'search-hours-other-${_searchTabFlightHoursOtherExpanded ? 'open' : 'closed'}',
+                              ),
+                              initiallyExpanded:
+                                  _searchTabFlightHoursOtherExpanded,
+                              onExpansionChanged: (expanded) {
+                                setState(() {
+                                  _searchTabFlightHoursOtherExpanded = expanded;
+                                });
+                              },
+                              tilePadding: EdgeInsets.zero,
+                              title: const Text(
+                                'OTHER CATEGORIES',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                  letterSpacing: 0.8,
+                                ),
+                              ),
+                              children: [
+                                _buildSearchHourSliderRow(
+                                  label: 'Multi-engine',
+                                  sliderMax: 2000,
+                                  map: _searchTabFlightHourMinimums,
+                                ),
+                                _buildSearchHourSliderRow(
+                                  label: 'Instrument',
+                                  sliderMax: 500,
+                                  map: _searchTabFlightHourMinimums,
+                                ),
+                                _buildSearchHourSliderRow(
+                                  label: 'Cross-Country',
+                                  sliderMax: 1000,
+                                  map: _searchTabFlightHourMinimums,
+                                ),
+                                _buildSearchHourSliderRow(
+                                  label: 'Night',
+                                  sliderMax: 300,
+                                  map: _searchTabFlightHourMinimums,
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 4),
+                            const SizedBox(height: 4),
+                            ExpansionTile(
+                              key: ValueKey(
+                                'search-hours-specialty-${_searchTabSpecialtyHoursExpanded ? 'open' : 'closed'}',
+                              ),
+                              initiallyExpanded:
+                                  _searchTabSpecialtyHoursExpanded,
+                              onExpansionChanged: (expanded) {
+                                setState(() {
+                                  _searchTabSpecialtyHoursExpanded = expanded;
+                                });
+                              },
+                              tilePadding: EdgeInsets.zero,
+                              title: const Text(
+                                'SPECIALTY HOURS',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                  letterSpacing: 0.8,
+                                ),
+                              ),
+                              children: [
+                                _buildSearchHourSliderRow(
+                                  label: 'Fire Fighting',
+                                  sliderMax: 2000,
+                                  map: _searchTabSpecialtyHourMinimums,
+                                ),
+                                _buildSearchHourSliderRow(
+                                  label: 'Aerobatic',
+                                  sliderMax: 500,
+                                  map: _searchTabSpecialtyHourMinimums,
+                                ),
+                                _buildSearchHourSliderRow(
+                                  label: 'Floatplane',
+                                  sliderMax: 500,
+                                  map: _searchTabSpecialtyHourMinimums,
+                                ),
+                                _buildSearchHourSliderRow(
+                                  label: 'Ski-plane',
+                                  sliderMax: 500,
+                                  map: _searchTabSpecialtyHourMinimums,
+                                ),
+                                _buildSearchHourSliderRow(
+                                  label: 'Alaska Time',
+                                  sliderMax: 1000,
+                                  map: _searchTabSpecialtyHourMinimums,
+                                ),
+                                _buildSearchHourSliderRow(
+                                  label: 'Tailwheel',
+                                  sliderMax: 500,
+                                  map: _searchTabSpecialtyHourMinimums,
+                                ),
+                                _buildSearchHourSliderRow(
+                                  label: 'Off Airport',
+                                  sliderMax: 500,
+                                  map: _searchTabSpecialtyHourMinimums,
+                                ),
+                                _buildSearchHourSliderRow(
+                                  label: 'Banner Towing',
+                                  sliderMax: 500,
+                                  map: _searchTabSpecialtyHourMinimums,
+                                ),
+                                _buildSearchHourSliderRow(
+                                  label: 'Low Altitude',
+                                  sliderMax: 500,
+                                  map: _searchTabSpecialtyHourMinimums,
+                                ),
+                                _buildSearchHourSliderRow(
+                                  label: 'Aerial Survey',
+                                  sliderMax: 500,
+                                  map: _searchTabSpecialtyHourMinimums,
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 4),
+                            ExpansionTile(
+                              key: ValueKey(
+                                'search-hours-instruction-${_searchTabFlightInstructionExpanded ? 'open' : 'closed'}',
+                              ),
+                              initiallyExpanded:
+                                  _searchTabFlightInstructionExpanded,
+                              onExpansionChanged: (expanded) {
+                                setState(() {
+                                  _searchTabFlightInstructionExpanded =
+                                      expanded;
+                                });
+                              },
+                              tilePadding: EdgeInsets.zero,
+                              title: const Text(
+                                'FLIGHT INSTRUCTION',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                  letterSpacing: 0.8,
+                                ),
+                              ),
+                              children: [
+                                _buildSearchHourSliderRow(
+                                  label: 'Total Instructor Hours',
+                                  sliderMax: 2000,
+                                  map: _searchTabInstructorHourMinimums,
+                                ),
+                                _buildSearchHourSliderRow(
+                                  label: 'Instrument (CFII)',
+                                  sliderMax: 1000,
+                                  map: _searchTabInstructorHourMinimums,
+                                ),
+                                _buildSearchHourSliderRow(
+                                  label: 'Multi-Engine (MEI)',
+                                  sliderMax: 500,
+                                  map: _searchTabInstructorHourMinimums,
+                                ),
+                              ],
+                            ),
+                          ],
                         ),
                       ),
                     ],
                   ),
                 ),
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 10,
-                  runSpacing: 10,
-                  children: [
-                    SizedBox(
-                      width: 260,
-                      child: DropdownButtonFormField<String>(
-                        key: const ValueKey('search-tab-type-filter'),
-                        initialValue: selectedType,
-                        isExpanded: true,
-                        decoration: const InputDecoration(
-                          labelText: 'Employment Type',
-                          border: OutlineInputBorder(),
+                const SizedBox(height: 12),
+                Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(Icons.search, color: colorScheme.primary),
+                            const SizedBox(width: 8),
+                            Text(
+                              'Search Query',
+                              style: Theme.of(context).textTheme.titleSmall,
+                            ),
+                          ],
                         ),
-                        items: typeOptions
-                            .map(
-                              (value) => DropdownMenuItem<String>(
-                                value: value,
-                                child: Text(
-                                  value == 'all' ? 'All Types' : value,
-                                ),
-                              ),
-                            )
-                            .toList(),
-                        onChanged: (value) {
-                          if (value == null) return;
-                          setState(() {
-                            _searchTabTypeFilter = value;
-                          });
-                        },
-                      ),
-                    ),
-                    SizedBox(
-                      width: 260,
-                      child: DropdownButtonFormField<String>(
-                        key: const ValueKey('search-tab-location-filter'),
-                        initialValue: selectedLocation,
-                        isExpanded: true,
-                        decoration: const InputDecoration(
-                          labelText: 'Location',
-                          border: OutlineInputBorder(),
-                        ),
-                        items: locationOptions
-                            .map(
-                              (value) => DropdownMenuItem<String>(
-                                value: value,
-                                child: Text(
-                                  value == 'all' ? 'All Locations' : value,
-                                ),
-                              ),
-                            )
-                            .toList(),
-                        onChanged: (value) {
-                          if (value == null) return;
-                          setState(() {
-                            _searchTabLocationFilter = value;
-                          });
-                        },
-                      ),
-                    ),
-                    SizedBox(
-                      width: 260,
-                      child: DropdownButtonFormField<String>(
-                        key: const ValueKey('search-tab-position-filter'),
-                        initialValue: selectedPosition,
-                        isExpanded: true,
-                        decoration: const InputDecoration(
-                          labelText: 'Position',
-                          border: OutlineInputBorder(),
-                        ),
-                        items: positionOptions
-                            .map(
-                              (value) => DropdownMenuItem<String>(
-                                value: value,
-                                child: Text(
-                                  value == 'all' ? 'All Positions' : value,
-                                ),
-                              ),
-                            )
-                            .toList(),
-                        onChanged: (value) {
-                          if (value == null) return;
-                          setState(() {
-                            _searchTabPositionFilter = value;
-                          });
-                        },
-                      ),
-                    ),
-                    SizedBox(
-                      width: 260,
-                      child: DropdownButtonFormField<String>(
-                        key: const ValueKey('search-tab-faa-rule-filter'),
-                        initialValue: selectedFaaRule,
-                        isExpanded: true,
-                        decoration: const InputDecoration(
-                          labelText: 'FAA Rule',
-                          border: OutlineInputBorder(),
-                        ),
-                        items: faaRuleOptions
-                            .map(
-                              (value) => DropdownMenuItem<String>(
-                                value: value,
-                                child: Text(
-                                  value == 'all' ? 'All FAA Rules' : value,
-                                ),
-                              ),
-                            )
-                            .toList(),
-                        onChanged: (value) {
-                          if (value == null) return;
-                          setState(() {
-                            _searchTabFaaRuleFilter = value;
-                          });
-                        },
-                      ),
-                    ),
-                    SizedBox(
-                      width: 260,
-                      child: DropdownButtonFormField<String>(
-                        key: const ValueKey('search-tab-sort'),
-                        initialValue: selectedSort,
-                        isExpanded: true,
-                        decoration: const InputDecoration(
-                          labelText: 'Sort Results',
-                          border: OutlineInputBorder(),
-                        ),
-                        items: const [
-                          DropdownMenuItem(
-                            value: 'best_match',
-                            child: Text('Best Match'),
+                        const SizedBox(height: 8),
+                        TextField(
+                          key: const ValueKey('search-tab-query'),
+                          controller: _searchTabController,
+                          decoration: InputDecoration(
+                            labelText: 'Search jobs and keywords',
+                            hintText: 'Part 135, Captain, Dallas, turbine...',
+                            prefixIcon: const Icon(Icons.search),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            suffixIcon: _searchTabQuery.isNotEmpty
+                                ? IconButton(
+                                    onPressed: () {
+                                      setState(() {
+                                        _searchTabQuery = '';
+                                        _searchTabController.clear();
+                                      });
+                                    },
+                                    icon: const Icon(Icons.close),
+                                  )
+                                : null,
                           ),
-                          DropdownMenuItem(
-                            value: 'newest',
-                            child: Text('Newest'),
-                          ),
-                          DropdownMenuItem(
-                            value: 'deadline',
-                            child: Text('Deadline'),
-                          ),
-                          DropdownMenuItem(
-                            value: 'company',
-                            child: Text('Company A-Z'),
-                          ),
-                        ],
-                        onChanged: (value) {
-                          if (value == null) return;
-                          setState(() {
-                            _searchTabSort = value;
-                          });
-                        },
-                      ),
+                          onChanged: (value) {
+                            setState(() {
+                              _searchTabQuery = value.trim();
+                            });
+                          },
+                        ),
+                      ],
                     ),
-                  ],
+                  ),
                 ),
                 const SizedBox(height: 8),
                 Wrap(
@@ -9107,15 +9946,253 @@ class _MyHomePageState extends State<MyHomePage> {
                       onSelected: (selected) {
                         setState(() {
                           _searchTabInstructorOnly = selected;
-                          if (selected) {
-                            _searchTabInstructorFiltersExpanded = true;
-                          } else {
-                            _searchTabInstructorFiltersExpanded = false;
-                          }
+                          _searchTabInstructorFiltersExpanded = selected;
                         });
                       },
                     ),
                   ],
+                ),
+                const SizedBox(height: 12),
+                Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(Icons.tune, color: colorScheme.primary),
+                            const SizedBox(width: 8),
+                            Text(
+                              'Primary Filters',
+                              style: Theme.of(context).textTheme.titleMedium,
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+                        buildAdaptiveFieldWrap([
+                          DropdownButtonFormField<String>(
+                            key: const ValueKey('search-tab-type-filter'),
+                            initialValue: selectedType,
+                            isExpanded: true,
+                            decoration: const InputDecoration(
+                              labelText: 'Employment Type',
+                              border: OutlineInputBorder(),
+                            ),
+                            items: typeOptions
+                                .map(
+                                  (value) => DropdownMenuItem<String>(
+                                    value: value,
+                                    child: Text(
+                                      value == 'all' ? 'All Types' : value,
+                                    ),
+                                  ),
+                                )
+                                .toList(),
+                            onChanged: (value) {
+                              if (value == null) return;
+                              setState(() {
+                                _searchTabTypeFilter = value;
+                              });
+                            },
+                          ),
+                          DropdownButtonFormField<String>(
+                            key: const ValueKey('search-tab-location-filter'),
+                            initialValue: selectedLocation,
+                            isExpanded: true,
+                            decoration: const InputDecoration(
+                              labelText: 'Location',
+                              border: OutlineInputBorder(),
+                            ),
+                            items: locationOptions
+                                .map(
+                                  (value) => DropdownMenuItem<String>(
+                                    value: value,
+                                    child: Text(
+                                      value == 'all' ? 'All Locations' : value,
+                                    ),
+                                  ),
+                                )
+                                .toList(),
+                            onChanged: (value) {
+                              if (value == null) return;
+                              setState(() {
+                                _searchTabLocationFilter = value;
+                              });
+                            },
+                          ),
+                          DropdownButtonFormField<String>(
+                            key: const ValueKey('search-tab-position-filter'),
+                            initialValue: selectedPosition,
+                            isExpanded: true,
+                            decoration: const InputDecoration(
+                              labelText: 'Position',
+                              border: OutlineInputBorder(),
+                            ),
+                            items: positionOptions
+                                .map(
+                                  (value) => DropdownMenuItem<String>(
+                                    value: value,
+                                    child: Text(
+                                      value == 'all' ? 'All Positions' : value,
+                                    ),
+                                  ),
+                                )
+                                .toList(),
+                            onChanged: (value) {
+                              if (value == null) return;
+                              setState(() {
+                                _searchTabPositionFilter = value;
+                              });
+                            },
+                          ),
+                          DropdownButtonFormField<String>(
+                            key: const ValueKey('search-tab-faa-rule-filter'),
+                            initialValue: selectedFaaRule,
+                            isExpanded: true,
+                            decoration: const InputDecoration(
+                              labelText: 'FAA Rule',
+                              border: OutlineInputBorder(),
+                            ),
+                            items: faaRuleOptions
+                                .map(
+                                  (value) => DropdownMenuItem<String>(
+                                    value: value,
+                                    child: Text(
+                                      value == 'all' ? 'All FAA Rules' : value,
+                                    ),
+                                  ),
+                                )
+                                .toList(),
+                            onChanged: (value) {
+                              if (value == null) return;
+                              setState(() {
+                                _searchTabFaaRuleFilter = value;
+                              });
+                            },
+                          ),
+                          DropdownButtonFormField<String>(
+                            key: const ValueKey('search-tab-sort'),
+                            initialValue: selectedSort,
+                            isExpanded: true,
+                            decoration: const InputDecoration(
+                              labelText: 'Sort Results',
+                              border: OutlineInputBorder(),
+                            ),
+                            items: const [
+                              DropdownMenuItem(
+                                value: 'best_match',
+                                child: Text('Best Match'),
+                              ),
+                              DropdownMenuItem(
+                                value: 'newest',
+                                child: Text('Newest'),
+                              ),
+                              DropdownMenuItem(
+                                value: 'deadline',
+                                child: Text('Deadline'),
+                              ),
+                              DropdownMenuItem(
+                                value: 'company',
+                                child: Text('Company A-Z'),
+                              ),
+                            ],
+                            onChanged: (value) {
+                              if (value == null) return;
+                              setState(() {
+                                _searchTabSort = value;
+                              });
+                            },
+                          ),
+                        ]),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(Icons.fact_check, color: colorScheme.primary),
+                            const SizedBox(width: 8),
+                            Text(
+                              'Qualifications Match',
+                              style: Theme.of(context).textTheme.titleMedium,
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Slider(
+                                min: 0,
+                                max: 100,
+                                divisions: 100,
+                                value: _searchTabMinimumMatchPercent
+                                    .toDouble(),
+                                label: '$_searchTabMinimumMatchPercent%+',
+                                onChanged: (value) {
+                                  setState(() {
+                                    _setSearchTabMinimumMatchPercent(
+                                      value.round(),
+                                    );
+                                  });
+                                },
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            SizedBox(
+                              width: 88,
+                              child: TextFormField(
+                                controller: _searchTabMatchPercentController,
+                                keyboardType: TextInputType.number,
+                                textAlign: TextAlign.right,
+                                inputFormatters: [
+                                  FilteringTextInputFormatter.digitsOnly,
+                                ],
+                                decoration: const InputDecoration(
+                                  isDense: true,
+                                  suffixText: '%',
+                                  border: OutlineInputBorder(),
+                                ),
+                                onChanged: (value) {
+                                  if (value.isEmpty) {
+                                    return;
+                                  }
+
+                                  final parsed = int.tryParse(value);
+                                  if (parsed == null) {
+                                    return;
+                                  }
+
+                                  setState(() {
+                                    _setSearchTabMinimumMatchPercent(parsed);
+                                  });
+                                },
+                                onTapOutside: (_) {
+                                  _syncSearchTabMatchPercentController();
+                                },
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          'Set to 0% to leave results unfiltered, or enter a percentage manually.',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey.shade700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
                 const SizedBox(height: 10),
                 if (_searchTabInstructorOnly)
@@ -9130,178 +10207,127 @@ class _MyHomePageState extends State<MyHomePage> {
                           _searchTabInstructorFiltersExpanded = expanded;
                         });
                       },
-                      tilePadding: const EdgeInsets.symmetric(horizontal: 12),
-                      childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-                      title: Row(
-                        children: [
-                          Icon(
-                            Icons.school,
-                            size: 18,
-                            color: Colors.teal.shade700,
-                          ),
-                          const SizedBox(width: 6),
-                          const Text('Instructor Filters'),
-                        ],
-                      ),
+                      title: const Text('Instructor Filters'),
                       subtitle: const Text(
                         'Instructor certificates, ratings, and hour requirements',
                       ),
                       children: [
-                        Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.all(10),
-                          decoration: BoxDecoration(
-                            color: Colors.teal.shade50,
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'Use these filters to focus on instructor-specific qualifications and experience.',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600,
-                                  color: Colors.teal.shade700,
-                                ),
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                          child: buildAdaptiveFieldWrap([
+                            DropdownButtonFormField<String>(
+                              key: const ValueKey(
+                                'search-tab-certificate-filter',
                               ),
-                              const SizedBox(height: 8),
-                              Wrap(
-                                spacing: 10,
-                                runSpacing: 10,
-                                children: [
-                                  SizedBox(
-                                    width: 260,
-                                    child: DropdownButtonFormField<String>(
-                                      key: const ValueKey(
-                                        'search-tab-certificate-filter',
-                                      ),
-                                      initialValue: selectedCertificate,
-                                      isExpanded: true,
-                                      decoration: const InputDecoration(
-                                        labelText: 'Certificate',
-                                        border: OutlineInputBorder(),
-                                      ),
-                                      items: certificateOptions
-                                          .map(
-                                            (value) => DropdownMenuItem<String>(
-                                              value: value,
-                                              child: Text(
-                                                value == 'all'
-                                                    ? 'All Certificates'
-                                                    : value,
-                                              ),
-                                            ),
-                                          )
-                                          .toList(),
-                                      onChanged: (value) {
-                                        if (value == null) return;
-                                        setState(() {
-                                          _searchTabCertificateFilter = value;
-                                        });
-                                      },
-                                    ),
-                                  ),
-                                  SizedBox(
-                                    width: 260,
-                                    child: DropdownButtonFormField<String>(
-                                      key: const ValueKey(
-                                        'search-tab-instructor-hours-filter',
-                                      ),
-                                      initialValue: selectedInstructorHours,
-                                      isExpanded: true,
-                                      decoration: const InputDecoration(
-                                        labelText: 'Instructor Hours Category',
-                                        border: OutlineInputBorder(),
-                                      ),
-                                      items: instructorHoursOptions
-                                          .map(
-                                            (value) => DropdownMenuItem<String>(
-                                              value: value,
-                                              child: Text(
-                                                value == 'all'
-                                                    ? 'All Instructor Categories'
-                                                    : value,
-                                              ),
-                                            ),
-                                          )
-                                          .toList(),
-                                      onChanged: (value) {
-                                        if (value == null) return;
-                                        setState(() {
-                                          _searchTabInstructorHoursFilter = value;
-                                        });
-                                      },
-                                    ),
-                                  ),
-                                  SizedBox(
-                                    width: 260,
-                                    child: DropdownButtonFormField<String>(
-                                      key: const ValueKey(
-                                        'search-tab-rating-filter',
-                                      ),
-                                      initialValue: selectedRating,
-                                      isExpanded: true,
-                                      decoration: const InputDecoration(
-                                        labelText: 'Rating',
-                                        border: OutlineInputBorder(),
-                                      ),
-                                      items: ratingOptions
-                                          .map(
-                                            (value) => DropdownMenuItem<String>(
-                                              value: value,
-                                              child: Text(
-                                                value == 'all'
-                                                    ? 'All Ratings'
-                                                    : value,
-                                              ),
-                                            ),
-                                          )
-                                          .toList(),
-                                      onChanged: (value) {
-                                        if (value == null) return;
-                                        setState(() {
-                                          _searchTabRatingFilter = value;
-                                        });
-                                      },
-                                    ),
-                                  ),
-                                  SizedBox(
-                                    width: 260,
-                                    child: DropdownButtonFormField<String>(
-                                      key: const ValueKey(
-                                        'search-tab-flight-hours-filter',
-                                      ),
-                                      initialValue: selectedFlightHours,
-                                      isExpanded: true,
-                                      decoration: const InputDecoration(
-                                        labelText: 'Flight Hours Category',
-                                        border: OutlineInputBorder(),
-                                      ),
-                                      items: flightHoursOptions
-                                          .map(
-                                            (value) => DropdownMenuItem<String>(
-                                              value: value,
-                                              child: Text(
-                                                value == 'all'
-                                                    ? 'All Flight Hour Categories'
-                                                    : value,
-                                              ),
-                                            ),
-                                          )
-                                          .toList(),
-                                      onChanged: (value) {
-                                        if (value == null) return;
-                                        setState(() {
-                                          _searchTabFlightHoursFilter = value;
-                                        });
-                                      },
-                                    ),
-                                  ),
-                                ],
+                              initialValue: selectedCertificate,
+                              isExpanded: true,
+                              decoration: const InputDecoration(
+                                labelText: 'Certificate',
+                                border: OutlineInputBorder(),
                               ),
-                            ],
-                          ),
+                              items: certificateOptions
+                                  .map(
+                                    (value) => DropdownMenuItem<String>(
+                                      value: value,
+                                      child: Text(
+                                        value == 'all'
+                                            ? 'All Certificates'
+                                            : value,
+                                      ),
+                                    ),
+                                  )
+                                  .toList(),
+                              onChanged: (value) {
+                                if (value == null) return;
+                                setState(() {
+                                  _searchTabCertificateFilter = value;
+                                });
+                              },
+                            ),
+                            DropdownButtonFormField<String>(
+                              key: const ValueKey(
+                                'search-tab-instructor-hours-filter',
+                              ),
+                              initialValue: selectedInstructorHours,
+                              isExpanded: true,
+                              decoration: const InputDecoration(
+                                labelText: 'Instructor Hours Category',
+                                border: OutlineInputBorder(),
+                              ),
+                              items: instructorHoursOptions
+                                  .map(
+                                    (value) => DropdownMenuItem<String>(
+                                      value: value,
+                                      child: Text(
+                                        value == 'all'
+                                            ? 'All Instructor Categories'
+                                            : value,
+                                      ),
+                                    ),
+                                  )
+                                  .toList(),
+                              onChanged: (value) {
+                                if (value == null) return;
+                                setState(() {
+                                  _searchTabInstructorHoursFilter = value;
+                                });
+                              },
+                            ),
+                            DropdownButtonFormField<String>(
+                              key: const ValueKey('search-tab-rating-filter'),
+                              initialValue: selectedRating,
+                              isExpanded: true,
+                              decoration: const InputDecoration(
+                                labelText: 'Rating',
+                                border: OutlineInputBorder(),
+                              ),
+                              items: ratingOptions
+                                  .map(
+                                    (value) => DropdownMenuItem<String>(
+                                      value: value,
+                                      child: Text(
+                                        value == 'all' ? 'All Ratings' : value,
+                                      ),
+                                    ),
+                                  )
+                                  .toList(),
+                              onChanged: (value) {
+                                if (value == null) return;
+                                setState(() {
+                                  _searchTabRatingFilter = value;
+                                });
+                              },
+                            ),
+                            DropdownButtonFormField<String>(
+                              key: const ValueKey(
+                                'search-tab-flight-hours-filter',
+                              ),
+                              initialValue: selectedFlightHours,
+                              isExpanded: true,
+                              decoration: const InputDecoration(
+                                labelText: 'Flight Hours Category',
+                                border: OutlineInputBorder(),
+                              ),
+                              items: flightHoursOptions
+                                  .map(
+                                    (value) => DropdownMenuItem<String>(
+                                      value: value,
+                                      child: Text(
+                                        value == 'all'
+                                            ? 'All Flight Hour Categories'
+                                            : value,
+                                      ),
+                                    ),
+                                  )
+                                  .toList(),
+                              onChanged: (value) {
+                                if (value == null) return;
+                                setState(() {
+                                  _searchTabFlightHoursFilter = value;
+                                });
+                              },
+                            ),
+                          ]),
                         ),
                       ],
                     ),
@@ -9317,253 +10343,134 @@ class _MyHomePageState extends State<MyHomePage> {
                         _searchTabAdvancedFiltersExpanded = expanded;
                       });
                     },
-                    tilePadding: const EdgeInsets.symmetric(horizontal: 12),
-                    childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-                    title: Row(
-                      children: [
-                        Icon(
-                          Icons.manage_search,
-                          size: 18,
-                          color: Colors.blueGrey.shade700,
-                        ),
-                        const SizedBox(width: 6),
-                        const Text('Advanced Filters'),
-                      ],
-                    ),
+                    title: const Text('Advanced Filters'),
                     subtitle: const Text(
                       'General qualification and experience filters',
                     ),
                     children: [
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color: Colors.blueGrey.shade50,
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Use these broader filters for general aviation role matching.',
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                                color: Colors.blueGrey.shade700,
-                              ),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                        child: buildAdaptiveFieldWrap([
+                          DropdownButtonFormField<String>(
+                            key: const ValueKey(
+                              'search-tab-certificate-filter',
                             ),
-                            const SizedBox(height: 8),
-                            Wrap(
-                              spacing: 10,
-                              runSpacing: 10,
-                              children: [
-                                SizedBox(
-                                  width: 260,
-                                  child: DropdownButtonFormField<String>(
-                                    key: const ValueKey(
-                                      'search-tab-certificate-filter',
-                                    ),
-                                    initialValue: selectedCertificate,
-                                    isExpanded: true,
-                                    decoration: const InputDecoration(
-                                      labelText: 'Certificate',
-                                      border: OutlineInputBorder(),
-                                    ),
-                                    items: certificateOptions
-                                        .map(
-                                          (value) => DropdownMenuItem<String>(
-                                            value: value,
-                                            child: Text(
-                                              value == 'all'
-                                                  ? 'All Certificates'
-                                                  : value,
-                                            ),
-                                          ),
-                                        )
-                                        .toList(),
-                                    onChanged: (value) {
-                                      if (value == null) return;
-                                      setState(() {
-                                        _searchTabCertificateFilter = value;
-                                      });
-                                    },
-                                  ),
-                                ),
-                                SizedBox(
-                                  width: 260,
-                                  child: DropdownButtonFormField<String>(
-                                    key: const ValueKey(
-                                      'search-tab-rating-filter',
-                                    ),
-                                    initialValue: selectedRating,
-                                    isExpanded: true,
-                                    decoration: const InputDecoration(
-                                      labelText: 'Rating',
-                                      border: OutlineInputBorder(),
-                                    ),
-                                    items: ratingOptions
-                                        .map(
-                                          (value) => DropdownMenuItem<String>(
-                                            value: value,
-                                            child: Text(
-                                              value == 'all'
-                                                  ? 'All Ratings'
-                                                  : value,
-                                            ),
-                                          ),
-                                        )
-                                        .toList(),
-                                    onChanged: (value) {
-                                      if (value == null) return;
-                                      setState(() {
-                                        _searchTabRatingFilter = value;
-                                      });
-                                    },
-                                  ),
-                                ),
-                                SizedBox(
-                                  width: 260,
-                                  child: DropdownButtonFormField<String>(
-                                    key: const ValueKey(
-                                      'search-tab-flight-hours-filter',
-                                    ),
-                                    initialValue: selectedFlightHours,
-                                    isExpanded: true,
-                                    decoration: const InputDecoration(
-                                      labelText: 'Flight Hours Category',
-                                      border: OutlineInputBorder(),
-                                    ),
-                                    items: flightHoursOptions
-                                        .map(
-                                          (value) => DropdownMenuItem<String>(
-                                            value: value,
-                                            child: Text(
-                                              value == 'all'
-                                                  ? 'All Flight Hour Categories'
-                                                  : value,
-                                            ),
-                                          ),
-                                        )
-                                        .toList(),
-                                    onChanged: (value) {
-                                      if (value == null) return;
-                                      setState(() {
-                                        _searchTabFlightHoursFilter = value;
-                                      });
-                                    },
-                                  ),
-                                ),
-                              ],
+                            initialValue: selectedCertificate,
+                            isExpanded: true,
+                            decoration: const InputDecoration(
+                              labelText: 'Certificate',
+                              border: OutlineInputBorder(),
                             ),
-                          ],
-                        ),
+                            items: certificateOptions
+                                .map(
+                                  (value) => DropdownMenuItem<String>(
+                                    value: value,
+                                    child: Text(
+                                      value == 'all'
+                                          ? 'All Certificates'
+                                          : value,
+                                    ),
+                                  ),
+                                )
+                                .toList(),
+                            onChanged: (value) {
+                              if (value == null) return;
+                              setState(() {
+                                _searchTabCertificateFilter = value;
+                              });
+                            },
+                          ),
+                          DropdownButtonFormField<String>(
+                            key: const ValueKey('search-tab-rating-filter'),
+                            initialValue: selectedRating,
+                            isExpanded: true,
+                            decoration: const InputDecoration(
+                              labelText: 'Rating',
+                              border: OutlineInputBorder(),
+                            ),
+                            items: ratingOptions
+                                .map(
+                                  (value) => DropdownMenuItem<String>(
+                                    value: value,
+                                    child: Text(
+                                      value == 'all' ? 'All Ratings' : value,
+                                    ),
+                                  ),
+                                )
+                                .toList(),
+                            onChanged: (value) {
+                              if (value == null) return;
+                              setState(() {
+                                _searchTabRatingFilter = value;
+                              });
+                            },
+                          ),
+                          DropdownButtonFormField<String>(
+                            key: const ValueKey(
+                              'search-tab-flight-hours-filter',
+                            ),
+                            initialValue: selectedFlightHours,
+                            isExpanded: true,
+                            decoration: const InputDecoration(
+                              labelText: 'Flight Hours Category',
+                              border: OutlineInputBorder(),
+                            ),
+                            items: flightHoursOptions
+                                .map(
+                                  (value) => DropdownMenuItem<String>(
+                                    value: value,
+                                    child: Text(
+                                      value == 'all'
+                                          ? 'All Flight Hour Categories'
+                                          : value,
+                                    ),
+                                  ),
+                                )
+                                .toList(),
+                            onChanged: (value) {
+                              if (value == null) return;
+                              setState(() {
+                                _searchTabFlightHoursFilter = value;
+                              });
+                            },
+                          ),
+                        ]),
                       ),
                     ],
                   ),
                 ),
                 const SizedBox(height: 10),
                 Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 8,
-                  ),
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: Colors.green.shade50,
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: Colors.green.shade100),
+                    color: colorScheme.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: colorScheme.outlineVariant),
                   ),
-                  child: Row(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Icon(
-                        Icons.fact_check,
-                        size: 18,
-                        color: Colors.green.shade700,
-                      ),
-                      const SizedBox(width: 6),
                       Text(
-                        'Match & View Options',
-                        style: Theme.of(context).textTheme.titleSmall,
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Divider(
-                          thickness: 1,
-                          color: Colors.green.shade200,
+                        'Showing ${filteredJobs.length} of ${allVisibleJobs.length} jobs',
+                        style: TextStyle(
+                          color: Colors.grey.shade800,
+                          fontWeight: FontWeight.w700,
                         ),
                       ),
+                      if (activeFilters.isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: activeFilters,
+                        ),
+                      ],
                     ],
                   ),
                 ),
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    const Text('Match:'),
-                    ChoiceChip(
-                      label: const Text('All'),
-                      selected: _searchTabMatchFilter == 'all',
-                      onSelected: (_) {
-                        setState(() {
-                          _searchTabMatchFilter = 'all';
-                        });
-                      },
-                    ),
-                    ChoiceChip(
-                      label: const Text('90%+'),
-                      selected: _searchTabMatchFilter == 'perfect',
-                      onSelected: (_) {
-                        setState(() {
-                          _searchTabMatchFilter = 'perfect';
-                        });
-                      },
-                    ),
-                    ChoiceChip(
-                      label: const Text('70-89%'),
-                      selected: _searchTabMatchFilter == 'good',
-                      onSelected: (_) {
-                        setState(() {
-                          _searchTabMatchFilter = 'good';
-                        });
-                      },
-                    ),
-                    ChoiceChip(
-                      label: const Text('<70%'),
-                      selected: _searchTabMatchFilter == 'stretch',
-                      onSelected: (_) {
-                        setState(() {
-                          _searchTabMatchFilter = 'stretch';
-                        });
-                      },
-                    ),
-                    FilterChip(
-                      key: const ValueKey('search-tab-external-only'),
-                      label: const Text('External postings only'),
-                      selected: _searchTabExternalOnly,
-                      onSelected: (selected) {
-                        setState(() {
-                          _searchTabExternalOnly = selected;
-                        });
-                      },
-                    ),
-                    OutlinedButton(
-                      key: const ValueKey('search-tab-clear-filters'),
-                      onPressed: _clearSearchTabFilters,
-                      child: const Text('Clear Filters'),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  'Showing ${filteredJobs.length} of ${allVisibleJobs.length} jobs',
-                  style: TextStyle(
-                    color: Colors.grey.shade700,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 6),
-                if (filteredJobs.isEmpty)
+                if (filteredJobs.isEmpty) ...[
+                  const SizedBox(height: 10),
                   Card(
                     child: Padding(
                       padding: const EdgeInsets.all(14),
@@ -9573,6 +10480,7 @@ class _MyHomePageState extends State<MyHomePage> {
                       ),
                     ),
                   ),
+                ],
               ],
             );
           }
@@ -9582,11 +10490,21 @@ class _MyHomePageState extends State<MyHomePage> {
           final deadlineText = job.deadlineDate != null
               ? _formatYmd(job.deadlineDate!.toLocal())
               : null;
+          final matchColor = match.matchPercentage >= 90
+              ? Colors.green
+              : match.matchPercentage >= 70
+              ? Colors.orange
+              : Colors.red;
 
           return Card(
             margin: const EdgeInsets.symmetric(vertical: 8),
+            elevation: 0,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
+              side: BorderSide(color: colorScheme.outlineVariant),
+            ),
             child: InkWell(
-              borderRadius: BorderRadius.circular(12),
+              borderRadius: BorderRadius.circular(14),
               onTap: () => _openDetails(job),
               child: Padding(
                 padding: const EdgeInsets.all(12),
@@ -9601,59 +10519,84 @@ class _MyHomePageState extends State<MyHomePage> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Wrap(
-                                crossAxisAlignment:
-                                    WrapCrossAlignment.center,
                                 spacing: 8,
-                                runSpacing: 4,
+                                runSpacing: 6,
+                                crossAxisAlignment: WrapCrossAlignment.center,
                                 children: [
                                   Text(
                                     job.title,
                                     style: const TextStyle(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w600,
+                                      fontSize: 17,
+                                      fontWeight: FontWeight.w700,
                                     ),
                                   ),
                                   if (job.isExternal)
-                                    const Text(
-                                      'EXTERNAL JOB',
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.w800,
-                                        color: Colors.teal,
-                                        letterSpacing: 0.5,
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 8,
+                                        vertical: 3,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: Colors.teal.shade50,
+                                        borderRadius: BorderRadius.circular(
+                                          999,
+                                        ),
+                                        border: Border.all(
+                                          color: Colors.teal.shade200,
+                                        ),
+                                      ),
+                                      child: Text(
+                                        'EXTERNAL JOB',
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w800,
+                                          color: Colors.teal.shade800,
+                                          letterSpacing: 0.3,
+                                        ),
                                       ),
                                     ),
                                 ],
                               ),
                               const SizedBox(height: 4),
-                              Text('${job.company} • ${job.location}'),
-                              const SizedBox(height: 2),
                               Text(
-                                '${job.crewRole}${job.crewPosition != null && job.crewPosition!.isNotEmpty ? ' - ${job.crewPosition}' : ''} • ${job.type}',
+                                '${job.company} • ${job.location}',
+                                style: TextStyle(color: Colors.grey.shade800),
                               ),
-                              if (deadlineText != null)
+                              const SizedBox(height: 4),
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                children: [
+                                  Chip(label: Text(job.type)),
+                                  Chip(
+                                    label: Text(
+                                      '${job.crewRole}${job.crewPosition != null && job.crewPosition!.isNotEmpty ? ' - ${job.crewPosition}' : ''}',
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              if (deadlineText != null) ...[
+                                const SizedBox(height: 6),
                                 Text(
                                   'Deadline: $deadlineText',
                                   style: TextStyle(
                                     color: Colors.orange.shade900,
+                                    fontWeight: FontWeight.w600,
                                   ),
                                 ),
+                              ],
                             ],
                           ),
                         ),
                         Container(
                           margin: const EdgeInsets.only(left: 8),
                           padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 4,
+                            horizontal: 10,
+                            vertical: 6,
                           ),
                           decoration: BoxDecoration(
-                            color: match.matchPercentage >= 90
-                                ? Colors.green
-                                : match.matchPercentage >= 70
-                                ? Colors.orange
-                                : Colors.red,
-                            borderRadius: BorderRadius.circular(12),
+                            color: matchColor,
+                            borderRadius: BorderRadius.circular(999),
                           ),
                           child: Text(
                             '${match.matchPercentage}%',
@@ -9666,13 +10609,16 @@ class _MyHomePageState extends State<MyHomePage> {
                       ],
                     ),
                     const SizedBox(height: 8),
-                    Text(
-                      job.description,
-                      maxLines: 2,
+                    _LinkifiedText(
+                      text: job.description,
+                      maxLines: 3,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(color: Colors.grey.shade800),
+                      onTapUrl: (url) {
+                        _openDetectedLink(url);
+                      },
                     ),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: 10),
                     Wrap(
                       spacing: 8,
                       runSpacing: 8,
@@ -9693,7 +10639,7 @@ class _MyHomePageState extends State<MyHomePage> {
                                 : 'Favorite',
                           ),
                         ),
-                        OutlinedButton.icon(
+                        FilledButton.tonalIcon(
                           onPressed: (job.isExternal || !_hasApplied(job.id))
                               ? () => _handleApplyTap(job)
                               : null,
@@ -10505,10 +11451,7 @@ class _MyHomePageState extends State<MyHomePage> {
                           employer.contactName,
                         ),
                         _buildProfileSummaryRow('Email', employer.contactEmail),
-                        _buildProfileSummaryRow(
-                          'Phone',
-                          _formatPhoneNumber(employer.contactPhone),
-                        ),
+                        _buildPhoneSummaryRow(employer.contactPhone),
                         _buildWebsiteSummaryRow(websiteValue),
                       ],
                     ),
@@ -10876,126 +11819,353 @@ class _MyHomePageState extends State<MyHomePage> {
         'Instrument': 75,
       };
     }
-    return {
-      'Total Time': 500,
-      'Cross-Country': 100,
-      'Night': 25,
-    };
+    return {'Total Time': 500, 'Cross-Country': 100, 'Night': 25};
   }
 
-  Widget _buildHoursRequirementSection({
-    required String title,
-    required List<String> options,
-    required Map<String, int> selectedHours,
-    required Set<String> preferredHours,
-    Map<String, int> minimums = const {},
-    Map<String, TextEditingController>? controllers,
+  double _hourSliderMax(String label) {
+    switch (label) {
+      case 'Total Time':
+        return 5000;
+      case 'Total PIC Time':
+      case 'Total SIC Time':
+        return 3000;
+      case 'PIC Turbine':
+      case 'SIC Turbine':
+        return 1500;
+      case 'PIC Jet':
+      case 'SIC Jet':
+        return 1000;
+      case 'Multi-engine':
+        return 2000;
+      case 'Cross-Country':
+      case 'Alaska Time':
+      case 'Total Instructor Hours':
+        return 1000;
+      case 'Instrument':
+      case 'Night':
+      case 'Fire Fighting':
+      case 'Instrument (CFII)':
+        return 500;
+      case 'Multi-Engine (MEI)':
+      case 'Aerobatic':
+      case 'Floatplane':
+      case 'Ski-plane':
+      case 'Tailwheel':
+      case 'Off Airport':
+      case 'Banner Towing':
+      case 'Low Altitude':
+      case 'Aerial Survey':
+        return 500;
+      default:
+        return 1000;
+    }
+  }
+
+  Widget _buildCreateHourInputRow({
+    required String label,
+    required Map<String, int> map,
+    required Set<String> preferredSet,
+    int minimumValue = 0,
   }) {
-    return Container(
-      margin: const EdgeInsets.symmetric(vertical: 4),
-      padding: const EdgeInsets.all(8),
-      decoration: BoxDecoration(
-        border: Border.all(color: Colors.grey),
-        borderRadius: BorderRadius.circular(8),
-      ),
+    final current = (map[label] ?? 0).clamp(0, _hourSliderMax(label).toInt());
+    final isSelected = current > 0;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            title,
-            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+          _SearchHourSliderRow(
+            label: label,
+            sliderMax: _hourSliderMax(label),
+            value: current,
+            onChanged: (val) {
+              setState(() {
+                if (val <= 0) {
+                  map.remove(label);
+                  preferredSet.remove(label);
+                  return;
+                }
+                final enforced = val < minimumValue ? minimumValue : val;
+                map[label] = enforced;
+              });
+            },
           ),
-          const SizedBox(height: 8),
-          ...options.map((option) {
-            final isSelected = selectedHours.containsKey(option);
-            final isPreferred = preferredHours.contains(option);
-            final hours = selectedHours[option] ?? 0;
-
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                CheckboxListTile(
-                  title: Text(option),
-                  value: isSelected,
-                  onChanged: (bool? selected) {
-                    setState(() {
-                      if (selected == true) {
-                        final minVal = minimums[option] ?? 0;
-                        selectedHours.putIfAbsent(option, () => minVal);
-                        if (controllers != null) {
-                          controllers.putIfAbsent(
-                            option,
-                            () => TextEditingController(
-                              text: minVal > 0 ? minVal.toString() : '',
-                            ),
-                          );
-                        }
-                      } else {
-                        selectedHours.remove(option);
-                        preferredHours.remove(option);
-                        controllers?.remove(option)?.dispose();
-                      }
-                    });
-                  },
+          if (minimumValue > 0)
+            Padding(
+              padding: const EdgeInsets.only(left: 116, bottom: 4),
+              child: Text(
+                'Part 135 minimum: $minimumValue hrs',
+                style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+              ),
+            ),
+          if (isSelected)
+            Padding(
+              padding: const EdgeInsets.only(left: 116, right: 4, bottom: 6),
+              child: DropdownButtonFormField<String>(
+                initialValue: preferredSet.contains(label)
+                    ? 'Preferred'
+                    : 'Required',
+                isDense: true,
+                decoration: const InputDecoration(
+                  labelText: 'Requirement',
+                  border: OutlineInputBorder(),
                 ),
-                if (isSelected)
-                  Padding(
-                    padding: const EdgeInsets.only(
-                      left: 16,
-                      right: 16,
-                      bottom: 8,
-                    ),
-                    child: Column(
-                      children: [
-                        Builder(builder: (context) {
-                          final minVal = minimums[option] ?? 0;
-                          final ctrl = controllers?[option];
-                          return TextFormField(
-                            key: ValueKey('create-hours-$title-$option'),
-                            controller: ctrl,
-                            keyboardType: TextInputType.number,
-                            initialValue: ctrl != null
-                                ? null
-                                : (hours > 0 ? hours.toString() : ''),
-                            decoration: InputDecoration(
-                              labelText: minVal > 0
-                                  ? 'Hours for $option (min $minVal)'
-                                  : 'Hours for $option',
-                              hintText: minVal > 0 ? '$minVal' : '0',
-                              isDense: true,
-                            ),
-                            onChanged: (value) {
-                              final parsed = int.tryParse(value.trim()) ?? 0;
-                              final enforced = parsed < minVal ? minVal : parsed;
-                              setState(() {
-                                selectedHours[option] = enforced;
-                              });
-                            },
-                          );
-                        }),
-                        CheckboxListTile(
-                          contentPadding: EdgeInsets.zero,
-                          dense: true,
-                          title: const Text('Mark as preferred (optional)'),
-                          value: isPreferred,
-                          onChanged: (bool? preferred) {
-                            setState(() {
-                              if (preferred == true) {
-                                preferredHours.add(option);
-                              } else {
-                                preferredHours.remove(option);
-                              }
-                            });
-                          },
-                        ),
-                      ],
-                    ),
+                items: const [
+                  DropdownMenuItem(value: 'Required', child: Text('Required')),
+                  DropdownMenuItem(
+                    value: 'Preferred',
+                    child: Text('Preferred'),
                   ),
-              ],
-            );
-          }),
+                ],
+                onChanged: (value) {
+                  setState(() {
+                    if (value == 'Preferred') {
+                      preferredSet.add(label);
+                    } else {
+                      preferredSet.remove(label);
+                    }
+                  });
+                },
+              ),
+            ),
         ],
       ),
+    );
+  }
+
+  Widget _buildCreateCategorizedHoursSection() {
+    final part135Minimums = _part135Minimums();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'MINIMUM EXPERIENCE (HOURS)',
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.9,
+          ),
+        ),
+        const SizedBox(height: 6),
+        _buildCreateHourInputRow(
+          label: 'Total Time',
+          map: _selectedFlightHours,
+          preferredSet: _preferredFlightHours,
+          minimumValue: part135Minimums['Total Time'] ?? 0,
+        ),
+        ExpansionTile(
+          key: ValueKey(
+            'create-hours-picsic-${_createHoursPicSicExpanded ? 'open' : 'closed'}',
+          ),
+          initiallyExpanded: _createHoursPicSicExpanded,
+          onExpansionChanged: (expanded) {
+            setState(() => _createHoursPicSicExpanded = expanded);
+          },
+          tilePadding: EdgeInsets.zero,
+          title: const Text(
+            'PIC / SIC TIME',
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.8,
+            ),
+          ),
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Row(
+                children: [
+                  const Text(
+                    'Show:',
+                    style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                  ),
+                  const SizedBox(width: 8),
+                  Wrap(
+                    spacing: 6,
+                    children: [
+                      ChoiceChip(
+                        label: const Text('ALL'),
+                        selected: _createHoursGroupFilter == 'all',
+                        onSelected: (_) =>
+                            setState(() => _createHoursGroupFilter = 'all'),
+                      ),
+                      ChoiceChip(
+                        label: const Text('PIC'),
+                        selected: _createHoursGroupFilter == 'pic',
+                        onSelected: (_) =>
+                            setState(() => _createHoursGroupFilter = 'pic'),
+                      ),
+                      ChoiceChip(
+                        label: const Text('SIC'),
+                        selected: _createHoursGroupFilter == 'sic',
+                        onSelected: (_) =>
+                            setState(() => _createHoursGroupFilter = 'sic'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            if (_createHoursGroupFilter != 'sic')
+              _buildCreateHourInputRow(
+                label: 'Total PIC Time',
+                map: _selectedFlightHours,
+                preferredSet: _preferredFlightHours,
+              ),
+            if (_createHoursGroupFilter != 'pic')
+              _buildCreateHourInputRow(
+                label: 'Total SIC Time',
+                map: _selectedFlightHours,
+                preferredSet: _preferredFlightHours,
+              ),
+            if (_createHoursGroupFilter != 'sic')
+              _buildCreateHourInputRow(
+                label: 'PIC Turbine',
+                map: _selectedFlightHours,
+                preferredSet: _preferredFlightHours,
+              ),
+            if (_createHoursGroupFilter != 'pic')
+              _buildCreateHourInputRow(
+                label: 'SIC Turbine',
+                map: _selectedFlightHours,
+                preferredSet: _preferredFlightHours,
+              ),
+            if (_createHoursGroupFilter != 'sic')
+              _buildCreateHourInputRow(
+                label: 'PIC Jet',
+                map: _selectedFlightHours,
+                preferredSet: _preferredFlightHours,
+              ),
+            if (_createHoursGroupFilter != 'pic')
+              _buildCreateHourInputRow(
+                label: 'SIC Jet',
+                map: _selectedFlightHours,
+                preferredSet: _preferredFlightHours,
+              ),
+          ],
+        ),
+        ExpansionTile(
+          key: ValueKey(
+            'create-hours-other-${_createHoursOtherExpanded ? 'open' : 'closed'}',
+          ),
+          initiallyExpanded: _createHoursOtherExpanded,
+          onExpansionChanged: (expanded) {
+            setState(() => _createHoursOtherExpanded = expanded);
+          },
+          tilePadding: EdgeInsets.zero,
+          title: const Text(
+            'OTHER CATEGORIES',
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.8,
+            ),
+          ),
+          children: [
+            _buildCreateHourInputRow(
+              label: 'Multi-engine',
+              map: _selectedFlightHours,
+              preferredSet: _preferredFlightHours,
+            ),
+            _buildCreateHourInputRow(
+              label: 'Instrument',
+              map: _selectedFlightHours,
+              preferredSet: _preferredFlightHours,
+              minimumValue: part135Minimums['Instrument'] ?? 0,
+            ),
+            _buildCreateHourInputRow(
+              label: 'Cross-Country',
+              map: _selectedFlightHours,
+              preferredSet: _preferredFlightHours,
+              minimumValue: part135Minimums['Cross-Country'] ?? 0,
+            ),
+            _buildCreateHourInputRow(
+              label: 'Night',
+              map: _selectedFlightHours,
+              preferredSet: _preferredFlightHours,
+              minimumValue: part135Minimums['Night'] ?? 0,
+            ),
+          ],
+        ),
+        ExpansionTile(
+          key: ValueKey(
+            'create-hours-specialty-${_createHoursSpecialtyExpanded ? 'open' : 'closed'}',
+          ),
+          initiallyExpanded: _createHoursSpecialtyExpanded,
+          onExpansionChanged: (expanded) {
+            setState(() => _createHoursSpecialtyExpanded = expanded);
+          },
+          tilePadding: EdgeInsets.zero,
+          title: const Text(
+            'SPECIALTY HOURS',
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.8,
+            ),
+          ),
+          children: _availableSpecialtyExperience
+              .map(
+                (label) => _buildCreateHourInputRow(
+                  label: label,
+                  map: _selectedSpecialtyHours,
+                  preferredSet: _preferredSpecialtyHours,
+                ),
+              )
+              .toList(),
+        ),
+        ExpansionTile(
+          key: ValueKey(
+            'create-hours-instruction-${_createHoursInstructionExpanded ? 'open' : 'closed'}',
+          ),
+          initiallyExpanded: _createHoursInstructionExpanded,
+          onExpansionChanged: (expanded) {
+            setState(() => _createHoursInstructionExpanded = expanded);
+          },
+          tilePadding: EdgeInsets.zero,
+          title: const Text(
+            'FLIGHT INSTRUCTION',
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.8,
+            ),
+          ),
+          children: _availableInstructorHours
+              .map(
+                (label) => _buildCreateHourInputRow(
+                  label: label,
+                  map: _selectedInstructorHours,
+                  preferredSet: _preferredInstructorHours,
+                ),
+              )
+              .toList(),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSearchHourSliderRow({
+    required String label,
+    required double sliderMax,
+    required Map<String, int> map,
+    String? mapKey,
+  }) {
+    final key = mapKey ?? label;
+    final currentVal = (map[key] ?? 0).clamp(0, sliderMax.toInt());
+    return _SearchHourSliderRow(
+      label: label,
+      sliderMax: sliderMax,
+      value: currentVal,
+      onChanged: (val) {
+        setState(() {
+          if (val <= 0) {
+            map.remove(key);
+          } else {
+            map[key] = val;
+          }
+        });
+      },
     );
   }
 
@@ -11045,31 +12215,33 @@ class _MyHomePageState extends State<MyHomePage> {
                 style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
               ),
             ),
-            RadioListTile<String>(
-              title: const Text('IFR / Commuter'),
-              subtitle: const Text(
-                '1,200 TT · 500 XC · 100 Night · 75 Instrument',
+            RadioGroup<String>(
+              groupValue: _part135SubType,
+              onChanged: (value) {
+                if (value == null) {
+                  return;
+                }
+                setState(() {
+                  _part135SubType = value;
+                  _applyPart135Minimums(value);
+                });
+              },
+              child: Column(
+                children: const [
+                  RadioListTile<String>(
+                    title: Text('IFR / Commuter'),
+                    subtitle: Text(
+                      '1,200 TT · 500 XC · 100 Night · 75 Instrument',
+                    ),
+                    value: 'ifr',
+                  ),
+                  RadioListTile<String>(
+                    title: Text('VFR Only'),
+                    subtitle: Text('500 TT · 100 XC · 25 Night'),
+                    value: 'vfr',
+                  ),
+                ],
               ),
-              value: 'ifr',
-              groupValue: _part135SubType,
-              onChanged: (value) {
-                setState(() {
-                  _part135SubType = value;
-                  _applyPart135Minimums(value!);
-                });
-              },
-            ),
-            RadioListTile<String>(
-              title: const Text('VFR Only'),
-              subtitle: const Text('500 TT · 100 XC · 25 Night'),
-              value: 'vfr',
-              groupValue: _part135SubType,
-              onChanged: (value) {
-                setState(() {
-                  _part135SubType = value;
-                  _applyPart135Minimums(value!);
-                });
-              },
             ),
             if (_part135SubType != null)
               Padding(
@@ -11100,11 +12272,7 @@ class _MyHomePageState extends State<MyHomePage> {
         'Instrument': 75,
       };
     } else if (subType == 'vfr') {
-      minimums = {
-        'Total Time': 500,
-        'Cross-Country': 100,
-        'Night': 25,
-      };
+      minimums = {'Total Time': 500, 'Cross-Country': 100, 'Night': 25};
       _selectedFlightHours.remove('Instrument');
       _createFlightHourControllers['Instrument']?.text = '';
     } else {
@@ -11340,32 +12508,7 @@ class _MyHomePageState extends State<MyHomePage> {
               _selectedFlightHours.length +
               _selectedInstructorHours.length +
               _selectedSpecialtyHours.length,
-          child: Column(
-            children: [
-              _buildHoursRequirementSection(
-                title: 'Flight Hours',
-                options: _availableEmployerFlightHours,
-                selectedHours: _selectedFlightHours,
-                preferredHours: _preferredFlightHours,
-                minimums: _part135Minimums(),
-                controllers: _createFlightHourControllers,
-              ),
-              const SizedBox(height: 12),
-              _buildHoursRequirementSection(
-                title: 'Instructor Hours',
-                options: _availableInstructorHours,
-                selectedHours: _selectedInstructorHours,
-                preferredHours: _preferredInstructorHours,
-              ),
-              const SizedBox(height: 12),
-              _buildHoursRequirementSection(
-                title: 'Specialty Hours',
-                options: _availableSpecialtyExperience,
-                selectedHours: _selectedSpecialtyHours,
-                preferredHours: _preferredSpecialtyHours,
-              ),
-            ],
-          ),
+          child: _buildCreateCategorizedHoursSection(),
         ),
         _buildExpandableRequirementSection(
           sectionKey: 'Aircraft Experience',
@@ -12163,7 +13306,7 @@ class _MyHomePageState extends State<MyHomePage> {
                   _searchTabRatingFilter = 'all';
                   _searchTabFlightHoursFilter = 'all';
                   _searchTabInstructorHoursFilter = 'all';
-                  _searchTabMatchFilter = 'all';
+                  _setSearchTabMinimumMatchPercent(0);
                   _searchTabSort = 'best_match';
                   _searchTabExternalOnly = false;
                   _searchTabInstructorOnly = false;
@@ -12196,10 +13339,70 @@ class _MyHomePageState extends State<MyHomePage> {
                 },
               ),
           ],
-          bottom: TabBar(
-            isScrollable: true,
-            tabAlignment: TabAlignment.start,
-            tabs: tabs,
+          bottom: PreferredSize(
+            preferredSize: const Size.fromHeight(48),
+            child: SizedBox(
+              height: 48,
+              child: Stack(
+                children: [
+                  TabBar(
+                    isScrollable: true,
+                    tabAlignment: TabAlignment.start,
+                    tabs: tabs,
+                  ),
+                  Positioned(
+                    left: 0,
+                    top: 0,
+                    bottom: 0,
+                    child: IgnorePointer(
+                      child: Container(
+                        width: 28,
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.centerLeft,
+                            end: Alignment.centerRight,
+                            stops: const [0, 0.45, 1],
+                            colors: [
+                              Theme.of(context).colorScheme.inversePrimary,
+                              Theme.of(context).colorScheme.inversePrimary
+                                  .withValues(alpha: 0.58),
+                              Theme.of(
+                                context,
+                              ).colorScheme.inversePrimary.withValues(alpha: 0),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    right: 0,
+                    top: 0,
+                    bottom: 0,
+                    child: IgnorePointer(
+                      child: Container(
+                        width: 28,
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.centerRight,
+                            end: Alignment.centerLeft,
+                            stops: const [0, 0.45, 1],
+                            colors: [
+                              Theme.of(context).colorScheme.inversePrimary,
+                              Theme.of(context).colorScheme.inversePrimary
+                                  .withValues(alpha: 0.58),
+                              Theme.of(
+                                context,
+                              ).colorScheme.inversePrimary.withValues(alpha: 0),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ),
         ),
         body: SafeArea(
@@ -12234,7 +13437,127 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 }
 
+class _SearchHourSliderRow extends StatefulWidget {
+  const _SearchHourSliderRow({
+    required this.label,
+    required this.sliderMax,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final String label;
+  final double sliderMax;
+  final int value;
+  final void Function(int) onChanged;
+
+  @override
+  State<_SearchHourSliderRow> createState() => _SearchHourSliderRowState();
+}
+
+class _SearchHourSliderRowState extends State<_SearchHourSliderRow> {
+  late final TextEditingController _controller;
+  bool _isEditing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(
+      text: widget.value > 0 ? '${widget.value}' : '',
+    );
+  }
+
+  @override
+  void didUpdateWidget(_SearchHourSliderRow oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!_isEditing && oldWidget.value != widget.value) {
+      _controller.text = widget.value > 0 ? '${widget.value}' : '';
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 112,
+            child: Text(widget.label, style: const TextStyle(fontSize: 13)),
+          ),
+          Expanded(
+            child: Slider(
+              value: widget.value.toDouble().clamp(0, widget.sliderMax),
+              min: 0,
+              max: widget.sliderMax,
+              divisions: widget.sliderMax > 1000 ? 50 : 20,
+              onChanged: (val) {
+                final rounded = val.round();
+                _controller.text = rounded > 0 ? '$rounded' : '';
+                widget.onChanged(rounded);
+              },
+            ),
+          ),
+          SizedBox(
+            width: 52,
+            child: TextField(
+              controller: _controller,
+              keyboardType: TextInputType.number,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 12),
+              decoration: InputDecoration(
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 4,
+                  vertical: 6,
+                ),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(6),
+                  borderSide: BorderSide(color: Colors.grey.shade400),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(6),
+                  borderSide: BorderSide(color: Colors.grey.shade400),
+                ),
+                isDense: true,
+              ),
+              onTap: () => setState(() => _isEditing = true),
+              onEditingComplete: () => setState(() => _isEditing = false),
+              onChanged: (text) {
+                final parsed = int.tryParse(text.trim());
+                if (parsed != null) {
+                  final clamped = parsed.clamp(0, widget.sliderMax.toInt());
+                  widget.onChanged(clamped);
+                } else if (text.trim().isEmpty) {
+                  widget.onChanged(0);
+                }
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class JobDetailsPage extends StatelessWidget {
+  static const Map<String, int> _part135IfrBaseline = {
+    'Total Time': 1200,
+    'Cross-Country': 500,
+    'Night': 100,
+    'Instrument': 75,
+  };
+
+  static const Map<String, int> _part135VfrBaseline = {
+    'Total Time': 500,
+    'Cross-Country': 100,
+    'Night': 25,
+  };
+
   final JobListing job;
   final bool isFavorite;
   final VoidCallback onFavorite;
@@ -12277,6 +13600,111 @@ class JobDetailsPage extends StatelessWidget {
     );
   }
 
+  Future<void> _openDetectedUrl(BuildContext context, String rawUrl) async {
+    final uri = _parseLaunchableHttpUri(rawUrl);
+    if (uri == null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Could not open this link.')));
+      return;
+    }
+
+    final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!launched && context.mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Could not open this link.')));
+    }
+  }
+
+  bool get _hasPart135Rule {
+    final rules = job.faaRules
+        .map((rule) => rule.trim().toLowerCase())
+        .where((rule) => rule.isNotEmpty)
+        .toSet();
+    return rules.contains('part 135') ||
+        rules.contains('part 135 ifr') ||
+        rules.contains('part 135 commuter') ||
+        rules.contains('part 135 vfr');
+  }
+
+  Map<String, int>? get _part135Baseline {
+    if (!_hasPart135Rule) {
+      return null;
+    }
+
+    final normalizedSubType = job.part135SubType?.trim().toLowerCase();
+    if (normalizedSubType == 'ifr') {
+      return _part135IfrBaseline;
+    }
+    if (normalizedSubType == 'vfr') {
+      return _part135VfrBaseline;
+    }
+
+    var qualifiesIfr = true;
+    for (final entry in _part135IfrBaseline.entries) {
+      if ((job.flightHoursByType[entry.key] ?? 0) < entry.value) {
+        qualifiesIfr = false;
+        break;
+      }
+    }
+    if (qualifiesIfr) {
+      return _part135IfrBaseline;
+    }
+
+    var qualifiesVfr = true;
+    for (final entry in _part135VfrBaseline.entries) {
+      if ((job.flightHoursByType[entry.key] ?? 0) < entry.value) {
+        qualifiesVfr = false;
+        break;
+      }
+    }
+    if (qualifiesVfr) {
+      return _part135VfrBaseline;
+    }
+
+    return null;
+  }
+
+  String? get _part135BaselineLabel {
+    final baseline = _part135Baseline;
+    if (baseline == null) {
+      return null;
+    }
+    if (identical(baseline, _part135IfrBaseline)) {
+      return 'Part 135 IFR Minimums';
+    }
+    return 'Part 135 VFR Minimums';
+  }
+
+  String? get _part135BaselineTooltip {
+    final baseline = _part135Baseline;
+    final label = _part135BaselineLabel;
+    if (baseline == null || label == null) {
+      return null;
+    }
+
+    final detailLines = baseline.entries
+        .map((entry) => '${entry.key}: ${entry.value} hrs')
+        .join('\n');
+    return '$label\n$detailLines';
+  }
+
+  List<MapEntry<String, int>> _summaryFlightHourEntries(Map<String, int>? baseline) {
+    final entries = job.flightHoursByType.entries.toList();
+    if (baseline == null) {
+      return entries;
+    }
+
+    return entries.where((entry) {
+      final minimum = baseline[entry.key];
+      if (minimum == null) {
+        return true;
+      }
+      return entry.value > minimum;
+    }).toList();
+  }
+
   @override
   Widget build(BuildContext context) {
     final mediaQuery = MediaQuery.of(context);
@@ -12288,7 +13716,13 @@ class JobDetailsPage extends StatelessWidget {
       mediaQuery.viewPadding.right,
       math.max(mediaQuery.padding.right, mediaQuery.systemGestureInsets.right),
     );
-    final standardFlightHourEntries = job.flightHoursByType.entries.toList();
+    final baselineFlightHours = _part135Baseline;
+    final baselineFlightLabel = _part135BaselineLabel;
+    final baselineFlightTooltip = _part135BaselineTooltip;
+    final standardFlightHourEntries = _summaryFlightHourEntries(
+      baselineFlightHours,
+    );
+    final showPart135SummaryChip = baselineFlightLabel != null;
     final instructorHourEntries = job.instructorHoursByType.entries.toList();
     final timelineLabels = _buildTimelineLabels(
       createdAt: job.createdAt,
@@ -12354,13 +13788,17 @@ class JobDetailsPage extends StatelessWidget {
                                   ),
                                   const SizedBox(height: 4),
                                   TextButton.icon(
-                                    onPressed: job.isExternal ? null : () => _openCompanyInfo(context),
+                                    onPressed: job.isExternal
+                                        ? null
+                                        : () => _openCompanyInfo(context),
                                     icon: const Icon(
                                       Icons.business_outlined,
                                       size: 18,
                                     ),
                                     label: job.isExternal
-                                        ? const Text('View Company Info (External - No Profile)')
+                                        ? const Text(
+                                            'View Company Info (External - No Profile)',
+                                          )
                                         : const Text('View Company Info'),
                                     style: TextButton.styleFrom(
                                       padding: EdgeInsets.zero,
@@ -12554,98 +13992,37 @@ class JobDetailsPage extends StatelessWidget {
                                     .toList(),
                               ),
                             ),
-                            if (standardFlightHourEntries.isNotEmpty)
+                            if (showPart135SummaryChip ||
+                                standardFlightHourEntries.isNotEmpty)
                               _buildDetailSection(
                                 context: context,
                                 title: 'Flight Hours',
                                 icon: Icons.schedule_outlined,
                                 child: _buildChipWrap(
-                                  standardFlightHourEntries
-                                      .map(
-                                        (entry) => _buildRequirementChip(
-                                          label: _formatHoursRequirementLabel(
-                                            entry.key,
-                                            entry.value,
-                                            job.preferredFlightHours.contains(
-                                              entry.key,
-                                            ),
-                                          ),
-                                          isPreferred: job.preferredFlightHours
-                                              .contains(entry.key),
+                                  [
+                                    if (showPart135SummaryChip)
+                                      Tooltip(
+                                        message: baselineFlightTooltip ??
+                                            baselineFlightLabel,
+                                        child: _buildRequirementChip(
+                                          label: baselineFlightLabel,
+                                          isPreferred: false,
                                         ),
-                                      )
-                                      .toList(),
-                                ),
-                              ),
-                                _buildDetailSection(
-                                  context: context,
-                                  title: 'Job Description',
-                                  icon: Icons.description_outlined,
-                                  child: Text(
-                                    job.description,
-                                    style: Theme.of(context).textTheme.bodyLarge,
-                                  ),
-                                ),
-                                if (job.benefits.isNotEmpty)
-                                  _buildDetailSection(
-                                    context: context,
-                                    title: 'Benefits',
-                                    icon: Icons.card_giftcard,
-                                    child: _buildChipWrap(
-                                      job.benefits
-                                          .map(
-                                            (benefit) => Chip(label: Text(benefit)),
-                                          )
-                                          .toList(),
-                                    ),
-                                  ),
-                                if (job.requiredRatings.isNotEmpty)
-                                  _buildDetailSection(
-                                    context: context,
-                                    title: 'Required Ratings',
-                                    icon: Icons.fact_check_outlined,
-                                    child: _buildChipWrap(
-                                      job.requiredRatings
-                                          .map(
-                                            (rating) => Chip(label: Text(rating)),
-                                          )
-                                          .toList(),
-                                    ),
-                                  ),
-                                if (job.typeRatingsRequired.isNotEmpty)
-                                  _buildDetailSection(
-                                    context: context,
-                                    title: 'Required Type Ratings',
-                                    icon: Icons.confirmation_number_outlined,
-                                    child: _buildChipWrap(
-                                      job.typeRatingsRequired
-                                          .map(
-                                            (rating) => Chip(label: Text(rating)),
-                                          )
-                                          .toList(),
-                                    ),
-                                  ),
-                            if (instructorHourEntries.isNotEmpty)
-                              _buildDetailSection(
-                                context: context,
-                                title: 'Instructor Hours',
-                                icon: Icons.school_outlined,
-                                child: _buildChipWrap(
-                                  instructorHourEntries
-                                      .map(
-                                        (entry) => _buildRequirementChip(
-                                          label: _formatHoursRequirementLabel(
+                                      ),
+                                    ...standardFlightHourEntries.map(
+                                      (entry) => _buildRequirementChip(
+                                        label: _formatHoursRequirementLabel(
+                                          entry.key,
+                                          entry.value,
+                                          job.preferredFlightHours.contains(
                                             entry.key,
-                                            entry.value,
-                                            job.preferredInstructorHours
-                                                .contains(entry.key),
                                           ),
-                                          isPreferred: job
-                                              .preferredInstructorHours
-                                              .contains(entry.key),
                                         ),
-                                      )
-                                      .toList(),
+                                        isPreferred: job.preferredFlightHours
+                                            .contains(entry.key),
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ),
                             if (job.specialtyHoursByType.isNotEmpty)
@@ -12665,6 +14042,80 @@ class JobDetailsPage extends StatelessWidget {
                                           ),
                                           isPreferred: job
                                               .preferredSpecialtyHours
+                                              .contains(entry.key),
+                                        ),
+                                      )
+                                      .toList(),
+                                ),
+                              ),
+                            _buildDetailSection(
+                              context: context,
+                              title: 'Job Description',
+                              icon: Icons.description_outlined,
+                              child: _LinkifiedText(
+                                text: job.description,
+                                style: Theme.of(context).textTheme.bodyLarge,
+                                onTapUrl: (url) {
+                                  _openDetectedUrl(context, url);
+                                },
+                              ),
+                            ),
+                            if (job.benefits.isNotEmpty)
+                              _buildDetailSection(
+                                context: context,
+                                title: 'Benefits',
+                                icon: Icons.card_giftcard,
+                                child: _buildChipWrap(
+                                  job.benefits
+                                      .map(
+                                        (benefit) => Chip(label: Text(benefit)),
+                                      )
+                                      .toList(),
+                                ),
+                              ),
+                            if (job.requiredRatings.isNotEmpty)
+                              _buildDetailSection(
+                                context: context,
+                                title: 'Required Ratings',
+                                icon: Icons.fact_check_outlined,
+                                child: _buildChipWrap(
+                                  job.requiredRatings
+                                      .map(
+                                        (rating) => Chip(label: Text(rating)),
+                                      )
+                                      .toList(),
+                                ),
+                              ),
+                            if (job.typeRatingsRequired.isNotEmpty)
+                              _buildDetailSection(
+                                context: context,
+                                title: 'Required Type Ratings',
+                                icon: Icons.confirmation_number_outlined,
+                                child: _buildChipWrap(
+                                  job.typeRatingsRequired
+                                      .map(
+                                        (rating) => Chip(label: Text(rating)),
+                                      )
+                                      .toList(),
+                                ),
+                              ),
+                            if (instructorHourEntries.isNotEmpty)
+                              _buildDetailSection(
+                                context: context,
+                                title: 'Instructor Hours',
+                                icon: Icons.school_outlined,
+                                child: _buildChipWrap(
+                                  instructorHourEntries
+                                      .map(
+                                        (entry) => _buildRequirementChip(
+                                          label: _formatHoursRequirementLabel(
+                                            entry.key,
+                                            entry.value,
+                                            job.preferredInstructorHours
+                                                .contains(entry.key),
+                                          ),
+                                          isPreferred: job
+                                              .preferredInstructorHours
                                               .contains(entry.key),
                                         ),
                                       )
@@ -12882,8 +14333,22 @@ class JobDetailsPage extends StatelessWidget {
     };
     final matchPercentage = match.matchPercentage;
     final isFullMatch = match.isFullMatch;
-    final standardFlightHourEntries = job.flightHoursByType.entries.toList();
+    final baselineFlightHours = _part135Baseline;
+    final baselineFlightLabel = _part135BaselineLabel;
+    final baselineFlightTooltip = _part135BaselineTooltip;
+    final standardFlightHourEntries = _summaryFlightHourEntries(
+      baselineFlightHours,
+    );
     final instructorHourEntries = job.instructorHoursByType.entries.toList();
+    final showPart135SummaryRow = baselineFlightHours != null;
+
+    final hasMetPart135Baseline = baselineFlightHours != null
+        ? baselineFlightHours.entries.every((entry) {
+            final profileHours = profile!.flightHours[entry.key] ?? 0;
+            return profile!.flightHoursTypes.contains(entry.key) &&
+                profileHours >= entry.value;
+          })
+        : false;
 
     final flightRows = _buildMatchHoursRows(
       sectionTitle: 'Flight Hours:',
@@ -12892,6 +14357,40 @@ class JobDetailsPage extends StatelessWidget {
       profileHoursFor: (hourName) => profile!.flightHours[hourName] ?? 0,
       hasExperienceFor: (hourName) =>
           profile!.flightHoursTypes.contains(hourName),
+      leadingRows: [
+        if (showPart135SummaryRow)
+          Padding(
+            padding: const EdgeInsets.only(left: 8, top: 4),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(
+                  hasMetPart135Baseline ? Icons.check_circle : Icons.cancel,
+                  size: 16,
+                  color: hasMetPart135Baseline ? Colors.green : Colors.red,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Tooltip(
+                    message: baselineFlightTooltip ??
+                        baselineFlightLabel ??
+                        'Part 135 Minimums',
+                    child: Text(
+                      baselineFlightLabel ?? 'Part 135 Minimums',
+                      style: TextStyle(
+                        color:
+                            hasMetPart135Baseline ? Colors.green : Colors.red,
+                        decoration: hasMetPart135Baseline
+                            ? null
+                            : TextDecoration.lineThrough,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
     );
     final instructorRows = _buildMatchHoursRows(
       sectionTitle: 'Instructor Hours:',
@@ -13012,8 +14511,8 @@ class JobDetailsPage extends StatelessWidget {
           const SizedBox(height: 8),
         ],
         ...flightRows,
-        ...instructorRows,
         ...specialtyRows,
+        ...instructorRows,
         if (!hasVisibleResults)
           Container(
             width: double.infinity,
@@ -13038,16 +14537,18 @@ class JobDetailsPage extends StatelessWidget {
     required bool Function(String hourName) isPreferredFor,
     required int Function(String hourName) profileHoursFor,
     required bool Function(String hourName) hasExperienceFor,
+    List<Widget> leadingRows = const [],
   }) {
     final visibleEntries = entries.toList();
 
-    if (visibleEntries.isEmpty) {
+    if (visibleEntries.isEmpty && leadingRows.isEmpty) {
       return const [];
     }
 
     return [
       const SizedBox(height: 8),
       Text(sectionTitle, style: const TextStyle(fontWeight: FontWeight.bold)),
+      ...leadingRows,
       ...visibleEntries.map((entry) {
         final isPreferred = isPreferredFor(entry.key);
         final profileHours = profileHoursFor(entry.key);
@@ -13178,8 +14679,10 @@ class PublicCompanyInfoPage extends StatelessWidget {
 
   String get _contactEmailValue => employerProfile?.contactEmail.trim() ?? '';
 
+    String get _contactPhoneRaw => employerProfile?.contactPhone.trim() ?? '';
+
   String get _contactPhoneValue =>
-      _formatPhoneNumber(employerProfile?.contactPhone.trim() ?? '');
+      _formatPhoneNumber(_contactPhoneRaw);
 
   String get _descriptionValue =>
       employerProfile?.companyDescription.trim() ?? '';
@@ -13188,16 +14691,7 @@ class PublicCompanyInfoPage extends StatelessWidget {
       employerProfile?.companyBenefits ?? const [];
 
   Future<void> _openWebsite(BuildContext context) async {
-    final rawWebsite = _websiteValue;
-    if (rawWebsite.isEmpty) {
-      return;
-    }
-
-    final normalized =
-        rawWebsite.startsWith('http://') || rawWebsite.startsWith('https://')
-        ? rawWebsite
-        : 'https://$rawWebsite';
-    final uri = Uri.tryParse(normalized);
+    final uri = _parseLaunchableHttpUri(_websiteValue);
     if (uri == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Could not open the company website.')),
@@ -13209,6 +14703,23 @@ class PublicCompanyInfoPage extends StatelessWidget {
     if (!launched && context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Could not open the company website.')),
+      );
+    }
+  }
+
+  Future<void> _openPhone(BuildContext context) async {
+    final uri = _parseLaunchablePhoneUri(_contactPhoneRaw);
+    if (uri == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not start a phone call.')),
+      );
+      return;
+    }
+
+    final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!launched && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not start a phone call.')),
       );
     }
   }
@@ -13258,6 +14769,9 @@ class PublicCompanyInfoPage extends StatelessWidget {
     final contactNameValue = _contactNameValue;
     final contactEmailValue = _contactEmailValue;
     final contactPhoneValue = _contactPhoneValue;
+    final canCallPhone =
+      _isMobileDialPlatform() &&
+      _parseLaunchablePhoneUri(_contactPhoneRaw) != null;
     final descriptionValue = _descriptionValue;
     final companyBenefits = _companyBenefits;
 
@@ -13410,9 +14924,31 @@ class PublicCompanyInfoPage extends StatelessWidget {
                         context: context,
                         title: 'About Company',
                         icon: Icons.info_outline,
-                        child: Text(
-                          descriptionValue,
+                        child: _LinkifiedText(
+                          text: descriptionValue,
                           style: Theme.of(context).textTheme.bodyLarge,
+                          onTapUrl: (url) async {
+                            final uri = _parseLaunchableHttpUri(url);
+                            if (uri == null) {
+                              if (!context.mounted) {
+                                return;
+                              }
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('Could not open this link.')),
+                              );
+                              return;
+                            }
+
+                            final launched = await launchUrl(
+                              uri,
+                              mode: LaunchMode.externalApplication,
+                            );
+                            if (!launched && context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('Could not open this link.')),
+                              );
+                            }
+                          },
                         ),
                       ),
                     if (companyBenefits.isNotEmpty)
@@ -13471,9 +15007,25 @@ class PublicCompanyInfoPage extends StatelessWidget {
                             style: Theme.of(context).textTheme.bodyMedium,
                           ),
                           const SizedBox(height: 6),
-                          Text(
-                            'Contact Phone: ${contactPhoneValue.isNotEmpty ? contactPhoneValue : 'Not provided'}',
-                            style: Theme.of(context).textTheme.bodyMedium,
+                          GestureDetector(
+                            onTap: canCallPhone
+                                ? () {
+                                    _openPhone(context);
+                                  }
+                                : null,
+                            child: Text(
+                              'Contact Phone: ${contactPhoneValue.isNotEmpty ? contactPhoneValue : 'Not provided'}',
+                              style: Theme.of(context).textTheme.bodyMedium
+                                  ?.copyWith(
+                                    color: canCallPhone ? Colors.blue : null,
+                                    decoration: canCallPhone
+                                        ? TextDecoration.underline
+                                        : null,
+                                    decorationColor: canCallPhone
+                                        ? Colors.blue
+                                        : null,
+                                  ),
+                            ),
                           ),
                         ],
                       ),

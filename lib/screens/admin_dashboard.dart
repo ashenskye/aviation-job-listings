@@ -16,6 +16,9 @@ import '../repositories/app_repository.dart';
 
 enum AdminInterfaceView { admin, employer, jobSeeker }
 
+/// Logical-pixel width below which phone-optimized layouts are applied.
+const double kPhoneBreakpoint = 430.0;
+
 /// Full-screen admin dashboard shown to users with role='admin'.
 class AdminDashboard extends StatefulWidget {
   const AdminDashboard({
@@ -149,7 +152,7 @@ class _AdminDashboardState extends State<AdminDashboard>
   Widget build(BuildContext context) {
     final screenWidth = MediaQuery.sizeOf(context).width;
     final showRoleChip = screenWidth >= 520;
-    final showAdminEmail = screenWidth >= 430;
+    final showAdminEmail = screenWidth >= kPhoneBreakpoint;
 
     return Scaffold(
       appBar: AppBar(
@@ -203,18 +206,74 @@ class _AdminDashboardState extends State<AdminDashboard>
             onPressed: _signOut,
           ),
         ],
-        bottom: TabBar(
-          controller: _tabController,
-          labelColor: Colors.white,
-          unselectedLabelColor: Colors.white60,
-          indicatorColor: Colors.white,
-          tabs: const [
-            Tab(icon: Icon(Icons.dashboard), text: 'Dashboard'),
-            Tab(icon: Icon(Icons.gavel), text: 'Moderation'),
-            Tab(icon: Icon(Icons.post_add), text: 'External Posts'),
-            Tab(icon: Icon(Icons.people), text: 'Users & Data'),
-            Tab(icon: Icon(Icons.history), text: 'Audit Logs'),
-          ],
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(72),
+          child: SizedBox(
+            height: 72,
+            child: Stack(
+              children: [
+                TabBar(
+                  controller: _tabController,
+                  isScrollable: true,
+                  tabAlignment: TabAlignment.start,
+                  labelColor: Colors.white,
+                  unselectedLabelColor: Colors.white60,
+                  indicatorColor: Colors.white,
+                  tabs: const [
+                    Tab(icon: Icon(Icons.dashboard), text: 'Dashboard'),
+                    Tab(icon: Icon(Icons.gavel), text: 'Moderation'),
+                    Tab(icon: Icon(Icons.post_add), text: 'External Posts'),
+                    Tab(icon: Icon(Icons.people), text: 'Users & Data'),
+                    Tab(icon: Icon(Icons.history), text: 'Audit Logs'),
+                  ],
+                ),
+                Positioned(
+                  left: 0,
+                  top: 0,
+                  bottom: 0,
+                  child: IgnorePointer(
+                    child: Container(
+                      width: 28,
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.centerLeft,
+                          end: Alignment.centerRight,
+                          stops: const [0, 0.45, 1],
+                          colors: [
+                            Colors.red.shade700,
+                            Colors.red.shade700.withValues(alpha: 0.58),
+                            Colors.red.shade700.withValues(alpha: 0),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  right: 0,
+                  top: 0,
+                  bottom: 0,
+                  child: IgnorePointer(
+                    child: Container(
+                      width: 28,
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.centerRight,
+                          end: Alignment.centerLeft,
+                          stops: const [0, 0.45, 1],
+                          colors: [
+                            Colors.red.shade700,
+                            Colors.red.shade700.withValues(alpha: 0.58),
+                            Colors.red.shade700.withValues(alpha: 0),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
       body: TabBarView(
@@ -344,6 +403,11 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
   final Set<String> _preferredInstructorHours = <String>{};
   final Map<String, int> _selectedSpecialtyHours = <String, int>{};
   final Set<String> _preferredSpecialtyHours = <String>{};
+  bool _hoursPicSicExpanded = false;
+  bool _hoursOtherExpanded = false;
+  bool _hoursSpecialtyExpanded = false;
+  bool _hoursInstructionExpanded = false;
+  String _hoursGroupFilter = 'all';
 
   @override
   void initState() {
@@ -712,6 +776,11 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
     _preferredInstructorHours.clear();
     _selectedSpecialtyHours.clear();
     _preferredSpecialtyHours.clear();
+    _hoursPicSicExpanded = false;
+    _hoursOtherExpanded = false;
+    _hoursSpecialtyExpanded = false;
+    _hoursInstructionExpanded = false;
+    _hoursGroupFilter = 'all';
     _editingListing = null;
   }
 
@@ -877,19 +946,19 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
         ..addAll(listing.faaCertificates);
       _selectedFlightHours
         ..clear()
-        ..addAll(listing.flightHours);
+        ..addAll(listing.flightHoursByType);
       _preferredFlightHours
         ..clear()
         ..addAll(listing.preferredFlightHours);
       _selectedInstructorHours
         ..clear()
-        ..addAll(listing.instructorHours);
+        ..addAll(listing.instructorHoursByType);
       _preferredInstructorHours
         ..clear()
         ..addAll(listing.preferredInstructorHours);
       _selectedSpecialtyHours
         ..clear()
-        ..addAll(listing.specialtyHours);
+        ..addAll(listing.specialtyHoursByType);
       _preferredSpecialtyHours
         ..clear()
         ..addAll(listing.preferredSpecialtyHours);
@@ -1386,6 +1455,26 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
     return entries.map((entry) => '${entry.key}: ${entry.value}').join(', ');
   }
 
+  String _formatHoursWithFallback(
+    Map<String, int> values,
+    Iterable<String> categories,
+  ) {
+    final mapped = values.entries.where((entry) => entry.value > 0).toList();
+    if (mapped.isNotEmpty) {
+      return mapped.map((entry) => '${entry.key}: ${entry.value}').join(', ');
+    }
+
+    final fallback = categories
+        .map((value) => value.trim())
+        .where((value) => value.isNotEmpty)
+        .toSet()
+        .toList();
+    if (fallback.isNotEmpty) {
+      return '${fallback.join(', ')} (category only)';
+    }
+    return 'None';
+  }
+
   Future<void> _showExternalListingDetails(JobListing listing) async {
     await showDialog<void>(
       context: context,
@@ -1430,18 +1519,20 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
                   'Type Ratings: ${_joinOrNone(listing.typeRatingsRequired)}',
                 ),
                 Text('Aircraft: ${_joinOrNone(listing.aircraftFlown)}'),
-                Text('Flight Hours: ${_formatHoursMap(listing.flightHours)}'),
+                Text(
+                  'Flight Hours: ${_formatHoursWithFallback(listing.flightHours, listing.flightHoursByType.keys)}',
+                ),
                 Text(
                   'Preferred Flight Hours: ${_joinOrNone(listing.preferredFlightHours)}',
                 ),
                 Text(
-                  'Instructor Hours: ${_formatHoursMap(listing.instructorHours)}',
+                  'Instructor Hours: ${_formatHoursWithFallback(listing.instructorHours, listing.instructorHoursByType.keys)}',
                 ),
                 Text(
                   'Preferred Instructor Hours: ${_joinOrNone(listing.preferredInstructorHours)}',
                 ),
                 Text(
-                  'Specialty Hours: ${_formatHoursMap(listing.specialtyHours)}',
+                  'Specialty Hours: ${_formatHoursWithFallback(listing.specialtyHours, listing.specialtyHoursByType.keys)}',
                 ),
                 Text(
                   'Preferred Specialty Hours: ${_joinOrNone(listing.preferredSpecialtyHours)}',
@@ -1928,29 +2019,31 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
                         'Part 135 Operating Type *',
                         style: TextStyle(fontWeight: FontWeight.w600),
                       ),
-                      RadioListTile<String>(
-                        title: const Text('IFR / Commuter'),
-                        subtitle: const Text('1,200 TT · 500 XC · 100 Night · 75 Instrument'),
-                        value: 'ifr',
+                      RadioGroup<String>(
                         groupValue: _part135SubType,
                         onChanged: (value) {
+                          if (value == null) {
+                            return;
+                          }
                           setState(() {
                             _part135SubType = value;
-                            _applyPart135Minimums('ifr');
+                            _applyPart135Minimums(value);
                           });
                         },
-                      ),
-                      RadioListTile<String>(
-                        title: const Text('VFR Only'),
-                        subtitle: const Text('500 TT · 100 XC · 25 Night'),
-                        value: 'vfr',
-                        groupValue: _part135SubType,
-                        onChanged: (value) {
-                          setState(() {
-                            _part135SubType = value;
-                            _applyPart135Minimums('vfr');
-                          });
-                        },
+                        child: Column(
+                          children: const [
+                            RadioListTile<String>(
+                              title: Text('IFR / Commuter'),
+                              subtitle: Text('1,200 TT · 500 XC · 100 Night · 75 Instrument'),
+                              value: 'ifr',
+                            ),
+                            RadioListTile<String>(
+                              title: Text('VFR Only'),
+                              subtitle: Text('500 TT · 100 XC · 25 Night'),
+                              value: 'vfr',
+                            ),
+                          ],
+                        ),
                       ),
                     ],
                   ),
@@ -2005,26 +2098,7 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
                 },
               ),
               const SizedBox(height: 12),
-              _buildHoursRequirementSection(
-                title: 'Flight Hours (optional)',
-                options: _availableEmployerFlightHours,
-                selectedHours: _selectedFlightHours,
-                preferredHours: _preferredFlightHours,
-              ),
-              const SizedBox(height: 12),
-              _buildHoursRequirementSection(
-                title: 'Instructor Hours (optional)',
-                options: _availableInstructorHours,
-                selectedHours: _selectedInstructorHours,
-                preferredHours: _preferredInstructorHours,
-              ),
-              const SizedBox(height: 12),
-              _buildHoursRequirementSection(
-                title: 'Specialty Hours (optional)',
-                options: _availableSpecialtyExperience,
-                selectedHours: _selectedSpecialtyHours,
-                preferredHours: _preferredSpecialtyHours,
-              ),
+              _buildCategorizedHoursRequirementSection(),
               const SizedBox(height: 12),
               TextField(
                 controller: _aircraftController,
@@ -2127,12 +2201,87 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
     );
   }
 
-  Widget _buildHoursRequirementSection({
-    required String title,
-    required List<String> options,
+  double _hourSliderMax(String label) {
+    switch (label) {
+      case 'Total Time':
+        return 5000;
+      case 'Total PIC Time':
+      case 'Total SIC Time':
+        return 3000;
+      case 'PIC Turbine':
+      case 'SIC Turbine':
+        return 1500;
+      case 'PIC Jet':
+      case 'SIC Jet':
+      case 'Total Instructor Hours':
+      case 'Cross-Country':
+      case 'Alaska Time':
+        return 1000;
+      case 'Multi-engine':
+      case 'Fire Fighting':
+        return 2000;
+      default:
+        return 500;
+    }
+  }
+
+  Widget _buildHoursInputRow({
+    required String label,
     required Map<String, int> selectedHours,
     required Set<String> preferredHours,
   }) {
+    final value = (selectedHours[label] ?? 0).clamp(0, _hourSliderMax(label).toInt());
+    final isSelected = value > 0;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _AdminHourSliderRow(
+          label: label,
+          sliderMax: _hourSliderMax(label),
+          value: value,
+          onChanged: (next) {
+            setState(() {
+              if (next <= 0) {
+                selectedHours.remove(label);
+                preferredHours.remove(label);
+              } else {
+                selectedHours[label] = next;
+              }
+            });
+          },
+        ),
+        if (isSelected)
+          Padding(
+            padding: const EdgeInsets.only(left: 116, right: 4, bottom: 8),
+            child: DropdownButtonFormField<String>(
+              initialValue: preferredHours.contains(label)
+                  ? 'Preferred'
+                  : 'Required',
+              isDense: true,
+              decoration: const InputDecoration(
+                labelText: 'Requirement',
+                border: OutlineInputBorder(),
+              ),
+              items: const [
+                DropdownMenuItem(value: 'Required', child: Text('Required')),
+                DropdownMenuItem(value: 'Preferred', child: Text('Preferred')),
+              ],
+              onChanged: (value) {
+                setState(() {
+                  if (value == 'Preferred') {
+                    preferredHours.add(label);
+                  } else {
+                    preferredHours.remove(label);
+                  }
+                });
+              },
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildCategorizedHoursRequirementSection() {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -2142,76 +2291,145 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
-          const SizedBox(height: 8),
-          ...options.map((option) {
-            final isChecked = selectedHours.containsKey(option);
-            final isPreferred = preferredHours.contains(option);
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                CheckboxListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  title: Text(option),
-                  value: isChecked,
-                  onChanged: (selected) {
-                    setState(() {
-                      if (selected == true) {
-                        selectedHours.putIfAbsent(option, () => 0);
-                      } else {
-                        selectedHours.remove(option);
-                        preferredHours.remove(option);
-                      }
-                    });
-                  },
-                ),
-                if (isChecked)
-                  Padding(
-                    padding: const EdgeInsets.only(
-                      left: 12,
-                      right: 12,
-                      bottom: 8,
-                    ),
-                    child: Column(
+          const Text(
+            'MINIMUM EXPERIENCE (HOURS)',
+            style: TextStyle(fontWeight: FontWeight.w700, fontSize: 11, letterSpacing: 0.8),
+          ),
+          const SizedBox(height: 6),
+          _buildHoursInputRow(
+            label: 'Total Time',
+            selectedHours: _selectedFlightHours,
+            preferredHours: _preferredFlightHours,
+          ),
+          ExpansionTile(
+            key: ValueKey('admin-hours-picsic-${_hoursPicSicExpanded ? 'open' : 'closed'}'),
+            initiallyExpanded: _hoursPicSicExpanded,
+            onExpansionChanged: (expanded) {
+              setState(() => _hoursPicSicExpanded = expanded);
+            },
+            tilePadding: EdgeInsets.zero,
+            title: const Text('PIC / SIC TIME', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: 0.8)),
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Row(
+                  children: [
+                    const Text('Show:', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                    const SizedBox(width: 8),
+                    Wrap(
+                      spacing: 6,
                       children: [
-                        TextFormField(
-                          key: ValueKey('$title-$option'),
-                          keyboardType: TextInputType.number,
-                          initialValue: (selectedHours[option] ?? 0) > 0
-                              ? (selectedHours[option] ?? 0).toString()
-                              : '',
-                          decoration: InputDecoration(
-                            labelText: 'Hours for $option',
-                            border: const OutlineInputBorder(),
-                            isDense: true,
-                          ),
-                          onChanged: (value) {
-                            final parsed = int.tryParse(value.trim()) ?? 0;
-                            selectedHours[option] = parsed;
-                          },
+                        ChoiceChip(
+                          label: const Text('ALL'),
+                          selected: _hoursGroupFilter == 'all',
+                          onSelected: (_) => setState(() => _hoursGroupFilter = 'all'),
                         ),
-                        CheckboxListTile(
-                          contentPadding: EdgeInsets.zero,
-                          dense: true,
-                          title: const Text('Mark as preferred (optional)'),
-                          value: isPreferred,
-                          onChanged: (preferred) {
-                            setState(() {
-                              if (preferred == true) {
-                                preferredHours.add(option);
-                              } else {
-                                preferredHours.remove(option);
-                              }
-                            });
-                          },
+                        ChoiceChip(
+                          label: const Text('PIC'),
+                          selected: _hoursGroupFilter == 'pic',
+                          onSelected: (_) => setState(() => _hoursGroupFilter = 'pic'),
+                        ),
+                        ChoiceChip(
+                          label: const Text('SIC'),
+                          selected: _hoursGroupFilter == 'sic',
+                          onSelected: (_) => setState(() => _hoursGroupFilter = 'sic'),
                         ),
                       ],
                     ),
+                  ],
+                ),
+              ),
+              if (_hoursGroupFilter != 'sic')
+                _buildHoursInputRow(
+                  label: 'Total PIC Time',
+                  selectedHours: _selectedFlightHours,
+                  preferredHours: _preferredFlightHours,
+                ),
+              if (_hoursGroupFilter != 'pic')
+                _buildHoursInputRow(
+                  label: 'Total SIC Time',
+                  selectedHours: _selectedFlightHours,
+                  preferredHours: _preferredFlightHours,
+                ),
+              if (_hoursGroupFilter != 'sic')
+                _buildHoursInputRow(
+                  label: 'PIC Turbine',
+                  selectedHours: _selectedFlightHours,
+                  preferredHours: _preferredFlightHours,
+                ),
+              if (_hoursGroupFilter != 'pic')
+                _buildHoursInputRow(
+                  label: 'SIC Turbine',
+                  selectedHours: _selectedFlightHours,
+                  preferredHours: _preferredFlightHours,
+                ),
+              if (_hoursGroupFilter != 'sic')
+                _buildHoursInputRow(
+                  label: 'PIC Jet',
+                  selectedHours: _selectedFlightHours,
+                  preferredHours: _preferredFlightHours,
+                ),
+              if (_hoursGroupFilter != 'pic')
+                _buildHoursInputRow(
+                  label: 'SIC Jet',
+                  selectedHours: _selectedFlightHours,
+                  preferredHours: _preferredFlightHours,
+                ),
+            ],
+          ),
+          ExpansionTile(
+            key: ValueKey('admin-hours-other-${_hoursOtherExpanded ? 'open' : 'closed'}'),
+            initiallyExpanded: _hoursOtherExpanded,
+            onExpansionChanged: (expanded) {
+              setState(() => _hoursOtherExpanded = expanded);
+            },
+            tilePadding: EdgeInsets.zero,
+            title: const Text('OTHER CATEGORIES', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: 0.8)),
+            children: [
+              for (final label in const ['Multi-engine', 'Instrument', 'Cross-Country', 'Night'])
+                _buildHoursInputRow(
+                  label: label,
+                  selectedHours: _selectedFlightHours,
+                  preferredHours: _preferredFlightHours,
+                ),
+            ],
+          ),
+          ExpansionTile(
+            key: ValueKey('admin-hours-specialty-${_hoursSpecialtyExpanded ? 'open' : 'closed'}'),
+            initiallyExpanded: _hoursSpecialtyExpanded,
+            onExpansionChanged: (expanded) {
+              setState(() => _hoursSpecialtyExpanded = expanded);
+            },
+            tilePadding: EdgeInsets.zero,
+            title: const Text('SPECIALTY HOURS', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: 0.8)),
+            children: _availableSpecialtyExperience
+                .map(
+                  (label) => _buildHoursInputRow(
+                    label: label,
+                    selectedHours: _selectedSpecialtyHours,
+                    preferredHours: _preferredSpecialtyHours,
                   ),
-              ],
-            );
-          }),
+                )
+                .toList(),
+          ),
+          ExpansionTile(
+            key: ValueKey('admin-hours-instruction-${_hoursInstructionExpanded ? 'open' : 'closed'}'),
+            initiallyExpanded: _hoursInstructionExpanded,
+            onExpansionChanged: (expanded) {
+              setState(() => _hoursInstructionExpanded = expanded);
+            },
+            tilePadding: EdgeInsets.zero,
+            title: const Text('FLIGHT INSTRUCTION', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: 0.8)),
+            children: _availableInstructorHours
+                .map(
+                  (label) => _buildHoursInputRow(
+                    label: label,
+                    selectedHours: _selectedInstructorHours,
+                    preferredHours: _preferredInstructorHours,
+                  ),
+                )
+                .toList(),
+          ),
         ],
       ),
     );
@@ -2242,6 +2460,10 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
               ?.toLocal()
               .toString()
               .substring(0, 19);
+            final totalHourItems =
+              listing.flightHoursByType.length +
+              listing.instructorHoursByType.length +
+              listing.specialtyHoursByType.length;
 
           return Card(
             margin: const EdgeInsets.only(bottom: 10),
@@ -2275,6 +2497,15 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
                     Text('${listing.company} • ${listing.location}'),
                     const SizedBox(height: 4),
                     Text('Type: ${listing.type}'),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Hours items: $totalHourItems',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey.shade700,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
                     if (listing.externalApplyUrl?.trim().isNotEmpty ??
                         false) ...[
                       const SizedBox(height: 4),
@@ -2373,6 +2604,111 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
             ),
           );
         },
+      ),
+    );
+  }
+}
+
+class _AdminHourSliderRow extends StatefulWidget {
+  const _AdminHourSliderRow({
+    required this.label,
+    required this.sliderMax,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final String label;
+  final double sliderMax;
+  final int value;
+  final void Function(int value) onChanged;
+
+  @override
+  State<_AdminHourSliderRow> createState() => _AdminHourSliderRowState();
+}
+
+class _AdminHourSliderRowState extends State<_AdminHourSliderRow> {
+  late final TextEditingController _controller;
+  bool _isEditing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(
+      text: widget.value > 0 ? '${widget.value}' : '',
+    );
+  }
+
+  @override
+  void didUpdateWidget(_AdminHourSliderRow oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!_isEditing && oldWidget.value != widget.value) {
+      _controller.text = widget.value > 0 ? '${widget.value}' : '';
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 112,
+            child: Text(widget.label, style: const TextStyle(fontSize: 13)),
+          ),
+          Expanded(
+            child: Slider(
+              value: widget.value.toDouble().clamp(0, widget.sliderMax),
+              min: 0,
+              max: widget.sliderMax,
+              divisions: widget.sliderMax > 1000 ? 50 : 20,
+              onChanged: (value) {
+                final rounded = value.round();
+                _controller.text = rounded > 0 ? '$rounded' : '';
+                widget.onChanged(rounded);
+              },
+            ),
+          ),
+          SizedBox(
+            width: 52,
+            child: TextField(
+              controller: _controller,
+              keyboardType: TextInputType.number,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 12),
+              decoration: InputDecoration(
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 4,
+                  vertical: 6,
+                ),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                isDense: true,
+              ),
+              onTap: () => setState(() => _isEditing = true),
+              onEditingComplete: () => setState(() => _isEditing = false),
+              onChanged: (text) {
+                final parsed = int.tryParse(text.trim());
+                if (parsed != null) {
+                  final clamped = parsed.clamp(0, widget.sliderMax.toInt());
+                  widget.onChanged(clamped);
+                } else if (text.trim().isEmpty) {
+                  widget.onChanged(0);
+                }
+              },
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -3655,7 +3991,7 @@ class _UsersDataTabState extends State<_UsersDataTab> {
   }
 
   Widget _buildAdminJobListingTile(JobListing listing) {
-    final isVeryNarrow = MediaQuery.sizeOf(context).width < 430;
+    final isVeryNarrow = MediaQuery.sizeOf(context).width < kPhoneBreakpoint;
     final subtitleSegments = <String>[listing.location, listing.type];
     if (!listing.isActive && isVeryNarrow) {
       subtitleSegments.add('Archived');
@@ -3682,7 +4018,7 @@ class _UsersDataTabState extends State<_UsersDataTab> {
   }
 
   Widget _buildAdminApplicationTile(Application application) {
-    final isVeryNarrow = MediaQuery.sizeOf(context).width < 430;
+    final isVeryNarrow = MediaQuery.sizeOf(context).width < kPhoneBreakpoint;
     final locationParts = [
       application.applicantCity.trim(),
       application.applicantStateOrProvince.trim(),

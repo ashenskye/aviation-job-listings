@@ -3,6 +3,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:aviation_job_listings/models/aviation_option_catalogs.dart';
 
 void main() {
+  test('specialty experience options include Alaska Time', () {
+    expect(availableSpecialtyExperienceOptions, contains('Alaska Time'));
+  });
+
   test('specialty experience options include Ski-plane', () {
     expect(availableSpecialtyExperienceOptions, contains('Ski-plane'));
   });
