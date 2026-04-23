@@ -3483,6 +3483,24 @@ class _MyHomePageState extends State<MyHomePage> {
               requiredFlightHourLabels: draftProfile.flightHoursTypes,
               requiredSpecialtyHourLabels: draftProfile.specialtyFlightHours,
             ).toSet();
+            final seekerInstrumentHoursSelected =
+                draftProfile.flightHoursTypes.contains('Instrument');
+            final seekerMissingInstrumentRating =
+                seekerInstrumentHoursSelected &&
+                !draftProfile.faaCertificates.contains(
+                  'Instrument Rating (IFR)',
+                );
+            final seekerMissingRatingsByHours = {
+              ...seekerMissingImpliedRatings,
+              if (seekerMissingInstrumentRating) 'Instrument Rating (IFR)',
+            };
+            final seekerHasHoursTriggeredRatingRules =
+                _missingImpliedRatingRuleMessages(
+                      selectedRatings: const <String>[],
+                      requiredFlightHourLabels: draftProfile.flightHoursTypes,
+                      requiredSpecialtyHourLabels: draftProfile.specialtyFlightHours,
+                    ).isNotEmpty ||
+                seekerInstrumentHoursSelected;
             final seekerMissingInstructorCerts =
                 _requiredInstructorCertificatesForHours(
                       _availableInstructorHours.where(
@@ -3503,13 +3521,13 @@ class _MyHomePageState extends State<MyHomePage> {
                 draftProfile.faaCertificates.any(
                   _availableRatingSelections.contains,
                 ) &&
-                seekerMissingImpliedRatings.isEmpty;
+                seekerMissingRatingsByHours.isEmpty;
             final seekerHoursSatisfied =
                 (draftProfile.flightHours['Total Time'] ?? 0) > 0;
 
             Widget ratingTitle(String rating) {
               final isMissingImpliedRating =
-                  seekerMissingImpliedRatings.contains(rating) &&
+                  seekerMissingRatingsByHours.contains(rating) &&
                   !draftProfile.faaCertificates.contains(rating);
               if (!isMissingImpliedRating) {
                 return Text(rating);
@@ -4044,15 +4062,21 @@ class _MyHomePageState extends State<MyHomePage> {
                       ),
                       qualificationSection(
                         sectionKey: 'Ratings',
-                        title: seekerRatingsSatisfied
-                          ? 'Ratings'
-                          : seekerMissingImpliedRatings.isNotEmpty
-                          ? 'Ratings * (Review implied ratings)'
-                          : 'Ratings *',
-                        isSatisfied: seekerRatingsSatisfied,
-                        subtitle: seekerMissingImpliedRatings.isNotEmpty
+                        title: seekerHasHoursTriggeredRatingRules
+                          ? seekerRatingsSatisfied
+                            ? 'Ratings'
+                            : seekerMissingImpliedRatings.isNotEmpty
+                            ? 'Ratings * (Review implied ratings)'
+                            : 'Ratings *'
+                          : 'Ratings (Optional)',
+                        isSatisfied: seekerHasHoursTriggeredRatingRules
+                          ? seekerRatingsSatisfied
+                          : null,
+                        subtitle: seekerHasHoursTriggeredRatingRules
+                          ? seekerMissingRatingsByHours.isNotEmpty
                             ? 'Ratings marked Required by hours should be selected.'
-                            : 'Add airframe/rating details for matching.',
+                            : 'Required ratings are satisfied for selected hours.'
+                          : 'Add airframe/rating details for matching (optional).',
                         icon: Icons.tune_outlined,
                         child: Column(
                           children: [
