@@ -41,8 +41,8 @@ void main() {
     final nightIndex = opts.indexOf('Night');
 
     expect(multiEngineIndex, isNonNegative);
-    expect(instrumentIndex, multiEngineIndex + 1);
-    expect(crossCountryIndex, greaterThan(instrumentIndex));
+    expect(instrumentIndex, multiEngineIndex + 2);
+    expect(crossCountryIndex, instrumentIndex + 1);
     expect(nightIndex, crossCountryIndex + 1);
   });
 

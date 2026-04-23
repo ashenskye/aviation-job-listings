@@ -362,7 +362,7 @@ void main() {
 
     await _selectFilterOption(
       tester,
-      sectionTitle: 'Flight Instruction',
+      sectionTitle: 'Instructor',
       optionText: 'Flight Instructor (CFI)',
     );
 
