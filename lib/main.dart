@@ -15600,11 +15600,50 @@ class _SearchHourSliderRow extends StatefulWidget {
 
 class _SearchHourSliderRowState extends State<_SearchHourSliderRow> {
   late final TextEditingController _controller;
+  late final FocusNode _focusNode;
   bool _isEditing = false;
+
+  int _snapHourValue(int raw, int max) {
+    final clampedMax = max < 0 ? 0 : max;
+    final candidates = <int>{0};
+    for (var value = 25; value <= clampedMax && value <= 300; value += 25) {
+      candidates.add(value);
+    }
+    for (var value = 400; value <= clampedMax; value += 100) {
+      candidates.add(value);
+    }
+    candidates.add(clampedMax);
+
+    var nearest = 0;
+    var nearestDiff = 1 << 30;
+    for (final candidate in candidates) {
+      final diff = (candidate - raw).abs();
+      if (diff < nearestDiff || (diff == nearestDiff && candidate < nearest)) {
+        nearestDiff = diff;
+        nearest = candidate;
+      }
+    }
+    return nearest;
+  }
+
+  void _commitTextValue() {
+    final parsed = int.tryParse(_controller.text.trim()) ?? 0;
+    final snapped = _snapHourValue(parsed, widget.sliderMax.toInt());
+    final text = snapped > 0 ? '$snapped' : '';
+    _controller.value = TextEditingValue(
+      text: text,
+      selection: TextSelection.collapsed(offset: text.length),
+    );
+    widget.onChanged(snapped);
+    if (mounted) {
+      setState(() => _isEditing = false);
+    }
+  }
 
   @override
   void initState() {
     super.initState();
+    _focusNode = FocusNode();
     _controller = TextEditingController(
       text: widget.value > 0 ? '${widget.value}' : '',
     );
@@ -15620,6 +15659,7 @@ class _SearchHourSliderRowState extends State<_SearchHourSliderRow> {
 
   @override
   void dispose() {
+    _focusNode.dispose();
     _controller.dispose();
     super.dispose();
   }
@@ -15639,11 +15679,18 @@ class _SearchHourSliderRowState extends State<_SearchHourSliderRow> {
               value: widget.value.toDouble().clamp(0, widget.sliderMax),
               min: 0,
               max: widget.sliderMax,
-              divisions: widget.sliderMax > 1000 ? 50 : 20,
+              divisions: widget.sliderMax.toInt().clamp(1, 5000),
               onChanged: (val) {
-                final rounded = val.round();
-                _controller.text = rounded > 0 ? '$rounded' : '';
-                widget.onChanged(rounded);
+                final snapped = _snapHourValue(
+                  val.round(),
+                  widget.sliderMax.toInt(),
+                );
+                final text = snapped > 0 ? '$snapped' : '';
+                _controller.value = TextEditingValue(
+                  text: text,
+                  selection: TextSelection.collapsed(offset: text.length),
+                );
+                widget.onChanged(snapped);
               },
             ),
           ),
@@ -15651,6 +15698,7 @@ class _SearchHourSliderRowState extends State<_SearchHourSliderRow> {
             width: 52,
             child: TextField(
               controller: _controller,
+              focusNode: _focusNode,
               keyboardType: TextInputType.number,
               textAlign: TextAlign.center,
               style: const TextStyle(fontSize: 12),
@@ -15669,13 +15717,25 @@ class _SearchHourSliderRowState extends State<_SearchHourSliderRow> {
                 ),
                 isDense: true,
               ),
-              onTap: () => setState(() => _isEditing = true),
-              onEditingComplete: () => setState(() => _isEditing = false),
+              onTap: () {
+                setState(() => _isEditing = true);
+                _controller.selection = TextSelection(
+                  baseOffset: 0,
+                  extentOffset: _controller.text.length,
+                );
+              },
+              onTapOutside: (_) {
+                _focusNode.unfocus();
+                _commitTextValue();
+              },
+              onSubmitted: (_) => _commitTextValue(),
+              onEditingComplete: _commitTextValue,
               onChanged: (text) {
                 final parsed = int.tryParse(text.trim());
                 if (parsed != null) {
-                  final clamped = parsed.clamp(0, widget.sliderMax.toInt());
-                  widget.onChanged(clamped);
+                  widget.onChanged(
+                    _snapHourValue(parsed, widget.sliderMax.toInt()),
+                  );
                 } else if (text.trim().isEmpty) {
                   widget.onChanged(0);
                 }
