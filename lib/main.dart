@@ -4964,6 +4964,10 @@ class _MyHomePageState extends State<MyHomePage> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('Updated template "${selected.name}".')),
     );
+    if (_editingTemplateId != null) {
+      _closeTemplateEditor();
+      DefaultTabController.maybeOf(context)?.animateTo(3);
+    }
   }
 
   Future<String?> _promptTemplateName({
@@ -15794,78 +15798,201 @@ class JobDetailsPage extends StatelessWidget {
                                 icon: Icons.analytics_outlined,
                                 child: _buildComparisonView(context),
                               ),
-                            _buildDetailSection(
-                              context: context,
-                              title: 'Required FAA Certificates',
-                              icon: Icons.badge_outlined,
-                              child: _buildChipWrap(
-                                job.faaCertificates
-                                    .map(
-                                      (cert) => Chip(
-                                        label: Text(
-                                          canonicalCertificateLabel(cert),
-                                        ),
-                                      ),
-                                    )
-                                    .toList(),
+                            // ── Requirements card ──────────────────────────
+                            Container(
+                              width: double.infinity,
+                              margin: const EdgeInsets.only(top: 12),
+                              padding: const EdgeInsets.all(14),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                border: Border.all(
+                                  color: Colors.grey.shade300,
+                                ),
+                                borderRadius: BorderRadius.circular(12),
                               ),
-                            ),
-                            if (showPart135SummaryChip ||
-                                standardFlightHourEntries.isNotEmpty)
-                              _buildDetailSection(
-                                context: context,
-                                title: 'Flight Hours',
-                                icon: Icons.schedule_outlined,
-                                child: _buildChipWrap(
-                                  [
-                                    if (showPart135SummaryChip)
-                                      Tooltip(
-                                        message: baselineFlightTooltip ??
-                                            baselineFlightLabel,
-                                        child: _buildRequirementChip(
-                                          label: baselineFlightLabel,
-                                          isPreferred: false,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  // Card header
+                                  Row(
+                                    children: [
+                                      Icon(
+                                        Icons.checklist_outlined,
+                                        size: 18,
+                                        color: Colors.blueGrey.shade700,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: Text(
+                                          'Requirements',
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .titleMedium
+                                              ?.copyWith(
+                                                fontWeight: FontWeight.bold,
+                                              ),
                                         ),
                                       ),
-                                    ...standardFlightHourEntries.map(
-                                      (entry) => _buildRequirementChip(
-                                        label: _formatHoursRequirementLabel(
-                                          entry.key,
-                                          entry.value,
-                                          job.preferredFlightHours.contains(
-                                            entry.key,
-                                          ),
-                                        ),
-                                        isPreferred: job.preferredFlightHours
-                                            .contains(entry.key),
+                                    ],
+                                  ),
+                                  // ── Certificates & Ratings ──
+                                  if (job.faaCertificates.isNotEmpty) ...[
+                                    const SizedBox(height: 14),
+                                    _buildRequirementsSubsection(
+                                      context,
+                                      'FAA Certificates',
+                                      Icons.badge_outlined,
+                                      _buildChipWrap(
+                                        job.faaCertificates
+                                            .map(
+                                              (cert) => Chip(
+                                                label: Text(
+                                                  canonicalCertificateLabel(
+                                                    cert,
+                                                  ),
+                                                ),
+                                              ),
+                                            )
+                                            .toList(),
                                       ),
                                     ),
                                   ],
-                                ),
-                              ),
-                            if (job.specialtyHoursByType.isNotEmpty)
-                              _buildDetailSection(
-                                context: context,
-                                title: 'Specialty Hours',
-                                icon: Icons.workspace_premium_outlined,
-                                child: _buildChipWrap(
-                                  job.specialtyHoursByType.entries
-                                      .map(
-                                        (entry) => _buildRequirementChip(
-                                          label: _formatHoursRequirementLabel(
-                                            entry.key,
-                                            entry.value,
-                                            job.preferredSpecialtyHours
+                                  if (job.requiredRatings.isNotEmpty) ...[
+                                    const SizedBox(height: 12),
+                                    _buildRequirementsSubsection(
+                                      context,
+                                      'Required Ratings',
+                                      Icons.fact_check_outlined,
+                                      _buildChipWrap(
+                                        job.requiredRatings
+                                            .map(
+                                              (r) => Chip(label: Text(r)),
+                                            )
+                                            .toList(),
+                                      ),
+                                    ),
+                                  ],
+                                  if (job.typeRatingsRequired.isNotEmpty) ...[
+                                    const SizedBox(height: 12),
+                                    _buildRequirementsSubsection(
+                                      context,
+                                      'Type Ratings',
+                                      Icons.confirmation_number_outlined,
+                                      _buildChipWrap(
+                                        job.typeRatingsRequired
+                                            .map(
+                                              (r) => Chip(label: Text(r)),
+                                            )
+                                            .toList(),
+                                      ),
+                                    ),
+                                  ],
+                                  // ── Flight Time ──
+                                  if (showPart135SummaryChip ||
+                                      standardFlightHourEntries.isNotEmpty) ...[
+                                    const SizedBox(height: 12),
+                                    _buildRequirementsSubsection(
+                                      context,
+                                      'Flight Hours',
+                                      Icons.schedule_outlined,
+                                      _buildChipWrap([
+                                        if (showPart135SummaryChip)
+                                          Tooltip(
+                                            message: baselineFlightTooltip ??
+                                                baselineFlightLabel,
+                                            child: _buildRequirementChip(
+                                              label: baselineFlightLabel,
+                                              isPreferred: false,
+                                            ),
+                                          ),
+                                        ...standardFlightHourEntries.map(
+                                          (entry) => _buildRequirementChip(
+                                            label: _formatHoursRequirementLabel(
+                                              entry.key,
+                                              entry.value,
+                                              job.preferredFlightHours.contains(
+                                                entry.key,
+                                              ),
+                                            ),
+                                            isPreferred: job.preferredFlightHours
                                                 .contains(entry.key),
                                           ),
-                                          isPreferred: job
-                                              .preferredSpecialtyHours
-                                              .contains(entry.key),
                                         ),
-                                      )
-                                      .toList(),
-                                ),
+                                      ]),
+                                    ),
+                                  ],
+                                  if (job.specialtyHoursByType.isNotEmpty) ...[
+                                    const SizedBox(height: 12),
+                                    _buildRequirementsSubsection(
+                                      context,
+                                      'Specialty Hours',
+                                      Icons.workspace_premium_outlined,
+                                      _buildChipWrap(
+                                        job.specialtyHoursByType.entries
+                                            .map(
+                                              (entry) => _buildRequirementChip(
+                                                label:
+                                                    _formatHoursRequirementLabel(
+                                                      entry.key,
+                                                      entry.value,
+                                                      job.preferredSpecialtyHours
+                                                          .contains(entry.key),
+                                                    ),
+                                                isPreferred: job
+                                                    .preferredSpecialtyHours
+                                                    .contains(entry.key),
+                                              ),
+                                            )
+                                            .toList(),
+                                      ),
+                                    ),
+                                  ],
+                                  if (instructorHourEntries.isNotEmpty) ...[
+                                    const SizedBox(height: 12),
+                                    _buildRequirementsSubsection(
+                                      context,
+                                      'Instructor Hours',
+                                      Icons.school_outlined,
+                                      _buildChipWrap(
+                                        instructorHourEntries
+                                            .map(
+                                              (entry) => _buildRequirementChip(
+                                                label:
+                                                    _formatHoursRequirementLabel(
+                                                      entry.key,
+                                                      entry.value,
+                                                      job.preferredInstructorHours
+                                                          .contains(entry.key),
+                                                    ),
+                                                isPreferred: job
+                                                    .preferredInstructorHours
+                                                    .contains(entry.key),
+                                              ),
+                                            )
+                                            .toList(),
+                                      ),
+                                    ),
+                                  ],
+                                  // ── Aircraft Experience ──
+                                  if (job.aircraftFlown.isNotEmpty) ...[
+                                    const SizedBox(height: 12),
+                                    _buildRequirementsSubsection(
+                                      context,
+                                      'Aircraft Experience',
+                                      Icons.flight_outlined,
+                                      _buildChipWrap(
+                                        job.aircraftFlown
+                                            .map(
+                                              (a) => Chip(label: Text(a)),
+                                            )
+                                            .toList(),
+                                      ),
+                                    ),
+                                  ],
+                                ],
                               ),
+                            ),
+                            // ── Job Description ──────────────────────────────
                             _buildDetailSection(
                               context: context,
                               title: 'Job Description',
@@ -15890,69 +16017,6 @@ class JobDetailsPage extends StatelessWidget {
                                   job.benefits
                                       .map(
                                         (benefit) => Chip(label: Text(benefit)),
-                                      )
-                                      .toList(),
-                                ),
-                              ),
-                            if (job.requiredRatings.isNotEmpty)
-                              _buildDetailSection(
-                                context: context,
-                                title: 'Required Ratings',
-                                icon: Icons.fact_check_outlined,
-                                child: _buildChipWrap(
-                                  job.requiredRatings
-                                      .map(
-                                        (rating) => Chip(label: Text(rating)),
-                                      )
-                                      .toList(),
-                                ),
-                              ),
-                            if (job.typeRatingsRequired.isNotEmpty)
-                              _buildDetailSection(
-                                context: context,
-                                title: 'Required Type Ratings',
-                                icon: Icons.confirmation_number_outlined,
-                                child: _buildChipWrap(
-                                  job.typeRatingsRequired
-                                      .map(
-                                        (rating) => Chip(label: Text(rating)),
-                                      )
-                                      .toList(),
-                                ),
-                              ),
-                            if (instructorHourEntries.isNotEmpty)
-                              _buildDetailSection(
-                                context: context,
-                                title: 'Instructor Hours',
-                                icon: Icons.school_outlined,
-                                child: _buildChipWrap(
-                                  instructorHourEntries
-                                      .map(
-                                        (entry) => _buildRequirementChip(
-                                          label: _formatHoursRequirementLabel(
-                                            entry.key,
-                                            entry.value,
-                                            job.preferredInstructorHours
-                                                .contains(entry.key),
-                                          ),
-                                          isPreferred: job
-                                              .preferredInstructorHours
-                                              .contains(entry.key),
-                                        ),
-                                      )
-                                      .toList(),
-                                ),
-                              ),
-                            if (job.aircraftFlown.isNotEmpty)
-                              _buildDetailSection(
-                                context: context,
-                                title: 'Required Aircraft Experience',
-                                icon: Icons.flight_outlined,
-                                child: _buildChipWrap(
-                                  job.aircraftFlown
-                                      .map(
-                                        (aircraft) =>
-                                            Chip(label: Text(aircraft)),
                                       )
                                       .toList(),
                                 ),
@@ -16071,6 +16135,35 @@ class JobDetailsPage extends StatelessWidget {
         style: FilledButton.styleFrom(backgroundColor: Colors.red),
       );
     }
+  }
+
+  Widget _buildRequirementsSubsection(
+    BuildContext context,
+    String label,
+    IconData icon,
+    Widget content,
+  ) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(icon, size: 14, color: Colors.blueGrey.shade600),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: Colors.blueGrey.shade700,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        content,
+      ],
+    );
   }
 
   Widget _buildDetailSection({

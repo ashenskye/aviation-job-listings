@@ -21,6 +21,15 @@ class SupabaseAppRepository implements AppRepository {
 
   String? get _currentUserId => _client.auth.currentUser?.id;
 
+  bool _isMissingRequiredRatingsColumnError(PostgrestException error) {
+    final combined = [error.message, error.details, error.hint]
+        .whereType<String>()
+        .join(' ')
+        .toLowerCase();
+    return combined.contains('required_ratings') &&
+        (combined.contains('column') || combined.contains('schema cache'));
+  }
+
   @override
   Future<Set<String>> loadFavoriteIds() async {
     final userId = _currentUserId;
@@ -257,11 +266,21 @@ class SupabaseAppRepository implements AppRepository {
     }
 
     final payload = _toJobListingRow(job);
-    final inserted = await _client
-        .from('job_listings')
-        .upsert(payload)
-        .select()
-        .single();
+    dynamic inserted;
+    try {
+      inserted = await _client.from('job_listings').upsert(payload).select().single();
+    } on PostgrestException catch (error) {
+      if (!_isMissingRequiredRatingsColumnError(error)) {
+        rethrow;
+      }
+      final fallbackPayload = Map<String, dynamic>.from(payload)
+        ..remove('required_ratings');
+      inserted = await _client
+          .from('job_listings')
+          .upsert(fallbackPayload)
+          .select()
+          .single();
+    }
 
     return JobListing.fromJson(_fromJobListingRow(inserted));
   }
@@ -280,12 +299,27 @@ class SupabaseAppRepository implements AppRepository {
     await _ensureEmployerNotBanned(employerId);
 
     final payload = _toJobListingRow(job)..remove('id');
-    final updatedRows = await _client
-        .from('job_listings')
-        .update(payload)
-        .eq('id', job.id)
-        .eq('employer_id', employerId)
-        .select();
+    List<dynamic> updatedRows;
+    try {
+      updatedRows = await _client
+          .from('job_listings')
+          .update(payload)
+          .eq('id', job.id)
+          .eq('employer_id', employerId)
+          .select();
+    } on PostgrestException catch (error) {
+      if (!_isMissingRequiredRatingsColumnError(error)) {
+        rethrow;
+      }
+      final fallbackPayload = Map<String, dynamic>.from(payload)
+        ..remove('required_ratings');
+      updatedRows = await _client
+          .from('job_listings')
+          .update(fallbackPayload)
+          .eq('id', job.id)
+          .eq('employer_id', employerId)
+          .select();
+    }
 
     if (updatedRows.isEmpty) {
       throw Exception(
