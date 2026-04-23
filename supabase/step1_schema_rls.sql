@@ -104,6 +104,7 @@ create table if not exists public.job_listings (
   part135_sub_type text null check (part135_sub_type in ('ifr', 'vfr')),
   description text not null default '',
   faa_certificates text[] not null default '{}',
+  required_ratings text[] not null default '{}',
   type_ratings_required text[] not null default '{}',
   flight_experience text[] not null default '{}',
   flight_hours jsonb not null default '{}'::jsonb,
@@ -228,6 +229,9 @@ create index if not exists idx_job_listings_faa_rules_gin
 
 create index if not exists idx_job_listings_faa_certificates_gin
   on public.job_listings using gin(faa_certificates);
+
+create index if not exists idx_job_listings_required_ratings_gin
+  on public.job_listings using gin(required_ratings);
 
 create index if not exists idx_job_listings_type_ratings_required_gin
   on public.job_listings using gin(type_ratings_required);

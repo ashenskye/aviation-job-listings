@@ -58,6 +58,7 @@ abstract class AdminRepository {
     List<String> faaRules = const [],
     String? part135SubType,
     List<String> faaCertificates = const [],
+    List<String> requiredRatings = const [],
     List<String> typeRatingsRequired = const [],
     Map<String, int> flightHours = const {},
     List<String> preferredFlightHours = const [],

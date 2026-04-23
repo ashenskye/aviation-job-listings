@@ -345,6 +345,7 @@ class SupabaseAdminRepository implements AdminRepository {
     List<String> faaRules = const [],
     String? part135SubType,
     List<String> faaCertificates = const [],
+    List<String> requiredRatings = const [],
     List<String> typeRatingsRequired = const [],
     Map<String, int> flightHours = const {},
     List<String> preferredFlightHours = const [],
@@ -381,6 +382,7 @@ class SupabaseAdminRepository implements AdminRepository {
       'part135_sub_type': part135SubType,
       'description': description,
       'faa_certificates': faaCertificates,
+      'required_ratings': requiredRatings,
       'type_ratings_required': typeRatingsRequired,
       'flight_experience': flightHours.keys.toList(),
       'flight_hours': flightHours,
@@ -881,6 +883,7 @@ class SupabaseAdminRepository implements AdminRepository {
       'part135_sub_type': job.part135SubType,
       'description': job.description,
       'faa_certificates': job.faaCertificates,
+      'required_ratings': job.requiredRatings,
       'type_ratings_required': job.typeRatingsRequired,
       'flight_experience': job.flightExperience,
       'flight_hours': job.flightHours,
@@ -908,6 +911,11 @@ class SupabaseAdminRepository implements AdminRepository {
   }
 
   Map<String, dynamic> _fromJobListingRow(Map<String, dynamic> row) {
+    final requiredRatings = List<String>.from(
+      (row['required_ratings'] as List?) ??
+          (row['requiredRatings'] as List?) ??
+          const [],
+    );
     return {
       'id': row['id'],
       'employerId': row['employer_id'],
@@ -923,6 +931,7 @@ class SupabaseAdminRepository implements AdminRepository {
       'faaCertificates': List<String>.from(
         (row['faa_certificates'] as List?) ?? const [],
       ),
+      'requiredRatings': requiredRatings,
       'typeRatingsRequired': List<String>.from(
         (row['type_ratings_required'] as List?) ?? const [],
       ),

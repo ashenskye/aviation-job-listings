@@ -658,6 +658,7 @@ class SupabaseAppRepository implements AppRepository {
       'part135_sub_type': job.part135SubType,
       'description': job.description,
       'faa_certificates': job.faaCertificates,
+      'required_ratings': job.requiredRatings,
       'type_ratings_required': job.typeRatingsRequired,
       'flight_experience': job.flightExperience,
       'flight_hours': job.flightHours,
@@ -685,6 +686,11 @@ class SupabaseAppRepository implements AppRepository {
   }
 
   Map<String, dynamic> _fromJobListingRow(Map<String, dynamic> row) {
+    final requiredRatings = List<String>.from(
+      (row['required_ratings'] as List?) ??
+          (row['requiredRatings'] as List?) ??
+          const [],
+    );
     return {
       'id': row['id'],
       'employerId': row['employer_id'],
@@ -700,6 +706,7 @@ class SupabaseAppRepository implements AppRepository {
       'faaCertificates': List<String>.from(
         (row['faa_certificates'] as List?) ?? const [],
       ),
+      'requiredRatings': requiredRatings,
       'typeRatingsRequired': List<String>.from(
         (row['type_ratings_required'] as List?) ?? const [],
       ),

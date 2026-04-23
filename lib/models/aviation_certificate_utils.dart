@@ -23,6 +23,9 @@ String normalizeCertificateName(String certificate) {
     case 'private pilot (pp)':
     case 'pp':
       return 'private pilot';
+    case 'rotorcraft':
+    case 'helicopter':
+      return 'helicopter';
     default:
       return normalized;
   }
@@ -31,6 +34,8 @@ String normalizeCertificateName(String certificate) {
 String canonicalCertificateLabel(String certificate) {
   return normalizeCertificateName(certificate) == 'private pilot'
       ? 'Private Pilot (PPL)'
+      : normalizeCertificateName(certificate) == 'helicopter'
+      ? 'Helicopter'
       : certificate;
 }
 

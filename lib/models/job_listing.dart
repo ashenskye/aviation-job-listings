@@ -1,6 +1,11 @@
 import 'aviation_certificate_utils.dart';
 import 'aviation_option_catalogs.dart';
 
+String _normalizeRequiredRatingLabel(String rating) {
+  final normalized = rating.trim().toLowerCase();
+  return normalized == 'rotorcraft' ? 'Helicopter' : rating;
+}
+
 class JobListing {
   final String id;
   final String title;
@@ -160,10 +165,10 @@ class JobListing {
               ?.map((e) => e.toString())
               .toList() ??
           [],
-        requiredRatings:
+      requiredRatings:
           (json['requiredRatings'] as List<dynamic>?)
-            ?.map((e) => e.toString())
-            .toList() ??
+              ?.map((e) => _normalizeRequiredRatingLabel(e.toString()))
+              .toList() ??
           [],
       typeRatingsRequired:
           (json['typeRatingsRequired'] as List<dynamic>?)

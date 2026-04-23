@@ -99,7 +99,7 @@ const List<String> tailwheelRatingSelectionOptions = [
 ];
 
 const List<String> rotorRatingSelectionOptions = [
-  'Rotorcraft',
+  'Helicopter',
   'Gyroplane',
 ];
 

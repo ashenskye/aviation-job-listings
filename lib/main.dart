@@ -1218,6 +1218,7 @@ class _MyHomePageState extends State<MyHomePage> {
       crewRole: job.crewRole,
       crewPosition: job.crewPosition,
       faaRules: List<String>.from(job.faaRules),
+      part135SubType: job.part135SubType,
       description: job.description,
       faaCertificates: _canonicalizeCertificates(job.faaCertificates),
       requiredRatings: List<String>.from(job.requiredRatings),
@@ -1238,8 +1239,16 @@ class _MyHomePageState extends State<MyHomePage> {
       createdAt: job.createdAt,
       updatedAt: job.updatedAt,
       employerId: job.employerId,
+      autoRejectThreshold: job.autoRejectThreshold,
+      reapplyWindowDays: job.reapplyWindowDays,
       isExternal: job.isExternal,
       externalApplyUrl: job.externalApplyUrl,
+      contactName: job.contactName,
+      contactEmail: job.contactEmail,
+      companyPhone: job.companyPhone,
+      companyUrl: job.companyUrl,
+      isActive: job.isActive,
+      archivedAt: job.archivedAt,
     );
   }
 
@@ -10537,7 +10546,7 @@ class _MyHomePageState extends State<MyHomePage> {
         'Single-Engine Sea',
         'Multi-Engine Sea',
         'Tailwheel Endorsement',
-        'Rotorcraft',
+        'Helicopter',
         'Gyroplane',
         'Glider',
         'Lighter-than-Air',
@@ -10597,7 +10606,7 @@ class _MyHomePageState extends State<MyHomePage> {
       const ['Single-Engine Land', 'Multi-Engine Land'],
       const ['Single-Engine Sea', 'Multi-Engine Sea'],
       const ['Tailwheel Endorsement'],
-      const ['Rotorcraft', 'Gyroplane'],
+      const ['Helicopter', 'Gyroplane'],
       const ['Glider', 'Lighter-than-Air'],
     ]
         .map(

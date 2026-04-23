@@ -3,6 +3,51 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:aviation_job_listings/models/job_listing.dart';
 
 void main() {
+  test('JobListing preserves required listing fields through JSON round-trip', () {
+    final source = JobListing.fromJson({
+      'id': 'required-fields-roundtrip',
+      'title': 'Helicopter Utility Pilot',
+      'company': 'Summit Rotor Ops',
+      'location': 'Boise, ID',
+      'type': 'Full-Time',
+      'crewRole': 'Single Pilot',
+      'crewPosition': null,
+      'faaRules': const <String>['Part 135'],
+      'part135SubType': 'vfr',
+      'description': 'Critical utility missions in varied terrain.',
+      'faaCertificates': const <String>['Commercial Pilot (CPL)'],
+      'requiredRatings': const <String>['Helicopter'],
+      'typeRatingsRequired': const <String>['AS350'],
+      'flightExperience': const <String>['Total Time', 'Flight Instruction (CFI)'],
+      'flightHours': const <String, dynamic>{'Total Time': 1200},
+      'preferredFlightHours': const <String>['Night'],
+      'instructorHours': const <String, dynamic>{'Flight Instruction (CFI)': 200},
+      'preferredInstructorHours': const <String>['Instrument (CFII)'],
+      'specialtyExperience': const <String>['Fire Fighting'],
+      'specialtyHours': const <String, dynamic>{'Fire Fighting': 150},
+      'preferredSpecialtyHours': const <String>['Aerial Survey'],
+      'aircraftFlown': const <String>['AS350'],
+      'salaryRange': '410000 - 460000 / Monthly Salary',
+      'deadlineDate': '2026-05-15T00:00:00.000Z',
+      'autoRejectThreshold': 70,
+      'reapplyWindowDays': 45,
+    });
+
+    final encoded = source.toJson();
+    final decoded = JobListing.fromJson(encoded);
+
+    expect(decoded.faaRules, ['Part 135']);
+    expect(decoded.part135SubType, 'vfr');
+    expect(decoded.faaCertificates, ['Commercial Pilot (CPL)']);
+    expect(decoded.requiredRatings, ['Helicopter']);
+    expect(decoded.typeRatingsRequired, ['AS350']);
+    expect(decoded.flightHours['Total Time'], 1200);
+    expect(decoded.instructorHours['Flight Instruction (CFI)'], 200);
+    expect(decoded.specialtyHours['Fire Fighting'], 150);
+    expect(decoded.autoRejectThreshold, 70);
+    expect(decoded.reapplyWindowDays, 45);
+  });
+
   test('JobListing preserves external fields through JSON round-trip', () {
     final source = JobListing.fromJson({
       'id': 'external-json-roundtrip',
