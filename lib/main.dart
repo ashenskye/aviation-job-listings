@@ -3881,62 +3881,64 @@ class _MyHomePageState extends State<MyHomePage> {
                         ),
                     ],
                   ),
-                  ExpansionTile(
-                    key: ValueKey(
-                      'seeker-hours-specialty-${seekerHoursSpecialtyExpanded ? 'open' : 'closed'}',
-                    ),
-                    initiallyExpanded: seekerHoursSpecialtyExpanded,
-                    onExpansionChanged: (expanded) {
-                      setPageState(
-                        () => seekerHoursSpecialtyExpanded = expanded,
-                      );
-                    },
-                    tilePadding: EdgeInsets.zero,
-                    title: const Text(
-                      'SPECIALTY HOURS',
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                        letterSpacing: 0.8,
+                  if (draftProfile.airframeScope != 'Helicopter')
+                    ExpansionTile(
+                      key: ValueKey(
+                        'seeker-hours-specialty-${seekerHoursSpecialtyExpanded ? 'open' : 'closed'}',
                       ),
-                    ),
-                    children: _availableSpecialtyExperience
-                        .map(
-                          (label) => seekerHourInputRow(
-                            label: label,
-                            value: draftProfile.specialtyFlightHoursMap[label] ?? 0,
-                            onChanged: (val) =>
-                                updateDraftSpecialtyHours(label, val),
-                          ),
-                        )
-                        .toList(),
-                  ),
-                  ExpansionTile(
-                    key: ValueKey(
-                      'seeker-hours-helicopter-${seekerHoursHelicopterExpanded ? 'open' : 'closed'}',
-                    ),
-                    initiallyExpanded: seekerHoursHelicopterExpanded,
-                    onExpansionChanged: (expanded) {
-                      setPageState(() => seekerHoursHelicopterExpanded = expanded);
-                    },
-                    tilePadding: EdgeInsets.zero,
-                    title: const Text(
-                      'HELICOPTER HOURS',
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                        letterSpacing: 0.8,
-                      ),
-                    ),
-                    children: [
-                      for (final label in _availableHelicopterHours)
-                        seekerHourInputRow(
-                          label: label,
-                          value: draftProfile.flightHours[label] ?? 0,
-                          onChanged: (val) => updateDraftFlightHours(label, val),
+                      initiallyExpanded: seekerHoursSpecialtyExpanded,
+                      onExpansionChanged: (expanded) {
+                        setPageState(
+                          () => seekerHoursSpecialtyExpanded = expanded,
+                        );
+                      },
+                      tilePadding: EdgeInsets.zero,
+                      title: const Text(
+                        'SPECIALTY HOURS',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          letterSpacing: 0.8,
                         ),
-                    ],
-                  ),
+                      ),
+                      children: _availableSpecialtyExperience
+                          .map(
+                            (label) => seekerHourInputRow(
+                              label: label,
+                              value: draftProfile.specialtyFlightHoursMap[label] ?? 0,
+                              onChanged: (val) =>
+                                  updateDraftSpecialtyHours(label, val),
+                            ),
+                          )
+                          .toList(),
+                    ),
+                  if (draftProfile.airframeScope != 'Fixed Wing')
+                    ExpansionTile(
+                      key: ValueKey(
+                        'seeker-hours-helicopter-${seekerHoursHelicopterExpanded ? 'open' : 'closed'}',
+                      ),
+                      initiallyExpanded: seekerHoursHelicopterExpanded,
+                      onExpansionChanged: (expanded) {
+                        setPageState(() => seekerHoursHelicopterExpanded = expanded);
+                      },
+                      tilePadding: EdgeInsets.zero,
+                      title: const Text(
+                        'HELICOPTER HOURS',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          letterSpacing: 0.8,
+                        ),
+                      ),
+                      children: [
+                        for (final label in _availableHelicopterHours)
+                          seekerHourInputRow(
+                            label: label,
+                            value: draftProfile.flightHours[label] ?? 0,
+                            onChanged: (val) => updateDraftFlightHours(label, val),
+                          ),
+                      ],
+                    ),
                 ],
               );
             }
@@ -7546,52 +7548,54 @@ class _MyHomePageState extends State<MyHomePage> {
                 ),
             ],
           ),
-          ExpansionTile(
-            key: ValueKey('edit-hours-specialty-${editHoursSpecialtyExpanded ? 'open' : 'closed'}'),
-            initiallyExpanded: editHoursSpecialtyExpanded,
-            onExpansionChanged: (expanded) {
-              setModalState(() => editHoursSpecialtyExpanded = expanded);
-            },
-            tilePadding: EdgeInsets.zero,
-            title: const Text(
-              'SPECIALTY HOURS',
-              style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: 0.8),
+          if (selectedAirframeScope != 'Helicopter')
+            ExpansionTile(
+              key: ValueKey('edit-hours-specialty-${editHoursSpecialtyExpanded ? 'open' : 'closed'}'),
+              initiallyExpanded: editHoursSpecialtyExpanded,
+              onExpansionChanged: (expanded) {
+                setModalState(() => editHoursSpecialtyExpanded = expanded);
+              },
+              tilePadding: EdgeInsets.zero,
+              title: const Text(
+                'SPECIALTY HOURS',
+                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: 0.8),
+              ),
+              children: specialtyOptions
+                  .map(
+                    (label) => editHourRow(
+                      label: label,
+                      selectedSet: selectedSpecialtyHours,
+                      preferredSet: preferredSpecialtyHours,
+                      controllers: specialtyHourControllers,
+                      setModalState: setModalState,
+                    ),
+                  )
+                  .toList(),
             ),
-            children: specialtyOptions
-                .map(
-                  (label) => editHourRow(
-                    label: label,
-                    selectedSet: selectedSpecialtyHours,
-                    preferredSet: preferredSpecialtyHours,
-                    controllers: specialtyHourControllers,
-                    setModalState: setModalState,
-                  ),
-                )
-                .toList(),
-          ),
-          ExpansionTile(
-            key: ValueKey('edit-hours-helicopter-${editHoursHelicopterExpanded ? 'open' : 'closed'}'),
-            initiallyExpanded: editHoursHelicopterExpanded,
-            onExpansionChanged: (expanded) {
-              setModalState(() => editHoursHelicopterExpanded = expanded);
-            },
-            tilePadding: EdgeInsets.zero,
-            title: const Text(
-              'HELICOPTER HOURS',
-              style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: 0.8),
+          if (selectedAirframeScope != 'Fixed Wing')
+            ExpansionTile(
+              key: ValueKey('edit-hours-helicopter-${editHoursHelicopterExpanded ? 'open' : 'closed'}'),
+              initiallyExpanded: editHoursHelicopterExpanded,
+              onExpansionChanged: (expanded) {
+                setModalState(() => editHoursHelicopterExpanded = expanded);
+              },
+              tilePadding: EdgeInsets.zero,
+              title: const Text(
+                'HELICOPTER HOURS',
+                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: 0.8),
+              ),
+              children: _availableHelicopterHours
+                  .map(
+                    (label) => editHourRow(
+                      label: label,
+                      selectedSet: selectedFlightHours,
+                      preferredSet: preferredFlightHours,
+                      controllers: flightHourControllers,
+                      setModalState: setModalState,
+                    ),
+                  )
+                  .toList(),
             ),
-            children: _availableHelicopterHours
-                .map(
-                  (label) => editHourRow(
-                    label: label,
-                    selectedSet: selectedFlightHours,
-                    preferredSet: preferredFlightHours,
-                    controllers: flightHourControllers,
-                    setModalState: setModalState,
-                  ),
-                )
-                .toList(),
-          ),
         ],
       );
     }
@@ -14020,60 +14024,62 @@ class _MyHomePageState extends State<MyHomePage> {
             ),
           ],
         ),
-        ExpansionTile(
-          key: ValueKey(
-            'create-hours-specialty-${_createHoursSpecialtyExpanded ? 'open' : 'closed'}',
-          ),
-          initiallyExpanded: _createHoursSpecialtyExpanded,
-          onExpansionChanged: (expanded) {
-            setState(() => _createHoursSpecialtyExpanded = expanded);
-          },
-          tilePadding: EdgeInsets.zero,
-          title: const Text(
-            'SPECIALTY HOURS',
-            style: TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-              letterSpacing: 0.8,
+        if (_selectedAirframeScope != 'Helicopter')
+          ExpansionTile(
+            key: ValueKey(
+              'create-hours-specialty-${_createHoursSpecialtyExpanded ? 'open' : 'closed'}',
             ),
-          ),
-          children: _availableSpecialtyExperience
-              .map(
-                (label) => _buildCreateHourInputRow(
-                  label: label,
-                  map: _selectedSpecialtyHours,
-                  preferredSet: _preferredSpecialtyHours,
-                ),
-              )
-              .toList(),
-        ),
-        ExpansionTile(
-          key: ValueKey(
-            'create-hours-helicopter-${_createHoursHelicopterExpanded ? 'open' : 'closed'}',
-          ),
-          initiallyExpanded: _createHoursHelicopterExpanded,
-          onExpansionChanged: (expanded) {
-            setState(() => _createHoursHelicopterExpanded = expanded);
-          },
-          tilePadding: EdgeInsets.zero,
-          title: const Text(
-            'HELICOPTER HOURS',
-            style: TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-              letterSpacing: 0.8,
+            initiallyExpanded: _createHoursSpecialtyExpanded,
+            onExpansionChanged: (expanded) {
+              setState(() => _createHoursSpecialtyExpanded = expanded);
+            },
+            tilePadding: EdgeInsets.zero,
+            title: const Text(
+              'SPECIALTY HOURS',
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 0.8,
+              ),
             ),
+            children: _availableSpecialtyExperience
+                .map(
+                  (label) => _buildCreateHourInputRow(
+                    label: label,
+                    map: _selectedSpecialtyHours,
+                    preferredSet: _preferredSpecialtyHours,
+                  ),
+                )
+                .toList(),
           ),
-          children: _availableHelicopterHours
-              .map(
-                (label) => _buildCreateHourInputRow(
-                  label: label,
-                  map: _selectedFlightHours,
-                  preferredSet: _preferredFlightHours,
-                ),
-              )
-              .toList(),
-        ),
+        if (_selectedAirframeScope != 'Fixed Wing')
+          ExpansionTile(
+            key: ValueKey(
+              'create-hours-helicopter-${_createHoursHelicopterExpanded ? 'open' : 'closed'}',
+            ),
+            initiallyExpanded: _createHoursHelicopterExpanded,
+            onExpansionChanged: (expanded) {
+              setState(() => _createHoursHelicopterExpanded = expanded);
+            },
+            tilePadding: EdgeInsets.zero,
+            title: const Text(
+              'HELICOPTER HOURS',
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 0.8,
+              ),
+            ),
+            children: _availableHelicopterHours
+                .map(
+                  (label) => _buildCreateHourInputRow(
+                    label: label,
+                    map: _selectedFlightHours,
+                    preferredSet: _preferredFlightHours,
+                  ),
+                )
+                .toList(),
+          ),
       ],
     );
   }
