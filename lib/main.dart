@@ -96,6 +96,15 @@ final RegExp _linkifiedUrlPattern = RegExp(
   caseSensitive: false,
 );
 
+final RegExp _linkifiedPhonePattern = RegExp(
+  r'((?:\+?\d|\(\d)[\d\-\s().]{7,}\d)',
+);
+
+bool _isLikelyPhoneToken(String value) {
+  final digits = _phoneDigits(value);
+  return digits.length >= 10 && digits.length <= 15;
+}
+
 String _trimTrailingUrlPunctuation(String value) {
   var trimmed = value;
   const trailingChars = '.,;:!?)]}';
@@ -133,6 +142,7 @@ class _LinkifiedText extends StatelessWidget {
     this.maxLines,
     this.overflow,
     this.onTapUrl,
+    this.onTapPhone,
   });
 
   final String text;
@@ -140,6 +150,7 @@ class _LinkifiedText extends StatelessWidget {
   final int? maxLines;
   final TextOverflow? overflow;
   final ValueChanged<String>? onTapUrl;
+  final ValueChanged<String>? onTapPhone;
 
   @override
   Widget build(BuildContext context) {
@@ -151,24 +162,62 @@ class _LinkifiedText extends StatelessWidget {
     );
 
     final spans = <InlineSpan>[];
+    final matches = <RegExpMatch>[
+      ..._linkifiedUrlPattern.allMatches(text),
+      ..._linkifiedPhonePattern.allMatches(text),
+    ]..sort((a, b) => a.start.compareTo(b.start));
+
     var start = 0;
-    for (final match in _linkifiedUrlPattern.allMatches(text)) {
+    for (final match in matches) {
+      if (match.start < start) {
+        continue;
+      }
+
       if (match.start > start) {
         spans.add(TextSpan(text: text.substring(start, match.start), style: baseStyle));
       }
 
       final matchedText = match.group(0) ?? '';
       if (matchedText.isNotEmpty) {
-        final launchTarget = _trimTrailingUrlPunctuation(matchedText);
-        spans.add(
-          TextSpan(
-            text: matchedText,
-            style: linkStyle,
-            recognizer: onTapUrl == null
-                ? null
-                : (TapGestureRecognizer()..onTap = () => onTapUrl!(launchTarget)),
-          ),
-        );
+        final launchTargetUrl = _trimTrailingUrlPunctuation(matchedText);
+        final trimmedLower = launchTargetUrl.toLowerCase();
+        final hasExplicitUrlPrefix =
+          trimmedLower.startsWith('http://') ||
+          trimmedLower.startsWith('https://') ||
+          trimmedLower.startsWith('www.');
+        final isPhoneLink =
+          _isLikelyPhoneToken(matchedText) &&
+          _parseLaunchablePhoneUri(matchedText) != null;
+        final isUrlLink =
+          !isPhoneLink &&
+          hasExplicitUrlPrefix &&
+          _parseLaunchableHttpUri(launchTargetUrl) != null;
+
+        if (isUrlLink) {
+          spans.add(
+            TextSpan(
+              text: matchedText,
+              style: linkStyle,
+              recognizer: onTapUrl == null
+                  ? null
+                  : (TapGestureRecognizer()
+                      ..onTap = () => onTapUrl!(launchTargetUrl)),
+            ),
+          );
+        } else if (isPhoneLink) {
+          spans.add(
+            TextSpan(
+              text: matchedText,
+              style: onTapPhone == null ? baseStyle : linkStyle,
+              recognizer: onTapPhone == null
+                  ? null
+                  : (TapGestureRecognizer()
+                      ..onTap = () => onTapPhone!(matchedText)),
+            ),
+          );
+        } else {
+          spans.add(TextSpan(text: matchedText, style: baseStyle));
+        }
       }
       start = match.end;
     }
@@ -481,6 +530,26 @@ List<String> _buildTimelineLabels({
   return labels;
 }
 
+bool _containsInstructorHourLabel(Iterable<String> labels, String hourLabel) {
+  final normalizedTarget = normalizeInstructorHourLabel(hourLabel);
+  for (final label in labels) {
+    if (normalizeInstructorHourLabel(label) == normalizedTarget) {
+      return true;
+    }
+  }
+  return false;
+}
+
+int _instructorHoursForLabel(Map<String, int> hoursByLabel, String hourLabel) {
+  final normalizedTarget = normalizeInstructorHourLabel(hourLabel);
+  for (final entry in hoursByLabel.entries) {
+    if (normalizeInstructorHourLabel(entry.key) == normalizedTarget) {
+      return entry.value;
+    }
+  }
+  return 0;
+}
+
 class _MatchResult {
   final bool isFullMatch;
   final int matchedCount;
@@ -558,15 +627,24 @@ _MatchResult _evaluateJobMatchForProfile({
   }
 
   for (final requirement in job.instructorHoursByType.entries) {
-    final isPreferred = job.preferredInstructorHours.contains(requirement.key);
+    final isPreferred = _containsInstructorHourLabel(
+      job.preferredInstructorHours,
+      requirement.key,
+    );
     if (isPreferred) {
       continue;
     }
 
     totalCount++;
-    final profileHours = profile.flightHours[requirement.key] ?? 0;
+    final profileHours = _instructorHoursForLabel(
+      profile.flightHours,
+      requirement.key,
+    );
     final hasRequirement =
-        profile.flightHoursTypes.contains(requirement.key) &&
+        _containsInstructorHourLabel(
+          profile.flightHoursTypes,
+          requirement.key,
+        ) &&
         profileHours >= requirement.value;
 
     if (hasRequirement) {
@@ -739,16 +817,43 @@ class _MyHomePageState extends State<MyHomePage> {
   String _searchTabLocationFilter = 'all';
   String _searchTabPositionFilter = 'all';
   String _searchTabFaaRuleFilter = 'all';
+  String _searchTabSpecialtyFilter = 'all';
   String _searchTabCertificateFilter = 'all';
   String _searchTabRatingFilter = 'all';
   String _searchTabFlightHoursFilter = 'all';
   String _searchTabInstructorHoursFilter = 'all';
   int _searchTabMinimumMatchPercent = 0;
   String _searchTabSort = 'best_match';
+  String? _searchTabPendingTypeFilter;
+  String? _searchTabPendingLocationFilter;
+  String? _searchTabPendingPositionFilter;
+  String? _searchTabPendingFaaRuleFilter;
+  String? _searchTabPendingSpecialtyFilter;
+  String? _searchTabPendingInstructorHoursFilter;
+  String? _searchTabPendingCertificateFilter;
+  String? _searchTabPendingRatingFilter;
+  String? _searchTabPendingSort;
+  bool _searchTabPrimaryFiltersDrawerOpen = true;
+  bool _searchTabEmploymentTypeExpanded = false;
+  bool _searchTabPositionExpanded = false;
+  bool _searchTabFaaRuleExpanded = false;
+  bool _searchTabSpecialtyFilterExpanded = false;
+  bool _searchTabInstructionFilterExpanded = false;
+  bool _searchTabCertificateExpanded = false;
+  bool _searchTabRatingExpanded = false;
+  final GlobalKey _searchTabEmploymentTypeHeaderKey = GlobalKey();
+  final GlobalKey _searchTabPositionHeaderKey = GlobalKey();
+  final GlobalKey _searchTabFaaRuleHeaderKey = GlobalKey();
+  final GlobalKey _searchTabCertificateHeaderKey = GlobalKey();
+  final GlobalKey _searchTabRatingHeaderKey = GlobalKey();
+  final GlobalKey _searchTabInstructionHeaderKey = GlobalKey();
+  final GlobalKey _searchTabSpecialtyHeaderKey = GlobalKey();
+  final GlobalKey _searchTabPrimaryFiltersCardKey = GlobalKey();
+  final GlobalKey _searchTabFiltersHeadingKey = GlobalKey();
+  final GlobalKey _topTabsBarKey = GlobalKey();
+  final ScrollController _searchTabScrollController = ScrollController();
+  bool _searchTabFiltersPinned = false;
   bool _searchTabExternalOnly = false;
-  bool _searchTabInstructorOnly = false;
-  bool _searchTabAdvancedFiltersExpanded = false;
-  bool _searchTabInstructorFiltersExpanded = false;
   bool _searchTabFlightHoursExpanded = false;
   bool _searchTabFlightHoursOtherExpanded = false;
   bool _searchTabFlightInstructionExpanded = false;
@@ -1296,6 +1401,65 @@ class _MyHomePageState extends State<MyHomePage> {
     );
   }
 
+  Widget _buildExternalListingPhoneCta(JobListing job) {
+    final rawPhone = job.companyPhone?.trim() ?? '';
+    if (rawPhone.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    final formatted = _formatPhoneNumber(rawPhone);
+    final displayPhone = formatted.isNotEmpty ? formatted : rawPhone;
+    final canCall =
+        _isMobileDialPlatform() && _parseLaunchablePhoneUri(rawPhone) != null;
+
+    if (canCall) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 2),
+        child: TextButton.icon(
+          onPressed: () => _openPhoneCall(rawPhone),
+          style: TextButton.styleFrom(
+            padding: EdgeInsets.zero,
+            minimumSize: const Size(0, 28),
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            alignment: Alignment.centerLeft,
+          ),
+          icon: const Icon(Icons.phone_outlined, size: 15),
+          label: Text(
+            'Contact: $displayPhone',
+            style: const TextStyle(
+              fontSize: 13,
+              decoration: TextDecoration.underline,
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.phone_outlined,
+            size: 15,
+            color: Colors.grey.shade700,
+          ),
+          const SizedBox(width: 6),
+          Flexible(
+            child: Text(
+              'Contact: $displayPhone',
+              style: TextStyle(
+                fontSize: 13,
+                color: Colors.grey.shade700,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildCompanyLogoPreview(String logoUrl, {double size = 82}) {
     final normalized = _normalizeExternalUrl(logoUrl);
     final hasLogo = normalized.isNotEmpty;
@@ -1813,25 +1977,6 @@ class _MyHomePageState extends State<MyHomePage> {
       const SnackBar(
         content: Text(
           'External listing: contact the employer directly to apply.',
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSummaryCountBadge(int count) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration: BoxDecoration(
-        color: Colors.blueGrey.shade50,
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: Colors.blueGrey.shade100),
-      ),
-      child: Text(
-        '$count',
-        style: TextStyle(
-          fontSize: 12,
-          fontWeight: FontWeight.w700,
-          color: Colors.blueGrey.shade700,
         ),
       ),
     );
@@ -2361,7 +2506,6 @@ class _MyHomePageState extends State<MyHomePage> {
                   ),
                 ),
               ),
-              _buildSummaryCountBadge(items.length),
             ],
           ),
           const SizedBox(height: 10),
@@ -2394,6 +2538,111 @@ class _MyHomePageState extends State<MyHomePage> {
                   )
                   .toList(),
             ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildGroupedFlightHoursSummaryCard(JobSeekerProfile profile) {
+    Widget chip(String item) => Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: Colors.blueGrey.shade50,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Colors.blueGrey.shade100),
+      ),
+      child: Text(item),
+    );
+
+    List<String> hrs(List<String> options, List<String> selectedTypes, Map<String, int> hours) =>
+        _hoursSummaryItems(options: options, selectedTypes: selectedTypes, hours: hours);
+
+    const picSicOptions = [
+      'Total PIC Time', 'Total SIC Time',
+      'PIC Turbine', 'SIC Turbine',
+      'PIC Jet', 'SIC Jet',
+    ];
+    const otherOptions = ['Multi-engine', 'Instrument', 'Cross-Country', 'Night'];
+
+    final totalTimeItems  = hrs(const ['Total Time'], profile.flightHoursTypes, profile.flightHours);
+    final picSicItems     = hrs(picSicOptions, profile.flightHoursTypes, profile.flightHours);
+    final otherItems      = hrs(otherOptions, profile.flightHoursTypes, profile.flightHours);
+    final specialtyItems  = hrs(_availableSpecialtyExperience, profile.specialtyFlightHours, profile.specialtyFlightHoursMap);
+    final instructionItems = hrs(_availableInstructorHours, profile.flightHoursTypes, profile.flightHours);
+
+    final hasAny = totalTimeItems.isNotEmpty || picSicItems.isNotEmpty ||
+        otherItems.isNotEmpty || specialtyItems.isNotEmpty || instructionItems.isNotEmpty;
+
+    Widget groupSection(String label, List<String> items) {
+      if (items.isEmpty) return const SizedBox.shrink();
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SizedBox(height: 10),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.8,
+              color: Colors.blueGrey.shade600,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: items.map(chip).toList(),
+          ),
+        ],
+      );
+    }
+
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 5),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: Colors.grey.shade300),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Flight Hours',
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          if (!hasAny)
+            Text(
+              'No flight hour categories selected',
+              style: TextStyle(
+                fontStyle: FontStyle.italic,
+                color: Colors.grey.shade600,
+              ),
+            )
+          else ...[            
+            if (totalTimeItems.isNotEmpty)
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: totalTimeItems.map(chip).toList(),
+              ),
+            groupSection('PIC/SIC TIME', picSicItems),
+            groupSection('OTHER CATEGORIES', otherItems),
+            groupSection('SPECIALTY HOURS', specialtyItems),
+            groupSection('FLIGHT INSTRUCTION', instructionItems),
+          ],
         ],
       ),
     );
@@ -2466,17 +2715,103 @@ class _MyHomePageState extends State<MyHomePage> {
     }
 
     for (final label in requiredInstructorHourLabels) {
-      final normalized = normalizeInstructorHourLabel(label);
-      if (normalized == flightInstructionCfiHourLabel) {
-        addIfMissing('Flight Instructor (CFI)');
-      } else if (normalized == 'Instrument (CFII)') {
-        addIfMissing('Instrument Instructor (CFII)');
-      } else if (normalized == 'Multi-Engine (MEI)') {
-        addIfMissing('Multi-Engine Instructor (MEI)');
+      final certificate = _requiredInstructorCertificateForHourLabel(label);
+      if (certificate != null) {
+        addIfMissing(certificate);
       }
     }
 
     return needed;
+  }
+
+  String? _requiredInstructorCertificateForHourLabel(String hourLabel) {
+    final normalized = normalizeInstructorHourLabel(hourLabel);
+    if (normalized == flightInstructionCfiHourLabel) {
+      return 'Flight Instructor (CFI)';
+    }
+    if (normalized == 'Instrument (CFII)') {
+      return 'Instrument Instructor (CFII)';
+    }
+    if (normalized == 'Multi-Engine (MEI)') {
+      return 'Multi-Engine Instructor (MEI)';
+    }
+    return null;
+  }
+
+  String? _requiredInstructorHourLabelForCertificate(String certificate) {
+    switch (certificate) {
+      case 'Flight Instructor (CFI)':
+        return flightInstructionCfiHourLabel;
+      case 'Instrument Instructor (CFII)':
+        return 'Instrument (CFII)';
+      case 'Multi-Engine Instructor (MEI)':
+        return 'Multi-Engine (MEI)';
+      default:
+        return null;
+    }
+  }
+
+  bool _isRequiredInstructorHourSelected({
+    required String hourLabel,
+    required Iterable<String> selectedInstructorHours,
+    required Iterable<String> preferredInstructorHours,
+  }) {
+    final preferred = preferredInstructorHours.toSet();
+    final normalizedTarget = normalizeInstructorHourLabel(hourLabel);
+    for (final selected in selectedInstructorHours) {
+      if (preferred.contains(selected)) {
+        continue;
+      }
+      if (normalizeInstructorHourLabel(selected) == normalizedTarget) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  bool _containsInstructorHourLabel(
+    Iterable<String> labels,
+    String hourLabel,
+  ) {
+    final normalizedTarget = normalizeInstructorHourLabel(hourLabel);
+    for (final label in labels) {
+      if (normalizeInstructorHourLabel(label) == normalizedTarget) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  int _instructorHoursForLabel(
+    Map<String, int> hoursByLabel,
+    String hourLabel,
+  ) {
+    final normalizedTarget = normalizeInstructorHourLabel(hourLabel);
+    for (final entry in hoursByLabel.entries) {
+      if (normalizeInstructorHourLabel(entry.key) == normalizedTarget) {
+        return entry.value;
+      }
+    }
+    return 0;
+  }
+
+  Widget _buildRequiredByHoursChip() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: Colors.orange.shade100,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Colors.orange.shade300),
+      ),
+      child: Text(
+        'Required by hours',
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+          color: Colors.orange.shade900,
+        ),
+      ),
+    );
   }
 
   List<String> _missingImpliedRatings({
@@ -3132,6 +3467,77 @@ class _MyHomePageState extends State<MyHomePage> {
             const tailwheelRating = tailwheelRatingSelectionOptions;
             const rotorRatings = rotorRatingSelectionOptions;
             const otherRatings = otherRatingSelectionOptions;
+            final seekerMissingImpliedRatings = _missingImpliedRatings(
+              selectedRatings: draftProfile.faaCertificates,
+              requiredFlightHourLabels: draftProfile.flightHoursTypes,
+              requiredSpecialtyHourLabels: draftProfile.specialtyFlightHours,
+            ).toSet();
+            final seekerMissingInstructorCerts =
+                _requiredInstructorCertificatesForHours(
+                      _availableInstructorHours.where(
+                        (label) =>
+                            _instructorHoursForLabel(
+                              draftProfile.flightHours,
+                              label,
+                            ) >
+                            0,
+                      ),
+                    )
+                    .where((cert) => !draftProfile.faaCertificates.contains(cert))
+                    .toSet();
+            final seekerCertificatesSatisfied = draftProfile.faaCertificates.any(
+              _availableFaaCertificates.contains,
+            );
+            final seekerRatingsSatisfied =
+                draftProfile.faaCertificates.any(
+                  _availableRatingSelections.contains,
+                ) &&
+                seekerMissingImpliedRatings.isEmpty;
+            final seekerHoursSatisfied =
+                (draftProfile.flightHours['Total Time'] ?? 0) > 0;
+
+            Widget ratingTitle(String rating) {
+              final isMissingImpliedRating =
+                  seekerMissingImpliedRatings.contains(rating) &&
+                  !draftProfile.faaCertificates.contains(rating);
+              if (!isMissingImpliedRating) {
+                return Text(rating);
+              }
+
+              return Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      rating,
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  _buildRequiredByHoursChip(),
+                ],
+              );
+            }
+
+            Widget instructorCertTitle(String cert) {
+              final showRequiredByHoursChip =
+                  seekerMissingInstructorCerts.contains(cert);
+              if (!showRequiredByHoursChip) {
+                return Text(cert);
+              }
+
+              return Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      cert,
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  _buildRequiredByHoursChip(),
+                ],
+              );
+            }
 
             final hasAtp = draftProfile.faaCertificates.contains(
               'Airline Transport Pilot (ATP)',
@@ -3155,6 +3561,7 @@ class _MyHomePageState extends State<MyHomePage> {
 
             Widget ratingGroup(List<String> group) => _buildCheckboxCard(
               options: group,
+              titleBuilder: ratingTitle,
               isSelected: (rating) =>
                   draftProfile.faaCertificates.contains(rating),
               onChanged: (rating, selected) {
@@ -3442,6 +3849,7 @@ class _MyHomePageState extends State<MyHomePage> {
               required String subtitle,
               required IconData icon,
               required Widget child,
+              bool? isSatisfied,
             }) {
               final isExpanded = expandedQualificationsSection == sectionKey;
               return Container(
@@ -3484,6 +3892,15 @@ class _MyHomePageState extends State<MyHomePage> {
                             ),
                           ),
                         ),
+                        if (isSatisfied == true)
+                          const Tooltip(
+                            message: 'Minimum requirement met',
+                            child: Icon(
+                              Icons.check_circle,
+                              color: Colors.green,
+                              size: 20,
+                            ),
+                          ),
                       ],
                     ),
                     subtitle: Padding(
@@ -3543,7 +3960,10 @@ class _MyHomePageState extends State<MyHomePage> {
                     children: [
                       qualificationSection(
                         sectionKey: 'Certificates',
-                        title: 'Certificates',
+                        title: seekerCertificatesSatisfied
+                            ? 'Certificates'
+                            : 'Certificates *',
+                        isSatisfied: seekerCertificatesSatisfied,
                         subtitle: 'Select FAA certificates you hold.',
                         icon: Icons.badge_outlined,
                         child: Column(
@@ -3580,12 +4000,18 @@ class _MyHomePageState extends State<MyHomePage> {
                       ),
                       qualificationSection(
                         sectionKey: 'InstructorCertificates',
-                        title: 'Instructor Certificates',
+                        title: seekerMissingInstructorCerts.isNotEmpty
+                            ? 'Instructor Certificates *'
+                            : 'Instructor Certificates',
+                        isSatisfied: seekerMissingInstructorCerts.isEmpty,
                         subtitle:
-                            'Select instructor credentials you currently hold.',
+                            seekerMissingInstructorCerts.isNotEmpty
+                            ? 'Review credentials required by selected instructor hours.'
+                            : 'Select instructor credentials you currently hold.',
                         icon: Icons.school_outlined,
                         child: _buildCheckboxCard(
                           options: _availableInstructorCertificates,
+                          titleBuilder: instructorCertTitle,
                           isSelected: (cert) =>
                               draftProfile.faaCertificates.contains(cert),
                           onChanged: (cert, selected) {
@@ -3607,8 +4033,15 @@ class _MyHomePageState extends State<MyHomePage> {
                       ),
                       qualificationSection(
                         sectionKey: 'Ratings',
-                        title: 'Ratings',
-                        subtitle: 'Add airframe/rating details for matching.',
+                        title: seekerRatingsSatisfied
+                          ? 'Ratings'
+                          : seekerMissingImpliedRatings.isNotEmpty
+                          ? 'Ratings * (Review implied ratings)'
+                          : 'Ratings *',
+                        isSatisfied: seekerRatingsSatisfied,
+                        subtitle: seekerMissingImpliedRatings.isNotEmpty
+                            ? 'Ratings marked Required by hours should be selected.'
+                            : 'Add airframe/rating details for matching.',
                         icon: Icons.tune_outlined,
                         child: Column(
                           children: [
@@ -3622,7 +4055,10 @@ class _MyHomePageState extends State<MyHomePage> {
                       ),
                       qualificationSection(
                         sectionKey: 'HoursAndSpecialty',
-                        title: 'Hours and Specialty Experience',
+                        title: seekerHoursSatisfied
+                          ? 'Hours and Specialty Experience'
+                          : 'Hours and Specialty Experience *',
+                        isSatisfied: seekerHoursSatisfied,
                         subtitle:
                             'Select categories and add your logged hours.',
                         icon: Icons.schedule_outlined,
@@ -4036,6 +4472,7 @@ class _MyHomePageState extends State<MyHomePage> {
     _searchController.dispose();
     _searchTabController.dispose();
     _searchTabMatchPercentController.dispose();
+    _searchTabScrollController.dispose();
     _createTitleController.dispose();
     _createTitleFocusNode.dispose();
     _createCompanyController.dispose();
@@ -4783,6 +5220,21 @@ class _MyHomePageState extends State<MyHomePage> {
     return ['all', ...merged];
   }
 
+  List<String> get _searchTabSpecialtyOptions {
+    final listingValues = <String>{
+      for (final job in _visibleJobs)
+        ...job.specialtyHoursByType.keys.where((value) => value.trim().isNotEmpty),
+    };
+    final canonical = <String>{
+      ..._availableSpecialtyExperience,
+      'Low-Time Jobs',
+      'Mid-Time Jobs',
+    };
+    final merged = <String>{...canonical, ...listingValues}.toList()
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    return ['all', ...merged];
+  }
+
   List<String> get _searchTabFlightHoursOptions {
     return ['all', ..._availableEmployerFlightHours];
   }
@@ -4890,35 +5342,6 @@ class _MyHomePageState extends State<MyHomePage> {
     return location == selected;
   }
 
-  bool _isInstructorFocusedJob(JobListing job) {
-    final title = job.title.toLowerCase();
-    final description = job.description.toLowerCase();
-    final position = (job.crewPosition ?? '').toLowerCase();
-    final hasInstructorKeyword =
-        title.contains('instructor') ||
-        description.contains('instructor') ||
-        position.contains('instructor') ||
-        title.contains('cfi') ||
-        description.contains('cfi') ||
-        title.contains('cfii') ||
-        description.contains('cfii') ||
-        title.contains('mei') ||
-        description.contains('mei');
-
-    final hasInstructorCertificate = job.faaCertificates.any((cert) {
-      final lower = cert.toLowerCase();
-      return lower.contains('instructor') ||
-          lower.contains('cfi') ||
-          lower.contains('cfii') ||
-          lower.contains('mei');
-    });
-
-    return hasInstructorKeyword ||
-        hasInstructorCertificate ||
-        job.instructorHoursByType.isNotEmpty ||
-        job.preferredInstructorHours.isNotEmpty;
-  }
-
   bool _matchesSearchTabFaaRuleFilter(JobListing job, String filterValue) {
     final selected = filterValue.trim().toLowerCase();
     if (selected == 'all') {
@@ -4941,40 +5364,119 @@ class _MyHomePageState extends State<MyHomePage> {
     return job.faaRules.any((rule) => rule.trim().toLowerCase() == selected);
   }
 
+  bool _isLowTimeJob(JobListing job) {
+    final totalTimeRequirement = job.flightHoursByType['Total Time'] ?? 0;
+    return totalTimeRequirement > 0 && totalTimeRequirement <= 500;
+  }
+
+  bool _isMidTimeJob(JobListing job) {
+    final totalTimeRequirement = job.flightHoursByType['Total Time'] ?? 0;
+    return totalTimeRequirement >= 501 && totalTimeRequirement <= 1499;
+  }
+
+  bool _matchesSearchTabSpecialtyFilter(JobListing job, String filterValue) {
+    final selected = filterValue.trim().toLowerCase();
+    if (selected == 'all') {
+      return true;
+    }
+    if (selected == 'low-time jobs') {
+      return _isLowTimeJob(job);
+    }
+    if (selected == 'mid-time jobs') {
+      return _isMidTimeJob(job);
+    }
+
+    return job.specialtyHoursByType.keys.any(
+      (key) => key.trim().toLowerCase() == selected,
+    );
+  }
+
+  Set<String> _decodeSearchTabMultiFilter(
+    String rawValue,
+    List<String> options,
+  ) {
+    final byLower = {
+      for (final option in options) option.toLowerCase(): option,
+    };
+    final allOption = byLower['all'];
+
+    if (allOption == null) {
+      return {};
+    }
+
+    final trimmed = rawValue.trim();
+    if (trimmed.isEmpty || trimmed.toLowerCase() == 'all') {
+      return {allOption};
+    }
+
+    final selected = trimmed
+        .split('|')
+        .map((part) => part.trim().toLowerCase())
+        .where((part) => part.isNotEmpty)
+        .map((part) => byLower[part])
+        .whereType<String>()
+        .toSet();
+
+    if (selected.isEmpty) {
+      return {allOption};
+    }
+
+    selected.remove(allOption);
+    return selected.isEmpty ? {allOption} : selected;
+  }
+
+  String _encodeSearchTabMultiFilter(Set<String> selected) {
+    final cleaned = selected
+        .map((value) => value.trim())
+        .where((value) => value.isNotEmpty)
+        .toSet();
+
+    if (cleaned.isEmpty || cleaned.contains('all')) {
+      return 'all';
+    }
+
+    final sorted = cleaned.toList()
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    return sorted.join('|');
+  }
+
   List<JobListing> get _searchTabFilteredJobs {
-    final typeFilter = _searchTabTypeOptions.contains(_searchTabTypeFilter)
-        ? _searchTabTypeFilter
-        : 'all';
+    final typeFilters = _decodeSearchTabMultiFilter(
+      _searchTabTypeFilter,
+      _searchTabTypeOptions,
+    );
     final locationFilter =
         _searchTabLocationOptions.contains(_searchTabLocationFilter)
         ? _searchTabLocationFilter
         : 'all';
-    final positionFilter =
-        _searchTabPositionOptions.contains(_searchTabPositionFilter)
-        ? _searchTabPositionFilter
-        : 'all';
-    final faaRuleFilter =
-        _searchTabFaaRuleOptions.contains(_searchTabFaaRuleFilter)
-        ? _searchTabFaaRuleFilter
-        : 'all';
-    final certificateFilter =
-        _searchTabCertificateOptions.contains(_searchTabCertificateFilter)
-        ? _searchTabCertificateFilter
-        : 'all';
-    final ratingFilter =
-        _searchTabRatingOptions.contains(_searchTabRatingFilter)
-        ? _searchTabRatingFilter
-        : 'all';
+    final positionFilters = _decodeSearchTabMultiFilter(
+      _searchTabPositionFilter,
+      _searchTabPositionOptions,
+    );
+    final faaRuleFilters = _decodeSearchTabMultiFilter(
+      _searchTabFaaRuleFilter,
+      _searchTabFaaRuleOptions,
+    );
+    final specialtyFilters = _decodeSearchTabMultiFilter(
+      _searchTabSpecialtyFilter,
+      _searchTabSpecialtyOptions,
+    );
+    final certificateFilters = _decodeSearchTabMultiFilter(
+      _searchTabCertificateFilter,
+      _searchTabCertificateOptions,
+    );
+    final ratingFilters = _decodeSearchTabMultiFilter(
+      _searchTabRatingFilter,
+      _searchTabRatingOptions,
+    );
     final flightHoursFilter =
         _searchTabFlightHoursOptions.contains(_searchTabFlightHoursFilter)
         ? _searchTabFlightHoursFilter
         : 'all';
-    final instructorHoursFilter =
-        _searchTabInstructorHoursOptions.contains(
-          _searchTabInstructorHoursFilter,
-        )
-        ? _searchTabInstructorHoursFilter
-        : 'all';
+    final instructorHoursFilters = _decodeSearchTabMultiFilter(
+      _searchTabInstructorHoursFilter,
+      _searchTabInstructorHoursOptions,
+    );
 
     final query = _searchTabQuery.toLowerCase();
 
@@ -4983,11 +5485,8 @@ class _MyHomePageState extends State<MyHomePage> {
         return false;
       }
 
-      if (_searchTabInstructorOnly && !_isInstructorFocusedJob(job)) {
-        return false;
-      }
-
-      if (typeFilter != 'all' && job.type.trim() != typeFilter) {
+      if (!typeFilters.contains('all') &&
+          !typeFilters.contains(job.type.trim())) {
         return false;
       }
 
@@ -4995,24 +5494,35 @@ class _MyHomePageState extends State<MyHomePage> {
         return false;
       }
 
-      if (!_matchesSearchTabPositionFilter(job, positionFilter)) {
+      if (!positionFilters.contains('all') &&
+          !positionFilters.any(
+            (filterValue) => _matchesSearchTabPositionFilter(job, filterValue),
+          )) {
         return false;
       }
 
-      if (!_matchesSearchTabFaaRuleFilter(job, faaRuleFilter)) {
+      if (!faaRuleFilters.contains('all') &&
+          !faaRuleFilters.any(
+            (filterValue) => _matchesSearchTabFaaRuleFilter(job, filterValue),
+          )) {
         return false;
       }
 
-      if (certificateFilter != 'all' &&
-          !job.faaCertificates.contains(certificateFilter)) {
+      if (!specialtyFilters.contains('all') &&
+          !specialtyFilters.any(
+            (filterValue) => _matchesSearchTabSpecialtyFilter(job, filterValue),
+          )) {
         return false;
       }
 
-      if (ratingFilter != 'all') {
-        final hasRating = job.requiredRatings.contains(ratingFilter);
-        if (!hasRating) {
-          return false;
-        }
+      if (!certificateFilters.contains('all') &&
+          !certificateFilters.any(job.faaCertificates.contains)) {
+        return false;
+      }
+
+      if (!ratingFilters.contains('all') &&
+          !ratingFilters.any(job.requiredRatings.contains)) {
+        return false;
       }
 
       if (flightHoursFilter != 'all' &&
@@ -5020,8 +5530,8 @@ class _MyHomePageState extends State<MyHomePage> {
         return false;
       }
 
-      if (instructorHoursFilter != 'all' &&
-          !job.instructorHoursByType.containsKey(instructorHoursFilter)) {
+      if (!instructorHoursFilters.contains('all') &&
+          !instructorHoursFilters.any(job.instructorHoursByType.containsKey)) {
         return false;
       }
 
@@ -5586,16 +6096,23 @@ class _MyHomePageState extends State<MyHomePage> {
     }
 
     for (final requirement in job.instructorHoursByType.entries) {
-      final isPreferred = job.preferredInstructorHours.contains(
+      final isPreferred = _containsInstructorHourLabel(
+        job.preferredInstructorHours,
         requirement.key,
       );
       if (isPreferred) {
         continue;
       }
 
-      final profileHours = app.applicantFlightHours[requirement.key] ?? 0;
+      final profileHours = _instructorHoursForLabel(
+        app.applicantFlightHours,
+        requirement.key,
+      );
       final hasRequirement =
-          app.applicantFlightHoursTypes.contains(requirement.key) &&
+          _containsInstructorHourLabel(
+            app.applicantFlightHoursTypes,
+            requirement.key,
+          ) &&
           profileHours >= requirement.value;
 
       if (hasRequirement) {
@@ -5711,16 +6228,23 @@ class _MyHomePageState extends State<MyHomePage> {
     }
 
     for (final requirement in job.instructorHoursByType.entries) {
-      final isPreferred = job.preferredInstructorHours.contains(
+      final isPreferred = _containsInstructorHourLabel(
+        job.preferredInstructorHours,
         requirement.key,
       );
       if (isPreferred) {
         continue;
       }
 
-      final profileHours = app.applicantFlightHours[requirement.key] ?? 0;
+      final profileHours = _instructorHoursForLabel(
+        app.applicantFlightHours,
+        requirement.key,
+      );
       final hasRequirement =
-          app.applicantFlightHoursTypes.contains(requirement.key) &&
+          _containsInstructorHourLabel(
+            app.applicantFlightHoursTypes,
+            requirement.key,
+          ) &&
           profileHours >= requirement.value;
 
       if (!hasRequirement) {
@@ -6072,17 +6596,16 @@ class _MyHomePageState extends State<MyHomePage> {
     final coverLetterController = TextEditingController();
     final matchLabel = match.matchPercentage >= 70
         ? '${match.matchPercentage}% Good Match'
-        : '${match.matchPercentage}% Stretch Match';
+        : '${match.matchPercentage}% Growth Opportunity';
     final bodyText = match.missingRequirements.isEmpty
         ? 'Add an optional cover letter.'
-        : 'Missing: ${match.missingRequirements.take(3).join(', ')}'
-              '${match.missingRequirements.length > 3 ? '...' : ''}.';
+        : 'Build your profile: ${match.missingRequirements.take(3).join(', ')}'
+              '${match.missingRequirements.length > 3 ? ' (and more)' : ''}.';
+    final dialogTitle = match.matchPercentage >= 70 ? 'Quick Apply' : 'Express Interest';
     final submitted = await showDialog<String?>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: Text(
-          match.matchPercentage >= 70 ? 'Quick Apply' : 'Apply Anyway',
-        ),
+        title: Text(dialogTitle),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -7641,10 +8164,35 @@ class _MyHomePageState extends State<MyHomePage> {
             initiallyExpanded: false,
             child: Column(
               children: _availableInstructorCertificates.map((cert) {
+                final requiredHourLabel =
+                    _requiredInstructorHourLabelForCertificate(cert);
+                final showRequiredByHoursChip =
+                    requiredHourLabel != null &&
+                    _isRequiredInstructorHourSelected(
+                      hourLabel: requiredHourLabel,
+                      selectedInstructorHours: selectedInstructorHours,
+                      preferredInstructorHours: preferredInstructorHours,
+                    ) &&
+                    !selectedFaaCertificates.contains(cert);
                 return CheckboxListTile(
                   dense: true,
                   contentPadding: EdgeInsets.zero,
-                  title: Text(cert),
+                  title: showRequiredByHoursChip
+                      ? Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                cert,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            _buildRequiredByHoursChip(),
+                          ],
+                        )
+                      : Text(cert),
                   value: selectedFaaCertificates.contains(cert),
                   onChanged: (selected) {
                     setModalState(() {
@@ -8542,6 +9090,44 @@ class _MyHomePageState extends State<MyHomePage> {
                           final deadlineText = job.deadlineDate != null
                               ? _formatYmd(job.deadlineDate!.toLocal())
                               : null;
+                          final isPhoneActionLayout =
+                              MediaQuery.sizeOf(context).width <
+                              kPhoneBreakpoint;
+
+                          Widget cardActionButton({
+                            required VoidCallback? onPressed,
+                            required IconData icon,
+                            required String label,
+                            Color? iconColor,
+                          }) {
+                            if (isPhoneActionLayout) {
+                              return Tooltip(
+                                message: label,
+                                child: OutlinedButton(
+                                  onPressed: onPressed,
+                                  style: OutlinedButton.styleFrom(
+                                    minimumSize: const Size(40, 40),
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 10,
+                                      vertical: 10,
+                                    ),
+                                  ),
+                                  child: Icon(
+                                    icon,
+                                    size: 18,
+                                    color: iconColor,
+                                  ),
+                                ),
+                              );
+                            }
+
+                            return OutlinedButton.icon(
+                              onPressed: onPressed,
+                              icon: Icon(icon, color: iconColor),
+                              label: Text(label),
+                            );
+                          }
+
                           return Card(
                             margin: const EdgeInsets.symmetric(vertical: 8),
                             child: InkWell(
@@ -8576,8 +9162,8 @@ class _MyHomePageState extends State<MyHomePage> {
                                               .join(', ');
                                           matchBadge = Tooltip(
                                             message: match.matchPercentage >= 80
-                                                ? 'Strong match. You meet all required criteria.'
-                                                : 'Potential fit. Missing required: $missingText',
+                                                ? 'Strong match. Your profile exceeds requirements.'
+                                                : 'Growth opportunity. Your profile is developing: $missingText',
                                             child: Container(
                                               margin: EdgeInsets.only(
                                                 left: isCompactHeader ? 0 : 8,
@@ -8663,6 +9249,10 @@ class _MyHomePageState extends State<MyHomePage> {
                                                       Text(
                                                         '${job.company} • ${job.location}',
                                                       ),
+                                                      if (job.isExternal)
+                                                        _buildExternalListingPhoneCta(
+                                                          job,
+                                                        ),
                                                       const SizedBox(height: 2),
                                                       Text(
                                                         '${job.crewRole}${job.crewPosition != null && job.crewPosition!.isNotEmpty ? ' - ${job.crewPosition}' : ''} • ${job.type}',
@@ -8775,6 +9365,9 @@ class _MyHomePageState extends State<MyHomePage> {
                                       onTapUrl: (url) {
                                         _openDetectedLink(url);
                                       },
+                                      onTapPhone: (phone) {
+                                        _openPhoneCall(phone);
+                                      },
                                     ),
                                     const SizedBox(height: 8),
                                     Align(
@@ -8784,96 +9377,78 @@ class _MyHomePageState extends State<MyHomePage> {
                                         children: [
                                           if (_profileType ==
                                               ProfileType.jobSeeker)
-                                            OutlinedButton.icon(
+                                            cardActionButton(
                                               onPressed: () =>
                                                   _toggleFavorite(job),
-                                              icon: Icon(
-                                                isFav
-                                                    ? Icons.star
-                                                    : Icons.star_border,
-                                                color: isFav
-                                                    ? Colors.amber
-                                                    : null,
-                                              ),
-                                              label: Text(
-                                                isFav
-                                                    ? 'Favorited'
-                                                    : 'Favorite',
-                                              ),
+                                              icon: isFav
+                                                  ? Icons.star
+                                                  : Icons.star_border,
+                                              iconColor: isFav
+                                                  ? Colors.amber
+                                                  : null,
+                                              label: isFav
+                                                  ? 'Favorited'
+                                                  : 'Favorite',
                                             ),
                                           if (_profileType ==
                                               ProfileType.jobSeeker)
-                                            OutlinedButton.icon(
+                                            cardActionButton(
                                               onPressed:
                                                   (job.isExternal ||
                                                       !_hasApplied(job.id))
                                                   ? () => _handleApplyTap(job)
                                                   : null,
-                                              icon: Icon(
-                                                job.isExternal
-                                                    ? Icons.open_in_new
-                                                    : _hasApplied(job.id)
-                                                    ? Icons.check_circle
-                                                    : Icons.send,
-                                                color:
-                                                    !job.isExternal &&
-                                                        _hasApplied(job.id)
-                                                    ? Colors.green
-                                                    : null,
-                                              ),
-                                              label: Text(
-                                                job.isExternal
-                                                    ? 'Contact Employer'
-                                                    : _hasApplied(job.id)
-                                                    ? 'Applied'
-                                                    : 'Apply',
-                                              ),
+                                              icon: job.isExternal
+                                                  ? Icons.open_in_new
+                                                  : _hasApplied(job.id)
+                                                  ? Icons.check_circle
+                                                  : Icons.send,
+                                              iconColor:
+                                                  !job.isExternal &&
+                                                      _hasApplied(job.id)
+                                                  ? Colors.green
+                                                  : null,
+                                              label: job.isExternal
+                                                  ? 'Contact Employer'
+                                                  : _hasApplied(job.id)
+                                                  ? 'Applied'
+                                                  : 'Apply',
                                             ),
                                           if (_profileType ==
                                               ProfileType.jobSeeker)
-                                            OutlinedButton.icon(
+                                            cardActionButton(
                                               onPressed: () =>
                                                   _shareJobListing(job),
-                                              icon: const Icon(
-                                                Icons.share_outlined,
-                                              ),
-                                              label: const Text('Share'),
+                                              icon: Icons.share_outlined,
+                                              label: 'Share',
                                             ),
                                           if (_profileType ==
                                               ProfileType.jobSeeker)
-                                            OutlinedButton.icon(
+                                            cardActionButton(
                                               onPressed: () =>
                                                   _reportJobListing(job),
-                                              icon: const Icon(
-                                                Icons.flag_outlined,
-                                              ),
-                                              label: const Text('Report'),
+                                              icon: Icons.flag_outlined,
+                                              label: 'Report',
                                             ),
                                           if (_canEditJob(job))
-                                            OutlinedButton.icon(
+                                            cardActionButton(
                                               onPressed: () => _editJob(job),
-                                              icon: const Icon(Icons.edit),
-                                              label: const Text('Edit'),
+                                              icon: Icons.edit,
+                                              label: 'Edit',
                                             ),
                                           if (_canDeleteJob(job))
-                                            OutlinedButton.icon(
+                                            cardActionButton(
                                               onPressed: () => _removeJob(job),
-                                              icon: const Icon(
-                                                Icons.delete_outline,
-                                              ),
-                                              label: const Text('Delete'),
+                                              icon: Icons.delete_outline,
+                                              label: 'Delete',
                                             ),
                                           if (_profileType ==
                                               ProfileType.employer)
-                                            OutlinedButton.icon(
+                                            cardActionButton(
                                               onPressed: () =>
                                                   _saveJobAsTemplate(job),
-                                              icon: const Icon(
-                                                Icons.bookmark_add_outlined,
-                                              ),
-                                              label: const Text(
-                                                'Save as Template',
-                                              ),
+                                              icon: Icons.bookmark_add_outlined,
+                                              label: 'Save as Template',
                                             ),
                                         ],
                                       ),
@@ -8937,7 +9512,7 @@ class _MyHomePageState extends State<MyHomePage> {
           matchLabel = '🟡 ${app.matchPercentage}% Good Match';
         } else {
           badgeColor = Colors.red.shade100;
-          matchLabel = '🔴 ${app.matchPercentage}% Stretch Match';
+          matchLabel = '🔴 ${app.matchPercentage}% Growth Opportunity';
         }
 
         final statusLabel = switch (app.status) {
@@ -9646,6 +10221,144 @@ class _MyHomePageState extends State<MyHomePage> {
     );
   }
 
+  // ---------------------------------------------------------------------------
+  // Search-tab filter helpers — extracted from build method for clarity.
+  // ---------------------------------------------------------------------------
+
+  /// Scrolls [scrollController] so [targetOffset] is visible, animating
+  /// smoothly. Skips if already within 1 logical pixel.
+  void _animateScrollController(
+    ScrollController scrollController,
+    double targetOffset,
+  ) {
+    if (!scrollController.hasClients) {
+      return;
+    }
+    final position = scrollController.position;
+    final clamped = targetOffset.clamp(
+      position.minScrollExtent,
+      position.maxScrollExtent,
+    ).toDouble();
+    if ((position.pixels - clamped).abs() < 1) {
+      return;
+    }
+    position.animateTo(
+      clamped,
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  /// After the next frame, scrolls the outer Search list so the Filters card
+  /// top sits just below the app tabs bar.
+  void _pinFiltersCardBelowTabs() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_searchTabPrimaryFiltersDrawerOpen) {
+        return;
+      }
+      final filtersCardContext =
+          _searchTabPrimaryFiltersCardKey.currentContext;
+      final tabsContext = _topTabsBarKey.currentContext;
+      if (filtersCardContext == null || tabsContext == null) {
+        return;
+      }
+      final filtersRO = filtersCardContext.findRenderObject();
+      final tabsRO = tabsContext.findRenderObject();
+      if (filtersRO is! RenderBox || tabsRO is! RenderBox) {
+        return;
+      }
+      const gap = 8.0;
+      final filtersTop = filtersRO.localToGlobal(Offset.zero).dy;
+      final tabsBottom =
+          tabsRO.localToGlobal(Offset(0, tabsRO.size.height)).dy;
+      final delta = filtersTop - (tabsBottom + gap);
+      _animateScrollController(
+        _searchTabScrollController,
+        _searchTabScrollController.hasClients
+            ? _searchTabScrollController.offset + delta
+            : 0,
+      );
+    });
+  }
+
+  /// After the next frame, scrolls the *inner* filter drawer scroll area so
+  /// [headerKey]'s widget top sits just below the Filters box heading.
+  void _scrollFilterHeaderIntoView(GlobalKey headerKey) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      final headerCtx = headerKey.currentContext;
+      final headingCtx = _searchTabFiltersHeadingKey.currentContext;
+      if (headerCtx == null || headingCtx == null) {
+        return;
+      }
+      final headerRO = headerCtx.findRenderObject();
+      final headingRO = headingCtx.findRenderObject();
+      if (headerRO is! RenderBox || headingRO is! RenderBox) {
+        return;
+      }
+      final scrollable = Scrollable.maybeOf(headerCtx);
+      final position = scrollable?.position;
+      if (position == null) {
+        return;
+      }
+      const gap = 8.0;
+      final headerTop = headerRO.localToGlobal(Offset.zero).dy;
+      final headingBottom =
+          headingRO.localToGlobal(Offset(0, headingRO.size.height)).dy;
+      final delta = headerTop - (headingBottom + gap);
+      final target = (position.pixels + delta).clamp(
+        position.minScrollExtent,
+        position.maxScrollExtent,
+      ).toDouble();
+      if ((position.pixels - target).abs() < 1) {
+        return;
+      }
+      position.animateTo(
+        target,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+      );
+    });
+  }
+
+  /// Collapses every filter category accordion section.
+  void _collapseAllFilterSections() {
+    _searchTabEmploymentTypeExpanded = false;
+    _searchTabPositionExpanded = false;
+    _searchTabFaaRuleExpanded = false;
+    _searchTabCertificateExpanded = false;
+    _searchTabRatingExpanded = false;
+    _searchTabInstructionFilterExpanded = false;
+    _searchTabSpecialtyFilterExpanded = false;
+  }
+
+  /// Collapses all sections, then expands the requested one (accordion style).
+  /// Pins the Filters card under the tabs and scrolls the expanded header into
+  /// view within the filter drawer. If [isCurrentlyExpanded] is true the
+  /// section is simply collapsed (toggle off).
+  void _toggleExclusiveFilterSection({
+    required bool isCurrentlyExpanded,
+    required VoidCallback expandSection,
+    required GlobalKey headerKey,
+  }) {
+    final shouldExpand = !isCurrentlyExpanded;
+    setState(() {
+      _collapseAllFilterSections();
+      if (shouldExpand) {
+        expandSection();
+        _searchTabFiltersPinned = true;
+      }
+    });
+    if (shouldExpand) {
+      _pinFiltersCardBelowTabs();
+      _scrollFilterHeaderIntoView(headerKey);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+
   Widget _buildSearchTab() {
     final allVisibleJobs = _visibleJobs;
     final filteredJobs = _searchTabFilteredJobs;
@@ -9653,43 +10366,277 @@ class _MyHomePageState extends State<MyHomePage> {
     final locationOptions = _searchTabLocationOptions;
     final positionOptions = _searchTabPositionOptions;
     final faaRuleOptions = _searchTabFaaRuleOptions;
+    final specialtyOptions = _searchTabSpecialtyOptions;
     final certificateOptions = _searchTabCertificateOptions;
     final ratingOptions = _searchTabRatingOptions;
-    final flightHoursOptions = _searchTabFlightHoursOptions;
     final instructorHoursOptions = _searchTabInstructorHoursOptions;
     final colorScheme = Theme.of(context).colorScheme;
 
-    final selectedType = typeOptions.contains(_searchTabTypeFilter)
-        ? _searchTabTypeFilter
-        : 'all';
+    final selectedTypeFilters = _decodeSearchTabMultiFilter(
+      _searchTabTypeFilter,
+      typeOptions,
+    );
     final selectedLocation = locationOptions.contains(_searchTabLocationFilter)
         ? _searchTabLocationFilter
         : 'all';
-    final selectedPosition = positionOptions.contains(_searchTabPositionFilter)
-        ? _searchTabPositionFilter
-        : 'all';
-    final selectedFaaRule = faaRuleOptions.contains(_searchTabFaaRuleFilter)
-        ? _searchTabFaaRuleFilter
-        : 'all';
-    final selectedCertificate =
-        certificateOptions.contains(_searchTabCertificateFilter)
-        ? _searchTabCertificateFilter
-        : 'all';
-    final selectedRating = ratingOptions.contains(_searchTabRatingFilter)
-        ? _searchTabRatingFilter
-        : 'all';
-    final selectedFlightHours =
-        flightHoursOptions.contains(_searchTabFlightHoursFilter)
-        ? _searchTabFlightHoursFilter
-        : 'all';
-    final selectedInstructorHours =
-        instructorHoursOptions.contains(_searchTabInstructorHoursFilter)
-        ? _searchTabInstructorHoursFilter
-        : 'all';
+    final selectedPositionFilters = _decodeSearchTabMultiFilter(
+      _searchTabPositionFilter,
+      positionOptions,
+    );
+    final selectedFaaRuleFilters = _decodeSearchTabMultiFilter(
+      _searchTabFaaRuleFilter,
+      faaRuleOptions,
+    );
+    final selectedSpecialtyFilters = _decodeSearchTabMultiFilter(
+      _searchTabSpecialtyFilter,
+      specialtyOptions,
+    );
+    final selectedCertificateFilters = _decodeSearchTabMultiFilter(
+      _searchTabCertificateFilter,
+      certificateOptions,
+    );
+    final selectedRatingFilters = _decodeSearchTabMultiFilter(
+      _searchTabRatingFilter,
+      ratingOptions,
+    );
+    final selectedInstructorHourFilters = _decodeSearchTabMultiFilter(
+      _searchTabInstructorHoursFilter,
+      instructorHoursOptions,
+    );
     final selectedSort = switch (_searchTabSort) {
       'newest' || 'deadline' || 'company' => _searchTabSort,
       _ => 'best_match',
     };
+    final isNarrowSearchLayout = MediaQuery.sizeOf(context).width < 720;
+
+    final pendingTypeFilters = _decodeSearchTabMultiFilter(
+      _searchTabPendingTypeFilter ?? _encodeSearchTabMultiFilter(selectedTypeFilters),
+      typeOptions,
+    );
+    final pendingLocation = locationOptions.contains(
+      _searchTabPendingLocationFilter,
+    )
+      ? _searchTabPendingLocationFilter!
+      : selectedLocation;
+    final pendingPositionFilters = _decodeSearchTabMultiFilter(
+      _searchTabPendingPositionFilter ?? _encodeSearchTabMultiFilter(selectedPositionFilters),
+      positionOptions,
+    );
+    final pendingFaaRuleFilters = _decodeSearchTabMultiFilter(
+      _searchTabPendingFaaRuleFilter ?? _encodeSearchTabMultiFilter(selectedFaaRuleFilters),
+      faaRuleOptions,
+    );
+    final pendingSpecialtyFilters = _decodeSearchTabMultiFilter(
+      _searchTabPendingSpecialtyFilter ??
+          _encodeSearchTabMultiFilter(selectedSpecialtyFilters),
+      specialtyOptions,
+    );
+    final pendingInstructorHourFilters = _decodeSearchTabMultiFilter(
+      _searchTabPendingInstructorHoursFilter ??
+          _encodeSearchTabMultiFilter(selectedInstructorHourFilters),
+      instructorHoursOptions,
+    );
+    final pendingCertificateFilters = _decodeSearchTabMultiFilter(
+      _searchTabPendingCertificateFilter ??
+          _encodeSearchTabMultiFilter(selectedCertificateFilters),
+      certificateOptions,
+    );
+    final pendingRatingFilters = _decodeSearchTabMultiFilter(
+      _searchTabPendingRatingFilter ?? _encodeSearchTabMultiFilter(selectedRatingFilters),
+      ratingOptions,
+    );
+    final pendingSort = const {'best_match', 'newest', 'deadline', 'company'}
+        .contains(_searchTabPendingSort)
+      ? _searchTabPendingSort!
+      : selectedSort;
+    final hasPendingPrimaryFilterChanges =
+      !setEquals(pendingTypeFilters, selectedTypeFilters) ||
+      pendingLocation != selectedLocation ||
+      !setEquals(pendingPositionFilters, selectedPositionFilters) ||
+      !setEquals(pendingFaaRuleFilters, selectedFaaRuleFilters) ||
+      !setEquals(pendingSpecialtyFilters, selectedSpecialtyFilters) ||
+      !setEquals(pendingInstructorHourFilters, selectedInstructorHourFilters) ||
+      !setEquals(pendingCertificateFilters, selectedCertificateFilters) ||
+      !setEquals(pendingRatingFilters, selectedRatingFilters) ||
+      pendingSort != selectedSort;
+    final hasAnyVisibleDrawerSelections =
+      !pendingTypeFilters.contains('all') ||
+      !pendingPositionFilters.contains('all') ||
+      !pendingFaaRuleFilters.contains('all') ||
+      !pendingSpecialtyFilters.contains('all') ||
+      !pendingInstructorHourFilters.contains('all') ||
+      !pendingCertificateFilters.contains('all') ||
+      !pendingRatingFilters.contains('all');
+
+    List<String> orderOptionsByPreference(
+      List<String> options,
+      List<String> preferredOrder,
+    ) {
+      final ordered = <String>[];
+      final hasAll = options.any((value) => value.toLowerCase() == 'all');
+      if (hasAll) {
+        final allValue = options.firstWhere(
+          (value) => value.toLowerCase() == 'all',
+        );
+        ordered.add(allValue);
+      }
+
+      for (final preferred in preferredOrder) {
+        for (final value in options) {
+          if (value.toLowerCase() == preferred.toLowerCase() &&
+              !ordered.contains(value)) {
+            ordered.add(value);
+          }
+        }
+      }
+
+      final remaining = options
+          .where((value) => !ordered.contains(value))
+          .toList()
+        ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+
+      return [...ordered, ...remaining];
+    }
+
+    final employmentTypeFilterOptions = orderOptionsByPreference(
+      typeOptions
+          .where((value) => value.toLowerCase() != 'external')
+          .toList(),
+      const ['Full-Time', 'Part-Time', 'Seasonal', 'Contract', 'Rotations'],
+    );
+    final flightInstructionFilterOptions = orderOptionsByPreference(
+      instructorHoursOptions,
+      const [
+        'Flight Instruction (CFI)',
+        'Instrument (CFII)',
+        'Multi-Engine (MEI)',
+      ],
+    );
+    final specialtyFilterOptions = orderOptionsByPreference(
+      specialtyOptions,
+      const [
+        'Fire Fighting',
+        'Aerobatic',
+        'Floatplane',
+        'Ski-plane',
+        'Alaska Time',
+        'Tailwheel',
+        'Off Airport',
+        'Banner Towing',
+        'Low Altitude',
+        'Aerial Survey',
+        'Low-Time Jobs',
+        'Mid-Time Jobs',
+      ],
+    );
+    final ratingFilterOptions = orderOptionsByPreference(
+      ratingOptions,
+      const [
+        'Single-Engine Land',
+        'Multi-Engine Land',
+        'Single-Engine Sea',
+        'Multi-Engine Sea',
+        'Tailwheel Endorsement',
+        'Rotorcraft',
+        'Gyroplane',
+        'Glider',
+        'Lighter-than-Air',
+      ],
+    );
+    String? findCaseInsensitiveOption(List<String> options, String target) {
+      for (final option in options) {
+        if (option.toLowerCase() == target.toLowerCase()) {
+          return option;
+        }
+      }
+      return null;
+    }
+
+    final certificateFilterOptions = <String>[
+      if (certificateOptions.any((value) => value.toLowerCase() == 'all'))
+        certificateOptions.firstWhere(
+          (value) => value.toLowerCase() == 'all',
+        ),
+      ...const [
+        'Airline Transport Pilot (ATP)',
+        'Commercial Pilot (CPL)',
+        'Instrument Rating (IFR)',
+        'Private Pilot (PPL)',
+        'Airframe & Powerplant (A&P)',
+        'Inspection Authorization (IA)',
+        'Dispatcher (DSP)',
+      ].map((value) {
+        return findCaseInsensitiveOption(certificateOptions, value);
+      }).whereType<String>(),
+    ];
+    final certificateFilterGroups = [
+      const [
+        'Airline Transport Pilot (ATP)',
+        'Commercial Pilot (CPL)',
+        'Instrument Rating (IFR)',
+        'Private Pilot (PPL)',
+      ],
+      const [
+        'Airframe & Powerplant (A&P)',
+        'Inspection Authorization (IA)',
+      ],
+      const ['Dispatcher (DSP)'],
+    ]
+        .map(
+          (group) => group
+              .where(
+                (value) => certificateFilterOptions.any(
+                  (option) => option.toLowerCase() == value.toLowerCase(),
+                ),
+              )
+              .toList(),
+        )
+        .where((group) => group.isNotEmpty)
+        .toList();
+    final ratingFilterGroups = [
+      const ['Single-Engine Land', 'Multi-Engine Land'],
+      const ['Single-Engine Sea', 'Multi-Engine Sea'],
+      const ['Tailwheel Endorsement'],
+      const ['Rotorcraft', 'Gyroplane'],
+      const ['Glider', 'Lighter-than-Air'],
+    ]
+        .map(
+          (group) => group
+              .where(
+                (value) => ratingFilterOptions.any(
+                  (option) => option.toLowerCase() == value.toLowerCase(),
+                ),
+              )
+              .toList(),
+        )
+        .where((group) => group.isNotEmpty)
+        .toList();
+
+    if (!hasPendingPrimaryFilterChanges) {
+      _searchTabPendingTypeFilter = _encodeSearchTabMultiFilter(
+        selectedTypeFilters,
+      );
+      _searchTabPendingLocationFilter = selectedLocation;
+      _searchTabPendingPositionFilter = _encodeSearchTabMultiFilter(
+        selectedPositionFilters,
+      );
+      _searchTabPendingFaaRuleFilter = _encodeSearchTabMultiFilter(
+        selectedFaaRuleFilters,
+      );
+      _searchTabPendingSpecialtyFilter = _encodeSearchTabMultiFilter(
+        selectedSpecialtyFilters,
+      );
+      _searchTabPendingInstructorHoursFilter = _encodeSearchTabMultiFilter(
+        selectedInstructorHourFilters,
+      );
+      _searchTabPendingCertificateFilter = _encodeSearchTabMultiFilter(
+        selectedCertificateFilters,
+      );
+      _searchTabPendingRatingFilter = _encodeSearchTabMultiFilter(
+        selectedRatingFilters,
+      );
+      _searchTabPendingSort = selectedSort;
+    }
 
     if (_loading) {
       return const Center(child: CircularProgressIndicator());
@@ -9703,27 +10650,250 @@ class _MyHomePageState extends State<MyHomePage> {
       );
     }
 
-    Widget buildAdaptiveFieldWrap(List<Widget> fields) {
-      return LayoutBuilder(
-        builder: (context, constraints) {
-          final columns = constraints.maxWidth >= 1100
-              ? 4
-              : constraints.maxWidth >= 780
-              ? 2
-              : 1;
-          const spacing = 10.0;
-          final rawWidth =
-              (constraints.maxWidth - ((columns - 1) * spacing)) / columns;
-          final fieldWidth = columns == 1 ? constraints.maxWidth : rawWidth;
+    Widget buildFilterOptionBoxes({
+      required String title,
+      required List<String> options,
+      required Set<String> selectedValues,
+      required String allLabel,
+      required bool isExpanded,
+      required VoidCallback onToggle,
+      required ValueChanged<Set<String>> onSelected,
+      required Key headerKey,
+      String Function(String)? displayLabelFor,
+    }) {
+      String displayLabel(String value) {
+        if (displayLabelFor != null) {
+          return displayLabelFor(value);
+        }
+        if (value == 'all') {
+          return allLabel;
+        }
+        return value;
+      }
 
-          return Wrap(
-            spacing: spacing,
-            runSpacing: spacing,
-            children: fields
-                .map((field) => SizedBox(width: fieldWidth, child: field))
-                .toList(),
-          );
-        },
+      Widget buildOptionBox(String value) {
+        final isSelected = selectedValues.contains(value);
+        return InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: () {
+            final next = Set<String>.from(selectedValues);
+            if (value == 'all') {
+              onSelected({'all'});
+              return;
+            }
+
+            next.remove('all');
+            if (next.contains(value)) {
+              next.remove(value);
+            } else {
+              next.add(value);
+            }
+
+            onSelected(next.isEmpty ? {'all'} : next);
+          },
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 140),
+            padding: const EdgeInsets.symmetric(
+              horizontal: 10,
+              vertical: 8,
+            ),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(10),
+              color: isSelected
+                  ? colorScheme.primaryContainer
+                  : colorScheme.surface,
+              border: Border.all(
+                color: isSelected
+                    ? colorScheme.primary
+                    : colorScheme.outlineVariant,
+              ),
+            ),
+            child: Text(
+              displayLabel(value),
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                color: isSelected
+                    ? colorScheme.onPrimaryContainer
+                    : colorScheme.onSurface,
+              ),
+            ),
+          ),
+        );
+      }
+
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          InkWell(
+            borderRadius: BorderRadius.circular(10),
+            onTap: onToggle,
+            child: Container(
+              key: headerKey,
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: colorScheme.outlineVariant),
+                color: colorScheme.surfaceContainerLowest,
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      title,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
+                  Icon(
+                    isExpanded ? Icons.expand_less : Icons.expand_more,
+                    size: 20,
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (isExpanded) ...[
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: options.map(buildOptionBox).toList(),
+            ),
+          ],
+        ],
+      );
+    }
+
+    Widget buildGroupedFilterOptionBoxes({
+      required String title,
+      required List<List<String>> groups,
+      required Set<String> selectedValues,
+      required String allLabel,
+      required bool isExpanded,
+      required VoidCallback onToggle,
+      required ValueChanged<Set<String>> onSelected,
+      required Key headerKey,
+    }) {
+      Widget buildOptionBox(String value) {
+        final isSelected = selectedValues.contains(value);
+        final label = value == 'all' ? allLabel : value;
+        return InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: () {
+            final next = Set<String>.from(selectedValues);
+            if (value == 'all') {
+              onSelected({'all'});
+              return;
+            }
+
+            next.remove('all');
+            if (next.contains(value)) {
+              next.remove(value);
+            } else {
+              next.add(value);
+            }
+
+            onSelected(next.isEmpty ? {'all'} : next);
+          },
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 140),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(10),
+              color: isSelected
+                  ? colorScheme.primaryContainer
+                  : colorScheme.surface,
+              border: Border.all(
+                color: isSelected
+                    ? colorScheme.primary
+                    : colorScheme.outlineVariant,
+              ),
+            ),
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                color: isSelected
+                    ? colorScheme.onPrimaryContainer
+                    : colorScheme.onSurface,
+              ),
+            ),
+          ),
+        );
+      }
+
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          InkWell(
+            borderRadius: BorderRadius.circular(10),
+            onTap: onToggle,
+            child: Container(
+              key: headerKey,
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: colorScheme.outlineVariant),
+                color: colorScheme.surfaceContainerLowest,
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      title,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
+                  Icon(
+                    isExpanded ? Icons.expand_less : Icons.expand_more,
+                    size: 20,
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (isExpanded) ...[
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [buildOptionBox('all')],
+            ),
+            if (groups.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 10),
+                child: Divider(color: colorScheme.outlineVariant, height: 1),
+              ),
+            ...[
+              for (var i = 0; i < groups.length; i++) ...[
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: groups[i].map(buildOptionBox).toList(),
+                ),
+                if (i < groups.length - 1)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    child: Divider(
+                      color: colorScheme.outlineVariant,
+                      height: 1,
+                    ),
+                  ),
+              ],
+            ],
+          ],
+        ],
       );
     }
 
@@ -9747,10 +10917,15 @@ class _MyHomePageState extends State<MyHomePage> {
         });
       });
     }
-    if (selectedType != 'all') {
-      addActiveFilter('Type: $selectedType', () {
+    for (final type in selectedTypeFilters.where((value) => value != 'all')) {
+      addActiveFilter('Type: $type', () {
         setState(() {
-          _searchTabTypeFilter = 'all';
+          final next = Set<String>.from(selectedTypeFilters)..remove(type);
+          final encoded = _encodeSearchTabMultiFilter(
+            next.isEmpty ? {'all'} : next,
+          );
+          _searchTabTypeFilter = encoded;
+          _searchTabPendingTypeFilter = encoded;
         });
       });
     }
@@ -9758,48 +10933,94 @@ class _MyHomePageState extends State<MyHomePage> {
       addActiveFilter('Location: $selectedLocation', () {
         setState(() {
           _searchTabLocationFilter = 'all';
+          _searchTabPendingLocationFilter = 'all';
         });
       });
     }
-    if (selectedPosition != 'all') {
-      addActiveFilter('Position: $selectedPosition', () {
+    for (final position in selectedPositionFilters.where(
+      (value) => value != 'all',
+    )) {
+      addActiveFilter('Position: $position', () {
         setState(() {
-          _searchTabPositionFilter = 'all';
+          final next = Set<String>.from(selectedPositionFilters)
+            ..remove(position);
+          final encoded = _encodeSearchTabMultiFilter(
+            next.isEmpty ? {'all'} : next,
+          );
+          _searchTabPositionFilter = encoded;
+          _searchTabPendingPositionFilter = encoded;
         });
       });
     }
-    if (selectedFaaRule != 'all') {
-      addActiveFilter('FAA: $selectedFaaRule', () {
+    for (final faaRule in selectedFaaRuleFilters.where(
+      (value) => value != 'all',
+    )) {
+      addActiveFilter('FAA: $faaRule', () {
         setState(() {
-          _searchTabFaaRuleFilter = 'all';
+          final next = Set<String>.from(selectedFaaRuleFilters)
+            ..remove(faaRule);
+          final encoded = _encodeSearchTabMultiFilter(
+            next.isEmpty ? {'all'} : next,
+          );
+          _searchTabFaaRuleFilter = encoded;
+          _searchTabPendingFaaRuleFilter = encoded;
         });
       });
     }
-    if (selectedCertificate != 'all') {
-      addActiveFilter('Certificate: $selectedCertificate', () {
+    for (final specialty in selectedSpecialtyFilters.where(
+      (value) => value != 'all',
+    )) {
+      addActiveFilter('Specialty: $specialty', () {
         setState(() {
-          _searchTabCertificateFilter = 'all';
+          final next = Set<String>.from(selectedSpecialtyFilters)
+            ..remove(specialty);
+          final encoded = _encodeSearchTabMultiFilter(
+            next.isEmpty ? {'all'} : next,
+          );
+          _searchTabSpecialtyFilter = encoded;
+          _searchTabPendingSpecialtyFilter = encoded;
         });
       });
     }
-    if (selectedRating != 'all') {
-      addActiveFilter('Rating: $selectedRating', () {
+    for (final certificate in selectedCertificateFilters.where(
+      (value) => value != 'all',
+    )) {
+      addActiveFilter('Certificate: $certificate', () {
         setState(() {
-          _searchTabRatingFilter = 'all';
+          final next = Set<String>.from(selectedCertificateFilters)
+            ..remove(certificate);
+          final encoded = _encodeSearchTabMultiFilter(
+            next.isEmpty ? {'all'} : next,
+          );
+          _searchTabCertificateFilter = encoded;
+          _searchTabPendingCertificateFilter = encoded;
         });
       });
     }
-    if (selectedFlightHours != 'all') {
-      addActiveFilter('Flight Hours: $selectedFlightHours', () {
+    for (final rating in selectedRatingFilters.where((value) => value != 'all')) {
+      addActiveFilter('Rating: $rating', () {
         setState(() {
-          _searchTabFlightHoursFilter = 'all';
+          final next = Set<String>.from(selectedRatingFilters)..remove(rating);
+          final encoded = _encodeSearchTabMultiFilter(
+            next.isEmpty ? {'all'} : next,
+          );
+          _searchTabRatingFilter = encoded;
+          _searchTabPendingRatingFilter = encoded;
         });
       });
     }
-    if (selectedInstructorHours != 'all') {
-      addActiveFilter('Instructor Hours: $selectedInstructorHours', () {
+    for (final instructor in selectedInstructorHourFilters.where(
+      (value) => value != 'all',
+    )) {
+      addActiveFilter('Instructor Hours: $instructor', () {
         setState(() {
-          _searchTabInstructorHoursFilter = 'all';
+          final next = Set<String>.from(selectedInstructorHourFilters)
+            ..remove(instructor);
+          final encoded = _encodeSearchTabMultiFilter(
+            next.isEmpty ? {'all'} : next,
+          );
+          _searchTabInstructorHoursFilter = encoded;
+          _searchTabPendingInstructorHoursFilter = encoded;
         });
       });
     }
@@ -9838,14 +11059,6 @@ class _MyHomePageState extends State<MyHomePage> {
         });
       });
     }
-    if (_searchTabInstructorOnly) {
-      addActiveFilter('Instructor roles only', () {
-        setState(() {
-          _searchTabInstructorOnly = false;
-          _searchTabInstructorFiltersExpanded = false;
-        });
-      });
-    }
     if (_searchTabExternalOnly) {
       addActiveFilter('External postings only', () {
         setState(() {
@@ -9863,6 +11076,7 @@ class _MyHomePageState extends State<MyHomePage> {
       addActiveFilter(label, () {
         setState(() {
           _searchTabSort = 'best_match';
+          _searchTabPendingSort = 'best_match';
         });
       });
     }
@@ -9871,6 +11085,10 @@ class _MyHomePageState extends State<MyHomePage> {
       top: false,
       child: ListView.builder(
         key: const ValueKey('search-tab-scroll'),
+        controller: _searchTabScrollController,
+        physics: _searchTabFiltersPinned
+            ? const NeverScrollableScrollPhysics()
+            : null,
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         itemCount: filteredJobs.length + 1,
         itemBuilder: (context, index) {
@@ -9878,58 +11096,6 @@ class _MyHomePageState extends State<MyHomePage> {
             return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [
-                        colorScheme.primaryContainer,
-                        colorScheme.secondaryContainer,
-                      ],
-                    ),
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Job Search',
-                        style: Theme.of(context).textTheme.headlineSmall
-                            ?.copyWith(fontWeight: FontWeight.w700),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        'Find aviation roles by keyword, location, and qualification fit.',
-                        style: Theme.of(context).textTheme.bodyMedium,
-                      ),
-                      const SizedBox(height: 10),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: [
-                          Chip(
-                            avatar: const Icon(Icons.work_outline, size: 16),
-                            label: Text('${allVisibleJobs.length} total jobs'),
-                          ),
-                          Chip(
-                            avatar: const Icon(Icons.filter_alt, size: 16),
-                            label: Text(
-                              '${activeFilters.length} active filters',
-                            ),
-                          ),
-                          Chip(
-                            avatar: const Icon(Icons.travel_explore, size: 16),
-                            label: Text('${filteredJobs.length} results'),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 10),
                 Card(
                   child: ExpansionTile(
                     key: ValueKey(
@@ -10303,178 +11469,402 @@ class _MyHomePageState extends State<MyHomePage> {
                     ),
                   ),
                 ),
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    FilterChip(
-                      key: const ValueKey('search-tab-instructor-only'),
-                      label: const Text('Instructor roles only'),
-                      selected: _searchTabInstructorOnly,
-                      onSelected: (selected) {
-                        setState(() {
-                          _searchTabInstructorOnly = selected;
-                          _searchTabInstructorFiltersExpanded = selected;
-                        });
-                      },
-                    ),
-                  ],
-                ),
                 const SizedBox(height: 12),
-                Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Icon(Icons.tune, color: colorScheme.primary),
-                            const SizedBox(width: 8),
-                            Text(
-                              'Primary Filters',
-                              style: Theme.of(context).textTheme.titleMedium,
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 10),
-                        buildAdaptiveFieldWrap([
-                          DropdownButtonFormField<String>(
-                            key: const ValueKey('search-tab-type-filter'),
-                            initialValue: selectedType,
-                            isExpanded: true,
-                            decoration: const InputDecoration(
-                              labelText: 'Employment Type',
-                              border: OutlineInputBorder(),
-                            ),
-                            items: typeOptions
-                                .map(
-                                  (value) => DropdownMenuItem<String>(
-                                    value: value,
-                                    child: Text(
-                                      value == 'all' ? 'All Types' : value,
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(maxWidth: isNarrowSearchLayout ? 420 : 360),
+                    child: AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 220),
+                      child: _searchTabPrimaryFiltersDrawerOpen
+                          ? Card(
+                              key: const ValueKey('search-primary-filters-open'),
+                              clipBehavior: Clip.antiAlias,
+                              child: SizedBox(
+                                key: _searchTabPrimaryFiltersCardKey,
+                                height: isNarrowSearchLayout ? 540 : 580,
+                                child: Column(
+                                  children: [
+                                    Padding(
+                                      key: _searchTabFiltersHeadingKey,
+                                      padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
+                                      child: Row(
+                                        children: [
+                                          Icon(Icons.tune, color: colorScheme.primary),
+                                          const SizedBox(width: 8),
+                                          Text(
+                                            'Filters',
+                                            style: Theme.of(context).textTheme.titleMedium,
+                                          ),
+                                          const Spacer(),
+                                          IconButton(
+                                            tooltip: 'Close filters',
+                                            onPressed: () {
+                                              setState(() {
+                                                _searchTabPrimaryFiltersDrawerOpen = false;
+                                                _searchTabFiltersPinned = false;
+                                              });
+                                            },
+                                            icon: const Icon(Icons.close),
+                                          ),
+                                        ],
+                                      ),
                                     ),
-                                  ),
-                                )
-                                .toList(),
-                            onChanged: (value) {
-                              if (value == null) return;
-                              setState(() {
-                                _searchTabTypeFilter = value;
-                              });
-                            },
-                          ),
-                          DropdownButtonFormField<String>(
-                            key: const ValueKey('search-tab-location-filter'),
-                            initialValue: selectedLocation,
-                            isExpanded: true,
-                            decoration: const InputDecoration(
-                              labelText: 'Location',
-                              border: OutlineInputBorder(),
-                            ),
-                            items: locationOptions
-                                .map(
-                                  (value) => DropdownMenuItem<String>(
-                                    value: value,
-                                    child: Text(
-                                      value == 'all' ? 'All Locations' : value,
+                                    const Divider(height: 1),
+                                    Expanded(
+                                      child: SingleChildScrollView(
+                                        padding: const EdgeInsets.all(12),
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            buildFilterOptionBoxes(
+                                              title: 'Employment Type',
+                                              options:
+                                                employmentTypeFilterOptions,
+                                              selectedValues:
+                                                  pendingTypeFilters,
+                                              allLabel: 'All Types',
+                                              isExpanded:
+                                                  _searchTabEmploymentTypeExpanded,
+                                              headerKey:
+                                                  _searchTabEmploymentTypeHeaderKey,
+                                              onToggle: () {
+                                                _toggleExclusiveFilterSection(
+                                                  isCurrentlyExpanded:
+                                                      _searchTabEmploymentTypeExpanded,
+                                                  expandSection: () {
+                                                    _searchTabEmploymentTypeExpanded =
+                                                        true;
+                                                  },
+                                                  headerKey:
+                                                      _searchTabEmploymentTypeHeaderKey,
+                                                );
+                                              },
+                                              onSelected: (values) {
+                                                setState(() {
+                                                  _searchTabPendingTypeFilter =
+                                                      _encodeSearchTabMultiFilter(
+                                                        values,
+                                                      );
+                                                  _searchTabFiltersPinned = true;
+                                                });
+                                                _pinFiltersCardBelowTabs();
+                                              },
+                                            ),
+                                            const SizedBox(height: 10),
+                                            buildFilterOptionBoxes(
+                                              title: 'Position',
+                                              options: positionOptions,
+                                              selectedValues:
+                                                  pendingPositionFilters,
+                                              allLabel: 'All Positions',
+                                              isExpanded:
+                                                  _searchTabPositionExpanded,
+                                              headerKey:
+                                                  _searchTabPositionHeaderKey,
+                                              onToggle: () {
+                                                _toggleExclusiveFilterSection(
+                                                  isCurrentlyExpanded:
+                                                      _searchTabPositionExpanded,
+                                                  expandSection: () {
+                                                    _searchTabPositionExpanded = true;
+                                                  },
+                                                  headerKey:
+                                                      _searchTabPositionHeaderKey,
+                                                );
+                                              },
+                                              onSelected: (values) {
+                                                setState(() {
+                                                  _searchTabPendingPositionFilter =
+                                                      _encodeSearchTabMultiFilter(
+                                                        values,
+                                                      );
+                                                  _searchTabFiltersPinned = true;
+                                                });
+                                                _pinFiltersCardBelowTabs();
+                                              },
+                                            ),
+                                            const SizedBox(height: 10),
+                                            buildFilterOptionBoxes(
+                                              title: 'FAA Rule',
+                                              options: faaRuleOptions,
+                                              selectedValues:
+                                                  pendingFaaRuleFilters,
+                                              allLabel: 'All FAA Rules',
+                                              isExpanded:
+                                                  _searchTabFaaRuleExpanded,
+                                              headerKey:
+                                                  _searchTabFaaRuleHeaderKey,
+                                              onToggle: () {
+                                                _toggleExclusiveFilterSection(
+                                                  isCurrentlyExpanded:
+                                                      _searchTabFaaRuleExpanded,
+                                                  expandSection: () {
+                                                    _searchTabFaaRuleExpanded = true;
+                                                  },
+                                                  headerKey:
+                                                      _searchTabFaaRuleHeaderKey,
+                                                );
+                                              },
+                                              onSelected: (values) {
+                                                setState(() {
+                                                  _searchTabPendingFaaRuleFilter =
+                                                      _encodeSearchTabMultiFilter(
+                                                        values,
+                                                      );
+                                                  _searchTabFiltersPinned = true;
+                                                });
+                                                _pinFiltersCardBelowTabs();
+                                              },
+                                            ),
+                                            const SizedBox(height: 10),
+                                            buildGroupedFilterOptionBoxes(
+                                              title: 'Certificate',
+                                              groups: certificateFilterGroups,
+                                              selectedValues:
+                                                  pendingCertificateFilters,
+                                              allLabel: 'All Certificates',
+                                              isExpanded:
+                                                  _searchTabCertificateExpanded,
+                                              headerKey:
+                                                  _searchTabCertificateHeaderKey,
+                                              onToggle: () {
+                                                _toggleExclusiveFilterSection(
+                                                  isCurrentlyExpanded:
+                                                      _searchTabCertificateExpanded,
+                                                  expandSection: () {
+                                                    _searchTabCertificateExpanded = true;
+                                                  },
+                                                  headerKey:
+                                                      _searchTabCertificateHeaderKey,
+                                                );
+                                              },
+                                              onSelected: (values) {
+                                                setState(() {
+                                                  _searchTabPendingCertificateFilter =
+                                                      _encodeSearchTabMultiFilter(
+                                                        values,
+                                                      );
+                                                  _searchTabFiltersPinned = true;
+                                                });
+                                                _pinFiltersCardBelowTabs();
+                                              },
+                                            ),
+                                            const SizedBox(height: 10),
+                                            buildGroupedFilterOptionBoxes(
+                                              title: 'Rating',
+                                              groups: ratingFilterGroups,
+                                              selectedValues:
+                                                  pendingRatingFilters,
+                                              allLabel: 'All Ratings',
+                                              isExpanded:
+                                                  _searchTabRatingExpanded,
+                                              headerKey:
+                                                  _searchTabRatingHeaderKey,
+                                              onToggle: () {
+                                                _toggleExclusiveFilterSection(
+                                                  isCurrentlyExpanded:
+                                                      _searchTabRatingExpanded,
+                                                  expandSection: () {
+                                                    _searchTabRatingExpanded = true;
+                                                  },
+                                                  headerKey:
+                                                      _searchTabRatingHeaderKey,
+                                                );
+                                              },
+                                              onSelected: (values) {
+                                                setState(() {
+                                                  _searchTabPendingRatingFilter =
+                                                      _encodeSearchTabMultiFilter(
+                                                        values,
+                                                      );
+                                                  _searchTabFiltersPinned = true;
+                                                });
+                                                _pinFiltersCardBelowTabs();
+                                              },
+                                            ),
+                                            const SizedBox(height: 10),
+                                            buildFilterOptionBoxes(
+                                              title: 'Flight Instruction',
+                                              options:
+                                                  flightInstructionFilterOptions,
+                                              selectedValues:
+                                                pendingInstructorHourFilters,
+                                              allLabel: 'None Selected',
+                                              isExpanded:
+                                                  _searchTabInstructionFilterExpanded,
+                                              headerKey:
+                                                  _searchTabInstructionHeaderKey,
+                                              onToggle: () {
+                                                _toggleExclusiveFilterSection(
+                                                  isCurrentlyExpanded:
+                                                      _searchTabInstructionFilterExpanded,
+                                                  expandSection: () {
+                                                    _searchTabInstructionFilterExpanded =
+                                                        true;
+                                                  },
+                                                  headerKey:
+                                                      _searchTabInstructionHeaderKey,
+                                                );
+                                              },
+                                              onSelected: (values) {
+                                                setState(() {
+                                                  _searchTabPendingInstructorHoursFilter =
+                                                      _encodeSearchTabMultiFilter(
+                                                        values,
+                                                      );
+                                                  _searchTabFiltersPinned = true;
+                                                });
+                                                _pinFiltersCardBelowTabs();
+                                              },
+                                              displayLabelFor: (value) {
+                                                if (value == 'all') {
+                                                  return 'None Selected';
+                                                }
+                                                if (value ==
+                                                    'Flight Instruction (CFI)') {
+                                                  return 'Flight Instructor (CFI)';
+                                                }
+                                                if (value == 'Instrument (CFII)') {
+                                                  return 'Instrument Instructor (CFII)';
+                                                }
+                                                if (value == 'Multi-Engine (MEI)') {
+                                                  return 'Multi-Engine Instructor (MEI)';
+                                                }
+                                                return value;
+                                              },
+                                            ),
+                                            const SizedBox(height: 10),
+                                            buildFilterOptionBoxes(
+                                              title: 'Specialty Categories',
+                                              options: specialtyFilterOptions,
+                                              selectedValues:
+                                                  pendingSpecialtyFilters,
+                                              allLabel: 'None Selected',
+                                              isExpanded:
+                                                  _searchTabSpecialtyFilterExpanded,
+                                              headerKey:
+                                                  _searchTabSpecialtyHeaderKey,
+                                              onToggle: () {
+                                                _toggleExclusiveFilterSection(
+                                                  isCurrentlyExpanded:
+                                                      _searchTabSpecialtyFilterExpanded,
+                                                  expandSection: () {
+                                                    _searchTabSpecialtyFilterExpanded =
+                                                        true;
+                                                  },
+                                                  headerKey:
+                                                      _searchTabSpecialtyHeaderKey,
+                                                );
+                                              },
+                                              onSelected: (values) {
+                                                setState(() {
+                                                  _searchTabPendingSpecialtyFilter =
+                                                      _encodeSearchTabMultiFilter(
+                                                        values,
+                                                      );
+                                                  _searchTabFiltersPinned = true;
+                                                });
+                                                _pinFiltersCardBelowTabs();
+                                              },
+                                            ),
+                                          ],
+                                        ),
+                                      ),
                                     ),
-                                  ),
-                                )
-                                .toList(),
-                            onChanged: (value) {
-                              if (value == null) return;
-                              setState(() {
-                                _searchTabLocationFilter = value;
-                              });
-                            },
-                          ),
-                          DropdownButtonFormField<String>(
-                            key: const ValueKey('search-tab-position-filter'),
-                            initialValue: selectedPosition,
-                            isExpanded: true,
-                            decoration: const InputDecoration(
-                              labelText: 'Position',
-                              border: OutlineInputBorder(),
-                            ),
-                            items: positionOptions
-                                .map(
-                                  (value) => DropdownMenuItem<String>(
-                                    value: value,
-                                    child: Text(
-                                      value == 'all' ? 'All Positions' : value,
+                                    const Divider(height: 1),
+                                    Padding(
+                                      padding: const EdgeInsets.all(12),
+                                      child: Row(
+                                        children: [
+                                          Expanded(
+                                            child: OutlinedButton(
+                                              onPressed: hasAnyVisibleDrawerSelections
+                                                  ? () {
+                                                      setState(() {
+                                                  _searchTabPendingTypeFilter = 'all';
+                                                  _searchTabPendingPositionFilter = 'all';
+                                                  _searchTabPendingFaaRuleFilter = 'all';
+                                                  _searchTabPendingSpecialtyFilter = 'all';
+                                                  _searchTabPendingInstructorHoursFilter = 'all';
+                                                  _searchTabPendingCertificateFilter = 'all';
+                                                  _searchTabPendingRatingFilter = 'all';
+                                                  _searchTabFiltersPinned = false;
+                                                      });
+                                                    }
+                                                  : null,
+                                              child: const Text('Reset'),
+                                            ),
+                                          ),
+                                          const SizedBox(width: 8),
+                                          Expanded(
+                                            child: FilledButton(
+                                              onPressed: hasPendingPrimaryFilterChanges
+                                                  ? () {
+                                                      setState(() {
+                                                        _searchTabTypeFilter = _encodeSearchTabMultiFilter(
+                                                          pendingTypeFilters,
+                                                        );
+                                                        _searchTabLocationFilter =
+                                                            pendingLocation;
+                                                        _searchTabPositionFilter =
+                                                            _encodeSearchTabMultiFilter(
+                                                              pendingPositionFilters,
+                                                            );
+                                                        _searchTabFaaRuleFilter =
+                                                            _encodeSearchTabMultiFilter(
+                                                              pendingFaaRuleFilters,
+                                                            );
+                                                        _searchTabSpecialtyFilter =
+                                                            _encodeSearchTabMultiFilter(
+                                                              pendingSpecialtyFilters,
+                                                            );
+                                                        _searchTabInstructorHoursFilter =
+                                                            _encodeSearchTabMultiFilter(
+                                                              pendingInstructorHourFilters,
+                                                            );
+                                                        _searchTabCertificateFilter =
+                                                          _encodeSearchTabMultiFilter(
+                                                            pendingCertificateFilters,
+                                                          );
+                                                        _searchTabRatingFilter =
+                                                          _encodeSearchTabMultiFilter(
+                                                            pendingRatingFilters,
+                                                          );
+                                                        _searchTabSort = pendingSort;
+                                                        _searchTabFiltersPinned = false;
+                                                        _searchTabPrimaryFiltersDrawerOpen =
+                                                            false;
+                                                      });
+                                                    }
+                                                  : null,
+                                              child: const Text('Apply'),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
                                     ),
-                                  ),
-                                )
-                                .toList(),
-                            onChanged: (value) {
-                              if (value == null) return;
-                              setState(() {
-                                _searchTabPositionFilter = value;
-                              });
-                            },
-                          ),
-                          DropdownButtonFormField<String>(
-                            key: const ValueKey('search-tab-faa-rule-filter'),
-                            initialValue: selectedFaaRule,
-                            isExpanded: true,
-                            decoration: const InputDecoration(
-                              labelText: 'FAA Rule',
-                              border: OutlineInputBorder(),
+                                  ],
+                                ),
+                              ),
+                            )
+                          : Card(
+                              key: const ValueKey('search-primary-filters-closed'),
+                              child: Padding(
+                                padding: const EdgeInsets.all(10),
+                                child: OutlinedButton.icon(
+                                  onPressed: () {
+                                    setState(() {
+                                      _searchTabPrimaryFiltersDrawerOpen = true;
+                                      _searchTabFiltersPinned = true;
+                                    });
+                                    _pinFiltersCardBelowTabs();
+                                  },
+                                  icon: const Icon(Icons.tune),
+                                  label: const Text('Open Filters'),
+                                ),
+                              ),
                             ),
-                            items: faaRuleOptions
-                                .map(
-                                  (value) => DropdownMenuItem<String>(
-                                    value: value,
-                                    child: Text(
-                                      value == 'all' ? 'All FAA Rules' : value,
-                                    ),
-                                  ),
-                                )
-                                .toList(),
-                            onChanged: (value) {
-                              if (value == null) return;
-                              setState(() {
-                                _searchTabFaaRuleFilter = value;
-                              });
-                            },
-                          ),
-                          DropdownButtonFormField<String>(
-                            key: const ValueKey('search-tab-sort'),
-                            initialValue: selectedSort,
-                            isExpanded: true,
-                            decoration: const InputDecoration(
-                              labelText: 'Sort Results',
-                              border: OutlineInputBorder(),
-                            ),
-                            items: const [
-                              DropdownMenuItem(
-                                value: 'best_match',
-                                child: Text('Best Match'),
-                              ),
-                              DropdownMenuItem(
-                                value: 'newest',
-                                child: Text('Newest'),
-                              ),
-                              DropdownMenuItem(
-                                value: 'deadline',
-                                child: Text('Deadline'),
-                              ),
-                              DropdownMenuItem(
-                                value: 'company',
-                                child: Text('Company A-Z'),
-                              ),
-                            ],
-                            onChanged: (value) {
-                              if (value == null) return;
-                              setState(() {
-                                _searchTabSort = value;
-                              });
-                            },
-                          ),
-                        ]),
-                      ],
                     ),
                   ),
                 ),
@@ -10565,251 +11955,6 @@ class _MyHomePageState extends State<MyHomePage> {
                   ),
                 ),
                 const SizedBox(height: 10),
-                if (_searchTabInstructorOnly)
-                  Card(
-                    child: ExpansionTile(
-                      key: ValueKey(
-                        'search-tab-instructor-filters-${_searchTabInstructorFiltersExpanded ? 'open' : 'closed'}',
-                      ),
-                      initiallyExpanded: _searchTabInstructorFiltersExpanded,
-                      onExpansionChanged: (expanded) {
-                        setState(() {
-                          _searchTabInstructorFiltersExpanded = expanded;
-                        });
-                      },
-                      title: const Text('Instructor Filters'),
-                      subtitle: const Text(
-                        'Instructor certificates, ratings, and hour requirements',
-                      ),
-                      children: [
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-                          child: buildAdaptiveFieldWrap([
-                            DropdownButtonFormField<String>(
-                              key: const ValueKey(
-                                'search-tab-certificate-filter',
-                              ),
-                              initialValue: selectedCertificate,
-                              isExpanded: true,
-                              decoration: const InputDecoration(
-                                labelText: 'Certificate',
-                                border: OutlineInputBorder(),
-                              ),
-                              items: certificateOptions
-                                  .map(
-                                    (value) => DropdownMenuItem<String>(
-                                      value: value,
-                                      child: Text(
-                                        value == 'all'
-                                            ? 'All Certificates'
-                                            : value,
-                                      ),
-                                    ),
-                                  )
-                                  .toList(),
-                              onChanged: (value) {
-                                if (value == null) return;
-                                setState(() {
-                                  _searchTabCertificateFilter = value;
-                                });
-                              },
-                            ),
-                            DropdownButtonFormField<String>(
-                              key: const ValueKey(
-                                'search-tab-instructor-hours-filter',
-                              ),
-                              initialValue: selectedInstructorHours,
-                              isExpanded: true,
-                              decoration: const InputDecoration(
-                                labelText: 'Instructor Hours Category',
-                                border: OutlineInputBorder(),
-                              ),
-                              items: instructorHoursOptions
-                                  .map(
-                                    (value) => DropdownMenuItem<String>(
-                                      value: value,
-                                      child: Text(
-                                        value == 'all'
-                                            ? 'All Instructor Categories'
-                                            : value,
-                                      ),
-                                    ),
-                                  )
-                                  .toList(),
-                              onChanged: (value) {
-                                if (value == null) return;
-                                setState(() {
-                                  _searchTabInstructorHoursFilter = value;
-                                });
-                              },
-                            ),
-                            DropdownButtonFormField<String>(
-                              key: const ValueKey('search-tab-rating-filter'),
-                              initialValue: selectedRating,
-                              isExpanded: true,
-                              decoration: const InputDecoration(
-                                labelText: 'Rating',
-                                border: OutlineInputBorder(),
-                              ),
-                              items: ratingOptions
-                                  .map(
-                                    (value) => DropdownMenuItem<String>(
-                                      value: value,
-                                      child: Text(
-                                        value == 'all' ? 'All Ratings' : value,
-                                      ),
-                                    ),
-                                  )
-                                  .toList(),
-                              onChanged: (value) {
-                                if (value == null) return;
-                                setState(() {
-                                  _searchTabRatingFilter = value;
-                                });
-                              },
-                            ),
-                            DropdownButtonFormField<String>(
-                              key: const ValueKey(
-                                'search-tab-flight-hours-filter',
-                              ),
-                              initialValue: selectedFlightHours,
-                              isExpanded: true,
-                              decoration: const InputDecoration(
-                                labelText: 'Flight Hours Category',
-                                border: OutlineInputBorder(),
-                              ),
-                              items: flightHoursOptions
-                                  .map(
-                                    (value) => DropdownMenuItem<String>(
-                                      value: value,
-                                      child: Text(
-                                        value == 'all'
-                                            ? 'All Flight Hour Categories'
-                                            : value,
-                                      ),
-                                    ),
-                                  )
-                                  .toList(),
-                              onChanged: (value) {
-                                if (value == null) return;
-                                setState(() {
-                                  _searchTabFlightHoursFilter = value;
-                                });
-                              },
-                            ),
-                          ]),
-                        ),
-                      ],
-                    ),
-                  ),
-                Card(
-                  child: ExpansionTile(
-                    key: ValueKey(
-                      'search-tab-advanced-filters-${_searchTabAdvancedFiltersExpanded ? 'open' : 'closed'}',
-                    ),
-                    initiallyExpanded: _searchTabAdvancedFiltersExpanded,
-                    onExpansionChanged: (expanded) {
-                      setState(() {
-                        _searchTabAdvancedFiltersExpanded = expanded;
-                      });
-                    },
-                    title: const Text('Advanced Filters'),
-                    subtitle: const Text(
-                      'General qualification and experience filters',
-                    ),
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-                        child: buildAdaptiveFieldWrap([
-                          DropdownButtonFormField<String>(
-                            key: const ValueKey(
-                              'search-tab-certificate-filter',
-                            ),
-                            initialValue: selectedCertificate,
-                            isExpanded: true,
-                            decoration: const InputDecoration(
-                              labelText: 'Certificate',
-                              border: OutlineInputBorder(),
-                            ),
-                            items: certificateOptions
-                                .map(
-                                  (value) => DropdownMenuItem<String>(
-                                    value: value,
-                                    child: Text(
-                                      value == 'all'
-                                          ? 'All Certificates'
-                                          : value,
-                                    ),
-                                  ),
-                                )
-                                .toList(),
-                            onChanged: (value) {
-                              if (value == null) return;
-                              setState(() {
-                                _searchTabCertificateFilter = value;
-                              });
-                            },
-                          ),
-                          DropdownButtonFormField<String>(
-                            key: const ValueKey('search-tab-rating-filter'),
-                            initialValue: selectedRating,
-                            isExpanded: true,
-                            decoration: const InputDecoration(
-                              labelText: 'Rating',
-                              border: OutlineInputBorder(),
-                            ),
-                            items: ratingOptions
-                                .map(
-                                  (value) => DropdownMenuItem<String>(
-                                    value: value,
-                                    child: Text(
-                                      value == 'all' ? 'All Ratings' : value,
-                                    ),
-                                  ),
-                                )
-                                .toList(),
-                            onChanged: (value) {
-                              if (value == null) return;
-                              setState(() {
-                                _searchTabRatingFilter = value;
-                              });
-                            },
-                          ),
-                          DropdownButtonFormField<String>(
-                            key: const ValueKey(
-                              'search-tab-flight-hours-filter',
-                            ),
-                            initialValue: selectedFlightHours,
-                            isExpanded: true,
-                            decoration: const InputDecoration(
-                              labelText: 'Flight Hours Category',
-                              border: OutlineInputBorder(),
-                            ),
-                            items: flightHoursOptions
-                                .map(
-                                  (value) => DropdownMenuItem<String>(
-                                    value: value,
-                                    child: Text(
-                                      value == 'all'
-                                          ? 'All Flight Hour Categories'
-                                          : value,
-                                    ),
-                                  ),
-                                )
-                                .toList(),
-                            onChanged: (value) {
-                              if (value == null) return;
-                              setState(() {
-                                _searchTabFlightHoursFilter = value;
-                              });
-                            },
-                          ),
-                        ]),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 10),
                 Container(
                   width: double.infinity,
                   padding: const EdgeInsets.all(12),
@@ -10860,6 +12005,66 @@ class _MyHomePageState extends State<MyHomePage> {
           final deadlineText = job.deadlineDate != null
               ? _formatYmd(job.deadlineDate!.toLocal())
               : null;
+          final isPhoneActionLayout =
+              MediaQuery.sizeOf(context).width < kPhoneBreakpoint;
+
+          Widget cardActionButton({
+            required VoidCallback? onPressed,
+            required IconData icon,
+            required String label,
+            bool filled = false,
+            Color? iconColor,
+          }) {
+            if (isPhoneActionLayout) {
+              final iconWidget = Icon(icon, size: 18, color: iconColor);
+              if (filled) {
+                return Tooltip(
+                  message: label,
+                  child: FilledButton.tonal(
+                    onPressed: onPressed,
+                    style: FilledButton.styleFrom(
+                      minimumSize: const Size(40, 40),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 10,
+                      ),
+                    ),
+                    child: iconWidget,
+                  ),
+                );
+              }
+
+              return Tooltip(
+                message: label,
+                child: OutlinedButton(
+                  onPressed: onPressed,
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: const Size(40, 40),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 10,
+                    ),
+                  ),
+                  child: iconWidget,
+                ),
+              );
+            }
+
+            if (filled) {
+              return FilledButton.tonalIcon(
+                onPressed: onPressed,
+                icon: Icon(icon, color: iconColor),
+                label: Text(label),
+              );
+            }
+
+            return OutlinedButton.icon(
+              onPressed: onPressed,
+              icon: Icon(icon, color: iconColor),
+              label: Text(label),
+            );
+          }
+
           final matchColor = match.matchPercentage >= 90
               ? Colors.green
               : match.matchPercentage >= 70
@@ -10932,6 +12137,8 @@ class _MyHomePageState extends State<MyHomePage> {
                                 '${job.company} • ${job.location}',
                                 style: TextStyle(color: Colors.grey.shade800),
                               ),
+                              if (job.isExternal)
+                                _buildExternalListingPhoneCta(job),
                               const SizedBox(height: 4),
                               Wrap(
                                 spacing: 8,
@@ -10987,59 +12194,55 @@ class _MyHomePageState extends State<MyHomePage> {
                       onTapUrl: (url) {
                         _openDetectedLink(url);
                       },
+                      onTapPhone: (phone) {
+                        _openPhoneCall(phone);
+                      },
                     ),
                     const SizedBox(height: 10),
                     Wrap(
                       spacing: 8,
                       runSpacing: 8,
                       children: [
-                        OutlinedButton.icon(
+                        cardActionButton(
                           onPressed: () => _toggleFavorite(job),
-                          icon: Icon(
-                            _favoriteIds.contains(job.id)
-                                ? Icons.star
-                                : Icons.star_border,
-                            color: _favoriteIds.contains(job.id)
-                                ? Colors.amber
-                                : null,
-                          ),
-                          label: Text(
-                            _favoriteIds.contains(job.id)
-                                ? 'Favorited'
-                                : 'Favorite',
-                          ),
+                          icon: _favoriteIds.contains(job.id)
+                              ? Icons.star
+                              : Icons.star_border,
+                          iconColor: _favoriteIds.contains(job.id)
+                              ? Colors.amber
+                              : null,
+                          label: _favoriteIds.contains(job.id)
+                              ? 'Favorited'
+                              : 'Favorite',
                         ),
-                        FilledButton.tonalIcon(
+                        cardActionButton(
                           onPressed: (job.isExternal || !_hasApplied(job.id))
                               ? () => _handleApplyTap(job)
                               : null,
-                          icon: Icon(
-                            job.isExternal
-                                ? Icons.open_in_new
-                                : _hasApplied(job.id)
-                                ? Icons.check_circle
-                                : Icons.send,
-                            color: !job.isExternal && _hasApplied(job.id)
-                                ? Colors.green
-                                : null,
-                          ),
-                          label: Text(
-                            job.isExternal
-                                ? 'Contact Employer'
-                                : _hasApplied(job.id)
-                                ? 'Applied'
-                                : 'Apply',
-                          ),
+                          icon: job.isExternal
+                              ? Icons.open_in_new
+                              : _hasApplied(job.id)
+                              ? Icons.check_circle
+                              : Icons.send,
+                          iconColor: !job.isExternal && _hasApplied(job.id)
+                              ? Colors.green
+                              : null,
+                          label: job.isExternal
+                              ? 'Contact Employer'
+                              : _hasApplied(job.id)
+                              ? 'Applied'
+                              : 'Apply',
+                          filled: true,
                         ),
-                        OutlinedButton.icon(
+                        cardActionButton(
                           onPressed: () => _shareJobListing(job),
-                          icon: const Icon(Icons.share_outlined),
-                          label: const Text('Share'),
+                          icon: Icons.share_outlined,
+                          label: 'Share',
                         ),
-                        OutlinedButton.icon(
+                        cardActionButton(
                           onPressed: () => _reportJobListing(job),
-                          icon: const Icon(Icons.flag_outlined),
-                          label: const Text('Report'),
+                          icon: Icons.flag_outlined,
+                          label: 'Report',
                         ),
                       ],
                     ),
@@ -12129,42 +13332,16 @@ class _MyHomePageState extends State<MyHomePage> {
                       items: _selectedJobSeekerRatings(_jobSeekerProfile),
                       emptyText: 'No ratings selected',
                     ),
+                    _buildGroupedFlightHoursSummaryCard(_jobSeekerProfile),
                     _buildChipSummaryCard(
-                      title: 'Type Ratings',
-                      items: _jobSeekerProfile.typeRatings,
-                      emptyText: 'No type ratings added',
-                    ),
-                    _buildChipSummaryCard(
-                      title: 'Flight Hours',
-                      items: _hoursSummaryItems(
-                        options: _availableEmployerFlightHours,
-                        selectedTypes: _jobSeekerProfile.flightHoursTypes,
-                        hours: _jobSeekerProfile.flightHours,
-                      ),
-                      emptyText: 'No flight hour categories selected',
-                    ),
-                    _buildChipSummaryCard(
-                      title: 'Instructor Hours',
-                      items: _hoursSummaryItems(
-                        options: _availableInstructorHours,
-                        selectedTypes: _jobSeekerProfile.flightHoursTypes,
-                        hours: _jobSeekerProfile.flightHours,
-                      ),
-                      emptyText: 'No instructor hour categories selected',
-                    ),
-                    _buildChipSummaryCard(
-                      title: 'Specialty Flight Hours',
-                      items: _hoursSummaryItems(
-                        options: _availableSpecialtyExperience,
-                        selectedTypes: _jobSeekerProfile.specialtyFlightHours,
-                        hours: _jobSeekerProfile.specialtyFlightHoursMap,
-                      ),
-                      emptyText: 'No specialty experience selected',
-                    ),
-                    _buildChipSummaryCard(
-                      title: 'Aircraft',
+                      title: 'Aircraft (Coming Soon)',
                       items: _jobSeekerProfile.aircraftFlown,
                       emptyText: 'No aircraft added',
+                    ),
+                    _buildChipSummaryCard(
+                      title: 'Type Ratings (Coming Soon)',
+                      items: _jobSeekerProfile.typeRatings,
+                      emptyText: 'No type ratings added',
                     ),
                   ],
                 ),
@@ -12763,10 +13940,39 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Widget _buildCreateInstructorCertsContent() {
+    Widget certTitle(String cert) {
+      final requiredHourLabel = _requiredInstructorHourLabelForCertificate(cert);
+      final showRequiredByHoursChip =
+          requiredHourLabel != null &&
+          _isRequiredInstructorHourSelected(
+            hourLabel: requiredHourLabel,
+            selectedInstructorHours: _selectedInstructorHours.keys,
+            preferredInstructorHours: _preferredInstructorHours,
+          ) &&
+          !_selectedFaaCertificates.contains(cert);
+      if (!showRequiredByHoursChip) {
+        return Text(cert);
+      }
+
+      return Row(
+        children: [
+          Expanded(
+            child: Text(
+              cert,
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+          ),
+          const SizedBox(width: 8),
+          _buildRequiredByHoursChip(),
+        ],
+      );
+    }
+
     return _buildCheckboxCard(
       options: _availableInstructorCertificates,
       margin: const EdgeInsets.symmetric(vertical: 4),
       padding: const EdgeInsets.all(8),
+      titleBuilder: certTitle,
       isSelected: (cert) => _selectedFaaCertificates.contains(cert),
       onChanged: (cert, selected) {
         setState(() {
@@ -13789,6 +14995,7 @@ class _MyHomePageState extends State<MyHomePage> {
                   _searchTabLocationFilter = 'all';
                   _searchTabPositionFilter = 'all';
                   _searchTabFaaRuleFilter = 'all';
+                  _searchTabSpecialtyFilter = 'all';
                   _searchTabCertificateFilter = 'all';
                   _searchTabRatingFilter = 'all';
                   _searchTabFlightHoursFilter = 'all';
@@ -13796,9 +15003,6 @@ class _MyHomePageState extends State<MyHomePage> {
                   _setSearchTabMinimumMatchPercent(0);
                   _searchTabSort = 'best_match';
                   _searchTabExternalOnly = false;
-                  _searchTabInstructorOnly = false;
-                  _searchTabAdvancedFiltersExpanded = false;
-                  _searchTabInstructorFiltersExpanded = false;
                   _page = 1;
                 });
               },
@@ -13829,6 +15033,7 @@ class _MyHomePageState extends State<MyHomePage> {
           bottom: PreferredSize(
             preferredSize: const Size.fromHeight(48),
             child: SizedBox(
+              key: _topTabsBarKey,
               height: 48,
               child: Stack(
                 children: [
@@ -14104,6 +15309,23 @@ class JobDetailsPage extends StatelessWidget {
     }
   }
 
+  Future<void> _openPhone(BuildContext context, String rawPhone) async {
+    final uri = _parseLaunchablePhoneUri(rawPhone);
+    if (uri == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not start a phone call.')),
+      );
+      return;
+    }
+
+    final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!launched && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not start a phone call.')),
+      );
+    }
+  }
+
   bool get _hasPart135Rule {
     final rules = job.faaRules
         .map((rule) => rule.trim().toLowerCase())
@@ -14218,6 +15440,19 @@ class JobDetailsPage extends StatelessWidget {
     final applicationDeadlineText = job.deadlineDate != null
         ? _formatYmd(job.deadlineDate!.toLocal())
         : null;
+    final externalContactName = job.contactName?.trim() ?? '';
+    final externalContactEmail = job.contactEmail?.trim() ?? '';
+    final externalContactPhoneRaw = job.companyPhone?.trim() ?? '';
+    final externalContactPhoneFormatted = _formatPhoneNumber(
+      externalContactPhoneRaw,
+    );
+    final externalContactPhoneDisplay = externalContactPhoneFormatted.isNotEmpty
+      ? externalContactPhoneFormatted
+      : externalContactPhoneRaw;
+    final canCallExternalPhone =
+      _isMobileDialPlatform() &&
+      externalContactPhoneRaw.isNotEmpty &&
+      _parseLaunchablePhoneUri(externalContactPhoneRaw) != null;
     final detailsBottomPadding = 24.0;
     final crewLabel = job.crewRole.toLowerCase() == 'crew'
         ? (job.crewPosition != null && job.crewPosition!.trim().isNotEmpty
@@ -14339,6 +15574,89 @@ class JobDetailsPage extends StatelessWidget {
                                         ),
                                       ),
                                     ),
+                                    if (externalContactName.isNotEmpty ||
+                                        externalContactEmail.isNotEmpty ||
+                                        externalContactPhoneDisplay.isNotEmpty) ...[
+                                      const SizedBox(height: 10),
+                                      Container(
+                                        width: double.infinity,
+                                        padding: const EdgeInsets.all(12),
+                                        decoration: BoxDecoration(
+                                          color: Colors.teal.shade50,
+                                          border: Border.all(
+                                            color: Colors.teal.shade200,
+                                          ),
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
+                                        ),
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              'External Contact',
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.w700,
+                                                color: Colors.teal.shade900,
+                                              ),
+                                            ),
+                                            if (externalContactName.isNotEmpty)
+                                              Padding(
+                                                padding: const EdgeInsets.only(
+                                                  top: 6,
+                                                ),
+                                                child: Text(
+                                                  'Name: $externalContactName',
+                                                ),
+                                              ),
+                                            if (externalContactEmail.isNotEmpty)
+                                              Padding(
+                                                padding: const EdgeInsets.only(
+                                                  top: 6,
+                                                ),
+                                                child: Text(
+                                                  'Email: $externalContactEmail',
+                                                ),
+                                              ),
+                                            if (externalContactPhoneDisplay
+                                                .isNotEmpty)
+                                              Padding(
+                                                padding: const EdgeInsets.only(
+                                                  top: 6,
+                                                ),
+                                                child: GestureDetector(
+                                                  onTap: canCallExternalPhone
+                                                      ? () => _openPhone(
+                                                          context,
+                                                          externalContactPhoneRaw,
+                                                        )
+                                                      : null,
+                                                  child: Text(
+                                                    'Phone: $externalContactPhoneDisplay',
+                                                    style: TextStyle(
+                                                      color:
+                                                          canCallExternalPhone
+                                                          ? Colors.blue
+                                                          : null,
+                                                      decoration:
+                                                          canCallExternalPhone
+                                                          ? TextDecoration
+                                                                .underline
+                                                          : null,
+                                                      decorationColor:
+                                                          canCallExternalPhone
+                                                          ? Colors.blue
+                                                          : null,
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
                                   ],
                                   if (applicationDeadlineText != null) ...[
                                     const SizedBox(height: 12),
@@ -14545,6 +15863,9 @@ class JobDetailsPage extends StatelessWidget {
                                 onTapUrl: (url) {
                                   _openDetectedUrl(context, url);
                                 },
+                                onTapPhone: (phone) {
+                                  _openPhone(context, phone);
+                                },
                               ),
                             ),
                             if (job.benefits.isNotEmpty)
@@ -14732,8 +16053,8 @@ class JobDetailsPage extends StatelessWidget {
     } else {
       return FilledButton.icon(
         onPressed: onApply,
-        icon: const Icon(Icons.warning),
-        label: const Text('Apply Anyway'),
+        icon: const Icon(Icons.arrow_forward),
+        label: const Text('Express Interest'),
         style: FilledButton.styleFrom(backgroundColor: Colors.red),
       );
     }
@@ -14882,11 +16203,14 @@ class JobDetailsPage extends StatelessWidget {
     final instructorRows = _buildMatchHoursRows(
       sectionTitle: 'Instructor Hours:',
       entries: instructorHourEntries,
-      isPreferredFor: (hourName) =>
-          job.preferredInstructorHours.contains(hourName),
-      profileHoursFor: (hourName) => profile!.flightHours[hourName] ?? 0,
+      isPreferredFor: (hourName) => _containsInstructorHourLabel(
+        job.preferredInstructorHours,
+        hourName,
+      ),
+      profileHoursFor: (hourName) =>
+          _instructorHoursForLabel(profile!.flightHours, hourName),
       hasExperienceFor: (hourName) =>
-          profile!.flightHoursTypes.contains(hourName),
+          _containsInstructorHourLabel(profile!.flightHoursTypes, hourName),
     );
     final specialtyRows = _buildMatchHoursRows(
       sectionTitle: 'Specialty Hours:',
@@ -15162,11 +16486,29 @@ class PublicCompanyInfoPage extends StatelessWidget {
 
   String get _websiteValue => employerProfile?.website.trim() ?? '';
 
-  String get _contactNameValue => employerProfile?.contactName.trim() ?? '';
+  String get _contactNameValue {
+    final profileName = employerProfile?.contactName.trim() ?? '';
+    if (profileName.isNotEmpty) {
+      return profileName;
+    }
+    return job.contactName?.trim() ?? '';
+  }
 
-  String get _contactEmailValue => employerProfile?.contactEmail.trim() ?? '';
+  String get _contactEmailValue {
+    final profileEmail = employerProfile?.contactEmail.trim() ?? '';
+    if (profileEmail.isNotEmpty) {
+      return profileEmail;
+    }
+    return job.contactEmail?.trim() ?? '';
+  }
 
-    String get _contactPhoneRaw => employerProfile?.contactPhone.trim() ?? '';
+  String get _contactPhoneRaw {
+    final profilePhone = employerProfile?.contactPhone.trim() ?? '';
+    if (profilePhone.isNotEmpty) {
+      return profilePhone;
+    }
+    return job.companyPhone?.trim() ?? '';
+  }
 
   String get _contactPhoneValue =>
       _formatPhoneNumber(_contactPhoneRaw);
@@ -15258,6 +16600,7 @@ class PublicCompanyInfoPage extends StatelessWidget {
     final contactPhoneValue = _contactPhoneValue;
     final canCallPhone =
       _isMobileDialPlatform() &&
+      _contactPhoneRaw.isNotEmpty &&
       _parseLaunchablePhoneUri(_contactPhoneRaw) != null;
     final descriptionValue = _descriptionValue;
     final companyBenefits = _companyBenefits;

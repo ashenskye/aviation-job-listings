@@ -85,13 +85,13 @@ const List<String> availablePayRateMetricOptions = [
 ];
 
 const List<String> landRatingSelectionOptions = [
-  'Multi-Engine Land',
   'Single-Engine Land',
+  'Multi-Engine Land',
 ];
 
 const List<String> seaRatingSelectionOptions = [
-  'Multi-Engine Sea',
   'Single-Engine Sea',
+  'Multi-Engine Sea',
 ];
 
 const List<String> tailwheelRatingSelectionOptions = [

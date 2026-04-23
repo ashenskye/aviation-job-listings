@@ -416,4 +416,189 @@ void main() {
       expect(find.text('Part 135 VFR'), findsWidgets);
     },
   );
+
+  testWidgets(
+    'apply flow with instructor hours triggers implied instructor certificate checks',
+    (WidgetTester tester) async {
+      final repository = FakeAppRepository();
+      
+      // Create a job that requires CFI hours (which implies CFI certificate)
+      await repository.createJob(
+        const JobListing(
+          id: 'instructor-cert-apply',
+          title: 'Flight Instructor Role',
+          company: 'AeroTraining Academy',
+          location: 'Phoenix, AZ',
+          type: 'Full-Time',
+          crewRole: 'Flight Instructor',
+          faaRules: ['Part 141'],
+          description: 'CFI position requiring flight instruction experience.',
+          faaCertificates: ['Commercial Pilot Certificate'],
+          flightExperience: ['Total Time', 'Flight Instruction (CFI)'],
+          flightHours: {
+            'Total Time': 1500,
+            'Flight Instruction (CFI)': 250,
+          },
+          aircraftFlown: ['Cessna 172'],
+          employerId: 'emp-aero-training',
+        ),
+      );
+
+      // Create job seeker profile with instructor hours
+      final seekerProfile = JobSeekerProfile(
+        firstName: 'John',
+        lastName: 'Instructor',
+        email: 'john@example.com',
+        phone: '555-0101',
+        city: 'Phoenix',
+        stateOrProvince: 'AZ',
+        faaCertificates: const ['Commercial Pilot Certificate'],
+        flightHours: const {
+          'Total Time': 2000,
+          'Flight Instruction (CFI)': 300, // Exceeds requirement
+        },
+        flightHoursTypes: const ['Total Time', 'Flight Instruction (CFI)'],
+        aircraftFlown: const ['Cessna 172'],
+      );
+
+      await repository.saveJobSeekerProfile(seekerProfile);
+
+      await tester.pumpWidget(MyApp(repository: repository));
+      await tester.pumpAndSettle();
+
+      // Switch to job seeker profile
+      await tester.tap(find.byIcon(Icons.person));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Job Seeker').last);
+      await tester.pumpAndSettle();
+
+      // View jobs list
+      await tester.tap(find.text('Jobs'));
+      await tester.pumpAndSettle();
+
+      // Find the instructor role and tap it
+      expect(find.text('Flight Instructor Role'), findsOneWidget);
+      await tester.tap(find.text('Flight Instructor Role').first);
+      await tester.pumpAndSettle();
+
+      // Verify that job details are displayed
+      expect(find.text('AeroTraining Academy'), findsOneWidget);
+      expect(find.text('Flight Instruction (CFI): 300 hours').hitTestable(), findsWidgets);
+
+      // Apply to the job
+      await tester.tap(find.text('Apply Anyway').hitTestable());
+      await tester.pumpAndSettle();
+
+      // Quick apply dialog should be visible with instructor hours context
+      expect(find.text('Submit Application'), findsOneWidget);
+      
+      // Submit the application
+      await tester.tap(find.text('Submit Application').hitTestable());
+      await tester.pumpAndSettle();
+
+      // Verify success feedback
+      expect(find.byType(SnackBar), findsOneWidget);
+
+      // Navigate to My Applications to verify application was recorded
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      
+      await tester.tap(find.text('My Applications'));
+      await tester.pumpAndSettle();
+
+      // Verify the application appears in My Applications
+      expect(find.text('Flight Instructor Role'), findsOneWidget);
+      expect(find.text('AeroTraining Academy'), findsOneWidget);
+      expect(find.text('Submitted'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'apply flow shows match percentage when profile exceeds instructor hour requirements',
+    (WidgetTester tester) async {
+      final repository = FakeAppRepository();
+      
+      // Create a job with CFII instructor hour requirement
+      await repository.createJob(
+        const JobListing(
+          id: 'cfii-instructor-apply',
+          title: 'Advanced Flight Instructor Role',
+          company: 'Professional Flight Training',
+          location: 'Denver, CO',
+          type: 'Full-Time',
+          crewRole: 'Flight Instructor',
+          faaRules: ['Part 141'],
+          description: 'CFII position for advanced instruction.',
+          faaCertificates: ['Airline Transport Pilot (ATP)'],
+          flightExperience: [
+            'Total Time',
+            'Flight Instruction (CFI)',
+            'Instrument Flight Instruction (CFII)',
+          ],
+          flightHours: {
+            'Total Time': 2500,
+            'Flight Instruction (CFI)': 400,
+            'Instrument Flight Instruction (CFII)': 150,
+          },
+          aircraftFlown: ['Cirrus SR22'],
+          employerId: 'emp-pro-flight-training',
+        ),
+      );
+
+      // Create profile with matching instructor hours
+      final seekerProfile = JobSeekerProfile(
+        firstName: 'Jane',
+        lastName: 'Advanced',
+        email: 'jane@example.com',
+        phone: '555-0102',
+        city: 'Denver',
+        stateOrProvince: 'CO',
+        faaCertificates: const ['Airline Transport Pilot (ATP)'],
+        flightHours: const {
+          'Total Time': 3000,
+          'Flight Instruction (CFI)': 500,
+          'Instrument Flight Instruction (CFII)': 200,
+        },
+        flightHoursTypes: const [
+          'Total Time',
+          'Flight Instruction (CFI)',
+          'Instrument Flight Instruction (CFII)',
+        ],
+        aircraftFlown: const ['Cirrus SR22', 'Piper Cherokee'],
+      );
+
+      await repository.saveJobSeekerProfile(seekerProfile);
+
+      await tester.pumpWidget(MyApp(repository: repository));
+      await tester.pumpAndSettle();
+
+      // Switch to job seeker
+      await tester.tap(find.byIcon(Icons.person));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Job Seeker').last);
+      await tester.pumpAndSettle();
+
+      // View jobs
+      await tester.tap(find.text('Jobs'));
+      await tester.pumpAndSettle();
+
+      // Tap on the advanced instructor role
+      expect(find.text('Advanced Flight Instructor Role'), findsOneWidget);
+      await tester.tap(find.text('Advanced Flight Instructor Role').first);
+      await tester.pumpAndSettle();
+
+      // Verify match is shown (should be high percentage since profile exceeds requirements)
+      expect(find.text('Professional Flight Training'), findsOneWidget);
+      expect(find.textContaining('%'), findsWidgets);
+
+      // Apply
+      await tester.tap(find.text('Apply Anyway').hitTestable());
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Submit Application').hitTestable());
+      await tester.pumpAndSettle();
+
+      expect(find.byType(SnackBar), findsOneWidget);
+    },
+  );
 }

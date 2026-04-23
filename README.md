@@ -24,6 +24,10 @@ Steps:
 
 ## Compact Changelog
 
+- 2026-04-22: Extended integration tests with instructor certification flow scenarios (apply flow with CFI/CFII hours and profile matching).
+- 2026-04-22: Added real-time implied instructor certificate checks to seeker qualifications editor (displays "Required by hours" chips matching job form pattern).
+- 2026-04-22: Normalized instructor hour comparisons across all matching and scoring paths (profile matching, applicant review, job details, seeker editor).
+- 2026-04-22: Added "Required by hours" reminder chips for instructor certificates in job create/edit forms (CFI, CFII, MEI parallel to existing Tailwheel/Multi-Engine pattern).
 - 2026-04-03: Added end-to-end apply flow coverage in widget tests (employer create -> job seeker apply).
 - 2026-04-03: Refined match messaging for clearer confidence and requirement guidance (badge tooltip and detail wording).
 - 2026-04-03: Kept match comparison outputs concise and action-oriented ("Not yet met" and progress wording).

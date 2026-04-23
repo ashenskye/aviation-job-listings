@@ -345,9 +345,6 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
 
   static const List<String> _availableFaaRules = availableFaaRuleOptions;
 
-  static const List<String> _availableEmployerFlightHours =
-      availableEmployerFlightHourOptions;
-
   static const List<String> _availableInstructorHours =
       availableInstructorHourOptions;
 
@@ -1445,14 +1442,6 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
       return rule;
     }).toList();
     return formatted.isEmpty ? 'None' : formatted.join(', ');
-  }
-
-  String _formatHoursMap(Map<String, int> values) {
-    final entries = values.entries.where((entry) => entry.value > 0).toList();
-    if (entries.isEmpty) {
-      return 'None';
-    }
-    return entries.map((entry) => '${entry.key}: ${entry.value}').join(', ');
   }
 
   String _formatHoursWithFallback(
