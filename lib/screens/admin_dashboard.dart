@@ -405,7 +405,6 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
   bool _hoursOtherExpanded = false;
   bool _hoursHelicopterExpanded = false;
   bool _hoursSpecialtyExpanded = false;
-  bool _hoursInstructionExpanded = false;
   String _hoursGroupFilter = 'all';
 
   @override
@@ -789,7 +788,6 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
     _hoursOtherExpanded = false;
     _hoursHelicopterExpanded = false;
     _hoursSpecialtyExpanded = false;
-    _hoursInstructionExpanded = false;
     _hoursGroupFilter = 'all';
     _editingListing = null;
   }
@@ -2124,20 +2122,56 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
               const SizedBox(height: 12),
               _buildCategorizedHoursRequirementSection(),
               const SizedBox(height: 12),
-              _buildCheckboxCard(
-                title: 'Instructor Certificates (optional)',
-                options: _availableInstructorCertificates,
-                isSelected: (option) =>
-                    _selectedFaaCertificates.contains(option),
-                onChanged: (option, selected) {
-                  setState(() {
-                    if (selected) {
-                      _selectedFaaCertificates.add(option);
-                    } else {
-                      _selectedFaaCertificates.remove(option);
-                    }
-                  });
-                },
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  border: Border.all(color: Colors.grey.shade300),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Instructor Certificates and Hours (optional)',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 8),
+                    ..._availableInstructorCertificates.map(
+                      (option) => CheckboxListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        title: Text(option),
+                        value: _selectedFaaCertificates.contains(option),
+                        onChanged: (selected) {
+                          setState(() {
+                            if (selected == true) {
+                              _selectedFaaCertificates.add(option);
+                            } else {
+                              _selectedFaaCertificates.remove(option);
+                            }
+                          });
+                        },
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    const Text(
+                      'INSTRUCTION HOURS',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 0.8,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    ..._availableInstructorHours.map(
+                      (label) => _buildHoursInputRow(
+                        label: label,
+                        selectedHours: _selectedInstructorHours,
+                        preferredHours: _preferredInstructorHours,
+                      ),
+                    ),
+                  ],
+                ),
               ),
               const SizedBox(height: 12),
               TextField(
@@ -2457,24 +2491,6 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
                     label: label,
                     selectedHours: _selectedSpecialtyHours,
                     preferredHours: _preferredSpecialtyHours,
-                  ),
-                )
-                .toList(),
-          ),
-          ExpansionTile(
-            key: ValueKey('admin-hours-instruction-${_hoursInstructionExpanded ? 'open' : 'closed'}'),
-            initiallyExpanded: _hoursInstructionExpanded,
-            onExpansionChanged: (expanded) {
-              setState(() => _hoursInstructionExpanded = expanded);
-            },
-            tilePadding: EdgeInsets.zero,
-            title: const Text('FLIGHT INSTRUCTION', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: 0.8)),
-            children: _availableInstructorHours
-                .map(
-                  (label) => _buildHoursInputRow(
-                    label: label,
-                    selectedHours: _selectedInstructorHours,
-                    preferredHours: _preferredInstructorHours,
                   ),
                 )
                 .toList(),

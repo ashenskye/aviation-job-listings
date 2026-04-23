@@ -882,7 +882,6 @@ class _MyHomePageState extends State<MyHomePage> {
   bool _searchTabFlightHoursExpanded = false;
   bool _searchTabFlightHoursOtherExpanded = false;
   bool _searchTabFlightHoursHelicopterExpanded = false;
-  bool _searchTabFlightInstructionExpanded = false;
   bool _searchTabSpecialtyHoursExpanded = false;
   bool _searchTabPicSicExpanded = false;
   final Map<String, int> _searchTabSpecialtyHourMinimums = {};
@@ -1000,7 +999,6 @@ class _MyHomePageState extends State<MyHomePage> {
   bool _createHoursOtherExpanded = false;
   bool _createHoursHelicopterExpanded = false;
   bool _createHoursSpecialtyExpanded = false;
-  bool _createHoursInstructionExpanded = false;
   String _createHoursGroupFilter = 'all';
   DateTime? _createDeadlineDate;
   bool _createOpenListing = true;
@@ -3512,7 +3510,6 @@ class _MyHomePageState extends State<MyHomePage> {
     var seekerHoursOtherExpanded = false;
     var seekerHoursHelicopterExpanded = false;
     var seekerHoursSpecialtyExpanded = false;
-    var seekerHoursInstructionExpanded = false;
     var seekerHoursGroupFilter = 'all';
 
     final updatedProfile = await Navigator.of(context).push<JobSeekerProfile>(
@@ -3916,35 +3913,6 @@ class _MyHomePageState extends State<MyHomePage> {
                   ),
                   ExpansionTile(
                     key: ValueKey(
-                      'seeker-hours-instruction-${seekerHoursInstructionExpanded ? 'open' : 'closed'}',
-                    ),
-                    initiallyExpanded: seekerHoursInstructionExpanded,
-                    onExpansionChanged: (expanded) {
-                      setPageState(
-                        () => seekerHoursInstructionExpanded = expanded,
-                      );
-                    },
-                    tilePadding: EdgeInsets.zero,
-                    title: const Text(
-                      'FLIGHT INSTRUCTION',
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                        letterSpacing: 0.8,
-                      ),
-                    ),
-                    children: _availableInstructorHours
-                        .map(
-                          (label) => seekerHourInputRow(
-                            label: label,
-                            value: draftProfile.flightHours[label] ?? 0,
-                            onChanged: (val) => updateDraftFlightHours(label, val),
-                          ),
-                        )
-                        .toList(),
-                  ),
-                  ExpansionTile(
-                    key: ValueKey(
                       'seeker-hours-helicopter-${seekerHoursHelicopterExpanded ? 'open' : 'closed'}',
                     ),
                     initiallyExpanded: seekerHoursHelicopterExpanded,
@@ -4179,11 +4147,19 @@ class _MyHomePageState extends State<MyHomePage> {
                       ),
                       qualificationSection(
                         sectionKey: 'InstructorCertificates',
-                        title: seekerInstructorHoursSelected
-                            ? seekerMissingInstructorCerts.isNotEmpty
-                                  ? 'Instructor Certificates *'
-                                  : 'Instructor Certificates'
-                            : 'Instructor Certificates (Optional)',
+                        title: () {
+                            final hasCerts = draftProfile.faaCertificates
+                                .any(_availableInstructorCertificates.contains);
+                            final hasHours = seekerInstructorHoursSelected;
+                            if (!hasCerts && !hasHours) {
+                              return 'Instructor Certificates and Hours (Optional)';
+                            }
+                            if (seekerInstructorHoursSelected &&
+                                seekerMissingInstructorCerts.isNotEmpty) {
+                              return 'Instructor Certificates and Hours *';
+                            }
+                            return 'Instructor Certificates and Hours';
+                          }(),
                         isSatisfied: seekerInstructorHoursSelected
                             ? seekerMissingInstructorCerts.isEmpty
                             : null,
@@ -4193,26 +4169,49 @@ class _MyHomePageState extends State<MyHomePage> {
                                   : 'Required instructor credentials are satisfied for selected hours.'
                             : 'Select instructor credentials you currently hold (optional unless instructor hours are entered).',
                         icon: Icons.school_outlined,
-                        child: _buildCheckboxCard(
-                          options: _availableInstructorCertificates,
-                          titleBuilder: instructorCertTitle,
-                          isSelected: (cert) =>
-                              draftProfile.faaCertificates.contains(cert),
-                          onChanged: (cert, selected) {
-                            setPageState(() {
-                              final newCerts = List<String>.from(
-                                draftProfile.faaCertificates,
-                              );
-                              if (selected) {
-                                newCerts.add(cert);
-                              } else {
-                                newCerts.remove(cert);
-                              }
-                              draftProfile = draftProfile.copyWith(
-                                faaCertificates: newCerts,
-                              );
-                            });
-                          },
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _buildCheckboxCard(
+                              options: _availableInstructorCertificates,
+                              titleBuilder: instructorCertTitle,
+                              isSelected: (cert) =>
+                                  draftProfile.faaCertificates.contains(cert),
+                              onChanged: (cert, selected) {
+                                setPageState(() {
+                                  final newCerts = List<String>.from(
+                                    draftProfile.faaCertificates,
+                                  );
+                                  if (selected) {
+                                    newCerts.add(cert);
+                                  } else {
+                                    newCerts.remove(cert);
+                                  }
+                                  draftProfile = draftProfile.copyWith(
+                                    faaCertificates: newCerts,
+                                  );
+                                });
+                              },
+                            ),
+                            const SizedBox(height: 12),
+                            const Text(
+                              'INSTRUCTION HOURS',
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                letterSpacing: 0.8,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            ..._availableInstructorHours.map(
+                              (label) => seekerHourInputRow(
+                                label: label,
+                                value: draftProfile.flightHours[label] ?? 0,
+                                onChanged: (val) =>
+                                    updateDraftFlightHours(label, val),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                       qualificationSection(
@@ -7075,7 +7074,6 @@ class _MyHomePageState extends State<MyHomePage> {
     bool editHoursOtherExpanded = false;
     bool editHoursHelicopterExpanded = false;
     bool editHoursSpecialtyExpanded = false;
-    bool editHoursInstructionExpanded = false;
     String editHoursGroupFilter = 'all';
 
     String extractNumericValue(String value) {
@@ -7566,29 +7564,6 @@ class _MyHomePageState extends State<MyHomePage> {
                     selectedSet: selectedSpecialtyHours,
                     preferredSet: preferredSpecialtyHours,
                     controllers: specialtyHourControllers,
-                    setModalState: setModalState,
-                  ),
-                )
-                .toList(),
-          ),
-          ExpansionTile(
-            key: ValueKey('edit-hours-instruction-${editHoursInstructionExpanded ? 'open' : 'closed'}'),
-            initiallyExpanded: editHoursInstructionExpanded,
-            onExpansionChanged: (expanded) {
-              setModalState(() => editHoursInstructionExpanded = expanded);
-            },
-            tilePadding: EdgeInsets.zero,
-            title: const Text(
-              'FLIGHT INSTRUCTION',
-              style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: 0.8),
-            ),
-            children: instructorOptions
-                .map(
-                  (label) => editHourRow(
-                    label: label,
-                    selectedSet: selectedInstructorHours,
-                    preferredSet: preferredInstructorHours,
-                    controllers: instructorHourControllers,
                     setModalState: setModalState,
                   ),
                 )
@@ -8398,56 +8373,86 @@ class _MyHomePageState extends State<MyHomePage> {
           ),
           const SizedBox(height: 14),
           _buildEditAccordionSection(
-            title: editInstructorCertsSatisfied()
-                ? 'Instructor Certificates'
-                : editRequiredInstructorCerts().isNotEmpty
-                ? 'Instructor Certificates *'
-                : 'Instructor Certificates (Optional)',
+            title: () {
+              final hasCerts = selectedFaaCertificates
+                  .any(_availableInstructorCertificates.contains);
+              final hasHours = selectedInstructorHours.isNotEmpty;
+              if (!hasCerts && !hasHours) {
+                return 'Instructor Certificates and Hours (Optional)';
+              }
+              if (editRequiredInstructorCerts().isNotEmpty &&
+                  !editInstructorCertsSatisfied()) {
+                return 'Instructor Certificates and Hours *';
+              }
+              return 'Instructor Certificates and Hours';
+            }(),
             isSatisfied: editInstructorCertsSatisfied(),
             initiallyExpanded: false,
             child: Column(
-              children: _availableInstructorCertificates.map((cert) {
-                final requiredHourLabel =
-                    _requiredInstructorHourLabelForCertificate(cert);
-                final showRequiredByHoursChip =
-                    requiredHourLabel != null &&
-                    _isRequiredInstructorHourSelected(
-                      hourLabel: requiredHourLabel,
-                      selectedInstructorHours: selectedInstructorHours,
-                      preferredInstructorHours: preferredInstructorHours,
-                    ) &&
-                    !selectedFaaCertificates.contains(cert);
-                return CheckboxListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  title: showRequiredByHoursChip
-                      ? Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                cert,
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w700,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                ..._availableInstructorCertificates.map((cert) {
+                  final requiredHourLabel =
+                      _requiredInstructorHourLabelForCertificate(cert);
+                  final showRequiredByHoursChip =
+                      requiredHourLabel != null &&
+                      _isRequiredInstructorHourSelected(
+                        hourLabel: requiredHourLabel,
+                        selectedInstructorHours: selectedInstructorHours,
+                        preferredInstructorHours: preferredInstructorHours,
+                      ) &&
+                      !selectedFaaCertificates.contains(cert);
+                  return CheckboxListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    title: showRequiredByHoursChip
+                        ? Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  cert,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w700,
+                                  ),
                                 ),
                               ),
-                            ),
-                            const SizedBox(width: 8),
-                            _buildRequiredByHoursChip(),
-                          ],
-                        )
-                      : Text(cert),
-                  value: selectedFaaCertificates.contains(cert),
-                  onChanged: (selected) {
-                    setModalState(() {
-                      if (selected == true) {
-                        selectedFaaCertificates.add(cert);
-                      } else {
-                        selectedFaaCertificates.remove(cert);
-                      }
-                    });
-                  },
-                );
-              }).toList(),
+                              const SizedBox(width: 8),
+                              _buildRequiredByHoursChip(),
+                            ],
+                          )
+                        : Text(cert),
+                    value: selectedFaaCertificates.contains(cert),
+                    onChanged: (selected) {
+                      setModalState(() {
+                        if (selected == true) {
+                          selectedFaaCertificates.add(cert);
+                        } else {
+                          selectedFaaCertificates.remove(cert);
+                        }
+                      });
+                    },
+                  );
+                }),
+                const SizedBox(height: 12),
+                const Text(
+                  'INSTRUCTION HOURS',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 0.8,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                ...instructorOptions.map(
+                  (label) => editHourRow(
+                    label: label,
+                    selectedSet: selectedInstructorHours,
+                    preferredSet: preferredInstructorHours,
+                    controllers: instructorHourControllers,
+                    setModalState: setModalState,
+                  ),
+                ),
+              ],
             ),
           ),
           const SizedBox(height: 10),
@@ -8744,7 +8749,6 @@ class _MyHomePageState extends State<MyHomePage> {
     _createHoursOtherExpanded = false;
     _createHoursHelicopterExpanded = false;
     _createHoursSpecialtyExpanded = false;
-    _createHoursInstructionExpanded = false;
     _createHoursGroupFilter = 'all';
     _createAircraftController.clear();
     _expandedCreateRequirementsSection = 'Certificates and Ratings';
@@ -11647,46 +11651,6 @@ class _MyHomePageState extends State<MyHomePage> {
                             const SizedBox(height: 4),
                             ExpansionTile(
                               key: ValueKey(
-                                'search-hours-instruction-${_searchTabFlightInstructionExpanded ? 'open' : 'closed'}',
-                              ),
-                              initiallyExpanded:
-                                  _searchTabFlightInstructionExpanded,
-                              onExpansionChanged: (expanded) {
-                                setState(() {
-                                  _searchTabFlightInstructionExpanded =
-                                      expanded;
-                                });
-                              },
-                              tilePadding: EdgeInsets.zero,
-                              title: const Text(
-                                'FLIGHT INSTRUCTION',
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w600,
-                                  letterSpacing: 0.8,
-                                ),
-                              ),
-                              children: [
-                                _buildSearchHourSliderRow(
-                                  label: 'Flight Instruction (CFI)',
-                                  sliderMax: 2000,
-                                  map: _searchTabInstructorHourMinimums,
-                                ),
-                                _buildSearchHourSliderRow(
-                                  label: 'Instrument (CFII)',
-                                  sliderMax: 1000,
-                                  map: _searchTabInstructorHourMinimums,
-                                ),
-                                _buildSearchHourSliderRow(
-                                  label: 'Multi-Engine (MEI)',
-                                  sliderMax: 500,
-                                  map: _searchTabInstructorHourMinimums,
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 4),
-                            ExpansionTile(
-                              key: ValueKey(
                                 'search-hours-helicopter-${_searchTabFlightHoursHelicopterExpanded ? 'open' : 'closed'}',
                               ),
                               initiallyExpanded:
@@ -12056,7 +12020,7 @@ class _MyHomePageState extends State<MyHomePage> {
                                             ),
                                             const SizedBox(height: 10),
                                             buildFilterOptionBoxes(
-                                              title: 'Flight Instruction',
+                                              title: 'Instructor',
                                               options:
                                                   flightInstructionFilterOptions,
                                               selectedValues:
@@ -12105,6 +12069,33 @@ class _MyHomePageState extends State<MyHomePage> {
                                                 return value;
                                               },
                                             ),
+                                            if (_searchTabInstructionFilterExpanded) ...[
+                                              const SizedBox(height: 10),
+                                              const Text(
+                                                'INSTRUCTION HOURS',
+                                                style: TextStyle(
+                                                  fontSize: 11,
+                                                  fontWeight: FontWeight.w600,
+                                                  letterSpacing: 0.8,
+                                                ),
+                                              ),
+                                              const SizedBox(height: 4),
+                                              _buildSearchHourSliderRow(
+                                                label: 'Flight Instruction (CFI)',
+                                                sliderMax: 2000,
+                                                map: _searchTabInstructorHourMinimums,
+                                              ),
+                                              _buildSearchHourSliderRow(
+                                                label: 'Instrument (CFII)',
+                                                sliderMax: 1000,
+                                                map: _searchTabInstructorHourMinimums,
+                                              ),
+                                              _buildSearchHourSliderRow(
+                                                label: 'Multi-Engine (MEI)',
+                                                sliderMax: 500,
+                                                map: _searchTabInstructorHourMinimums,
+                                              ),
+                                            ],
                                             const SizedBox(height: 10),
                                             buildFilterOptionBoxes(
                                               title: 'Specialty Categories',
@@ -14058,33 +14049,6 @@ class _MyHomePageState extends State<MyHomePage> {
         ),
         ExpansionTile(
           key: ValueKey(
-            'create-hours-instruction-${_createHoursInstructionExpanded ? 'open' : 'closed'}',
-          ),
-          initiallyExpanded: _createHoursInstructionExpanded,
-          onExpansionChanged: (expanded) {
-            setState(() => _createHoursInstructionExpanded = expanded);
-          },
-          tilePadding: EdgeInsets.zero,
-          title: const Text(
-            'FLIGHT INSTRUCTION',
-            style: TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-              letterSpacing: 0.8,
-            ),
-          ),
-          children: _availableInstructorHours
-              .map(
-                (label) => _buildCreateHourInputRow(
-                  label: label,
-                  map: _selectedInstructorHours,
-                  preferredSet: _preferredInstructorHours,
-                ),
-              )
-              .toList(),
-        ),
-        ExpansionTile(
-          key: ValueKey(
             'create-hours-helicopter-${_createHoursHelicopterExpanded ? 'open' : 'closed'}',
           ),
           initiallyExpanded: _createHoursHelicopterExpanded,
@@ -14390,21 +14354,43 @@ class _MyHomePageState extends State<MyHomePage> {
       );
     }
 
-    return _buildCheckboxCard(
-      options: _availableInstructorCertificates,
-      margin: const EdgeInsets.symmetric(vertical: 4),
-      padding: const EdgeInsets.all(8),
-      titleBuilder: certTitle,
-      isSelected: (cert) => _selectedFaaCertificates.contains(cert),
-      onChanged: (cert, selected) {
-        setState(() {
-          if (selected) {
-            _selectedFaaCertificates.add(cert);
-          } else {
-            _selectedFaaCertificates.remove(cert);
-          }
-        });
-      },
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildCheckboxCard(
+          options: _availableInstructorCertificates,
+          margin: const EdgeInsets.symmetric(vertical: 4),
+          padding: const EdgeInsets.all(8),
+          titleBuilder: certTitle,
+          isSelected: (cert) => _selectedFaaCertificates.contains(cert),
+          onChanged: (cert, selected) {
+            setState(() {
+              if (selected) {
+                _selectedFaaCertificates.add(cert);
+              } else {
+                _selectedFaaCertificates.remove(cert);
+              }
+            });
+          },
+        ),
+        const SizedBox(height: 12),
+        const Text(
+          'INSTRUCTION HOURS',
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 0.8,
+          ),
+        ),
+        const SizedBox(height: 4),
+        ..._availableInstructorHours.map(
+          (label) => _buildCreateHourInputRow(
+            label: label,
+            map: _selectedInstructorHours,
+            preferredSet: _preferredInstructorHours,
+          ),
+        ),
+      ],
     );
   }
 
@@ -14642,11 +14628,18 @@ class _MyHomePageState extends State<MyHomePage> {
         ),
         _buildExpandableRequirementSection(
           sectionKey: 'Instructor Certs',
-          title: createInstructorCertsSatisfied
-              ? 'Instructor Certificates'
-              : createRequiredInstructorCerts.isNotEmpty
-              ? 'Instructor Certificates *'
-              : 'Instructor Certificates (Optional)',
+          title: () {
+              final hasCerts = _selectedCreateInstructorCertificates().isNotEmpty;
+              final hasHours = _selectedInstructorHours.isNotEmpty;
+              if (!hasCerts && !hasHours) {
+                return 'Instructor Certificates and Hours (Optional)';
+              }
+              if (createRequiredInstructorCerts.isNotEmpty &&
+                  !createInstructorCertsSatisfied) {
+                return 'Instructor Certificates and Hours *';
+              }
+              return 'Instructor Certificates and Hours';
+            }(),
           summary: _previewSelectionSummary(
             items: _selectedCreateInstructorCertificates(),
             emptyLabel: 'Choose instructor certificates as needed.',
