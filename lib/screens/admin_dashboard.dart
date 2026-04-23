@@ -389,6 +389,7 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
   String? _selectedPayRateMetric;
   String _selectedCrewRole = 'Single Pilot';
   String _selectedCrewPosition = 'Captain';
+  String _selectedAirframeScope = 'Fixed Wing';
   bool _openListing = true;
   DateTime? _deadlineDate;
   final Set<String> _selectedFaaCertificates = <String>{};
@@ -402,6 +403,7 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
   final Set<String> _preferredSpecialtyHours = <String>{};
   bool _hoursPicSicExpanded = false;
   bool _hoursOtherExpanded = false;
+  bool _hoursHelicopterExpanded = false;
   bool _hoursSpecialtyExpanded = false;
   bool _hoursInstructionExpanded = false;
   String _hoursGroupFilter = 'all';
@@ -460,6 +462,13 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
 
   Future<void> _submitExternalListing() async {
     if (_isSubmitting) {
+      return;
+    }
+
+    if (!availableAirframeScopeOptions.contains(_selectedAirframeScope)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please select an Airframe Scope.')),
+      );
       return;
     }
 
@@ -616,6 +625,7 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
           company: company.isEmpty ? 'External Company' : company,
           location: location.isEmpty ? 'Location not specified' : location,
           employmentType: employmentType.isEmpty ? 'External' : employmentType,
+          airframeScope: _selectedAirframeScope,
           crewRole: _selectedCrewRole,
           crewPosition: _selectedCrewRole == 'Crew'
               ? _selectedCrewPosition
@@ -668,6 +678,7 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
           company: company.isEmpty ? 'External Company' : company,
           location: location.isEmpty ? 'Location not specified' : location,
           type: employmentType.isEmpty ? 'External' : employmentType,
+          airframeScope: _selectedAirframeScope,
           crewRole: _selectedCrewRole,
           crewPosition: _selectedCrewRole == 'Crew'
               ? _selectedCrewPosition
@@ -760,6 +771,7 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
     _reasonController.clear();
     _selectedPositionOption = null;
     _selectedPayRateMetric = null;
+    _selectedAirframeScope = 'Fixed Wing';
     _selectedCrewRole = 'Single Pilot';
     _selectedCrewPosition = 'Captain';
     _openListing = true;
@@ -775,6 +787,7 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
     _preferredSpecialtyHours.clear();
     _hoursPicSicExpanded = false;
     _hoursOtherExpanded = false;
+    _hoursHelicopterExpanded = false;
     _hoursSpecialtyExpanded = false;
     _hoursInstructionExpanded = false;
     _hoursGroupFilter = 'all';
@@ -932,6 +945,7 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
       _sourceNameController.text = sourceName;
       _sourceUrlController.text = sourceUrl;
       _selectedPositionOption = positionOption;
+      _selectedAirframeScope = listing.airframeScope;
       _selectedCrewRole = listing.crewRole;
       _selectedCrewPosition = listing.crewPosition ?? 'Captain';
       _selectedFaaRules
@@ -1501,6 +1515,7 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
                 Text(
                   'FAA Rules: ${_formatFaaRulesDisplayWithFallback(listing)}',
                 ),
+                Text('Airframe Scope: ${listing.airframeScope}'),
                 Text(
                   'FAA Certificates: ${_joinOrNone(listing.faaCertificates)}',
                 ),
@@ -1958,6 +1973,42 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
                 ),
               ),
               const SizedBox(height: 12),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  border: Border.all(color: Colors.grey.shade300),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Airframe Scope *',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: availableAirframeScopeOptions
+                          .map(
+                            (option) => ChoiceChip(
+                              label: Text(option),
+                              selected: _selectedAirframeScope == option,
+                              onSelected: (_) {
+                                setState(() {
+                                  _selectedAirframeScope = option;
+                                });
+                              },
+                            ),
+                          )
+                          .toList(),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
               _buildCheckboxCard(
                 title: 'FAA Operational Scope (optional)',
                 options: _availableFaaRules,
@@ -2056,22 +2107,6 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
               ),
               const SizedBox(height: 12),
               _buildCheckboxCard(
-                title: 'Instructor Certificates (optional)',
-                options: _availableInstructorCertificates,
-                isSelected: (option) =>
-                    _selectedFaaCertificates.contains(option),
-                onChanged: (option, selected) {
-                  setState(() {
-                    if (selected) {
-                      _selectedFaaCertificates.add(option);
-                    } else {
-                      _selectedFaaCertificates.remove(option);
-                    }
-                  });
-                },
-              ),
-              const SizedBox(height: 12),
-              _buildCheckboxCard(
                 title: 'Required Ratings (optional)',
                 options: _availableRatingSelections,
                 isSelected: (option) =>
@@ -2088,6 +2123,22 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
               ),
               const SizedBox(height: 12),
               _buildCategorizedHoursRequirementSection(),
+              const SizedBox(height: 12),
+              _buildCheckboxCard(
+                title: 'Instructor Certificates (optional)',
+                options: _availableInstructorCertificates,
+                isSelected: (option) =>
+                    _selectedFaaCertificates.contains(option),
+                onChanged: (option, selected) {
+                  setState(() {
+                    if (selected) {
+                      _selectedFaaCertificates.add(option);
+                    } else {
+                      _selectedFaaCertificates.remove(option);
+                    }
+                  });
+                },
+              ),
               const SizedBox(height: 12),
               TextField(
                 controller: _aircraftController,
@@ -2206,7 +2257,16 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
       case 'Cross-Country':
       case 'Alaska Time':
         return 1000;
+      case 'Helicopter Time':
+        return 4000;
+      case 'Helicopter PIC':
+        return 2500;
+      case 'Turbine Helicopter':
+      case 'External Load':
+      case 'Night Vision Ops':
+        return 500;
       case 'Multi-engine':
+      case 'Total Turbine Time':
       case 'Fire Fighting':
         return 2000;
       default:
@@ -2375,7 +2435,7 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
             tilePadding: EdgeInsets.zero,
             title: const Text('OTHER CATEGORIES', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: 0.8)),
             children: [
-              for (final label in const ['Multi-engine', 'Instrument', 'Cross-Country', 'Night'])
+              for (final label in availableOtherFlightHourOptions)
                 _buildHoursInputRow(
                   label: label,
                   selectedHours: _selectedFlightHours,
@@ -2418,6 +2478,23 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
                   ),
                 )
                 .toList(),
+          ),
+          ExpansionTile(
+            key: ValueKey('admin-hours-helicopter-${_hoursHelicopterExpanded ? 'open' : 'closed'}'),
+            initiallyExpanded: _hoursHelicopterExpanded,
+            onExpansionChanged: (expanded) {
+              setState(() => _hoursHelicopterExpanded = expanded);
+            },
+            tilePadding: EdgeInsets.zero,
+            title: const Text('HELICOPTER HOURS', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: 0.8)),
+            children: [
+              for (final label in availableHelicopterHourOptions)
+                _buildHoursInputRow(
+                  label: label,
+                  selectedHours: _selectedFlightHours,
+                  preferredHours: _preferredFlightHours,
+                ),
+            ],
           ),
         ],
       ),
@@ -3332,6 +3409,7 @@ class _ModerationTabState extends State<_ModerationTab> {
                   profile.country,
                 ].where((part) => part.trim().isNotEmpty).join(', '),
               ),
+              _DetailRow('Airframe Scope', profile.airframeScope),
               _DetailRow('Total Flight Hours', '${profile.totalFlightHours}'),
               if (profile.faaCertificates.isNotEmpty)
                 _DetailRow(

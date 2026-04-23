@@ -685,6 +685,16 @@ _MatchResult _evaluateJobMatchForProfile({
     }
   }
 
+  // Airframe scope compatibility: 'Both' on either side is always compatible.
+  if (job.airframeScope != 'Both' && profile.airframeScope != 'Both') {
+    totalCount++;
+    if (job.airframeScope == profile.airframeScope) {
+      matchedCount++;
+    } else {
+      missingRequirements.add('Airframe Scope: ${job.airframeScope}');
+    }
+  }
+
   if (totalCount == 0) {
     totalCount = 1;
     matchedCount = 1;
@@ -716,8 +726,17 @@ class _MyHomePageState extends State<MyHomePage> {
   // --- FAA OPERATIONAL RULES/SCOPE ---
   static const List<String> _availableFaaRules = availableFaaRuleOptions;
 
+    static const List<String> _availableAirframeScopes =
+      availableAirframeScopeOptions;
+
   static const List<String> _availableEmployerFlightHours =
       availableEmployerFlightHourOptions;
+
+    static const List<String> _availableOtherFlightHours =
+      availableOtherFlightHourOptions;
+
+    static const List<String> _availableHelicopterHours =
+      availableHelicopterHourOptions;
 
   static const List<String> _availableInstructorHours =
       availableInstructorHourOptions;
@@ -817,6 +836,7 @@ class _MyHomePageState extends State<MyHomePage> {
   String _searchTabLocationFilter = 'all';
   String _searchTabPositionFilter = 'all';
   String _searchTabFaaRuleFilter = 'all';
+  String _searchTabAirframeScopeFilter = 'all';
   String _searchTabSpecialtyFilter = 'all';
   String _searchTabCertificateFilter = 'all';
   String _searchTabRatingFilter = 'all';
@@ -828,6 +848,7 @@ class _MyHomePageState extends State<MyHomePage> {
   String? _searchTabPendingLocationFilter;
   String? _searchTabPendingPositionFilter;
   String? _searchTabPendingFaaRuleFilter;
+  String? _searchTabPendingAirframeScopeFilter;
   String? _searchTabPendingSpecialtyFilter;
   String? _searchTabPendingInstructorHoursFilter;
   String? _searchTabPendingCertificateFilter;
@@ -838,6 +859,7 @@ class _MyHomePageState extends State<MyHomePage> {
   bool _searchTabPositionExpanded = false;
   bool _searchTabLocationExpanded = false;
   bool _searchTabFaaRuleExpanded = false;
+  bool _searchTabAirframeScopeExpanded = false;
   bool _searchTabSpecialtyFilterExpanded = false;
   bool _searchTabInstructionFilterExpanded = false;
   bool _searchTabCertificateExpanded = false;
@@ -846,6 +868,7 @@ class _MyHomePageState extends State<MyHomePage> {
   final GlobalKey _searchTabPositionHeaderKey = GlobalKey();
   final GlobalKey _searchTabLocationHeaderKey = GlobalKey();
   final GlobalKey _searchTabFaaRuleHeaderKey = GlobalKey();
+  final GlobalKey _searchTabAirframeScopeHeaderKey = GlobalKey();
   final GlobalKey _searchTabCertificateHeaderKey = GlobalKey();
   final GlobalKey _searchTabRatingHeaderKey = GlobalKey();
   final GlobalKey _searchTabInstructionHeaderKey = GlobalKey();
@@ -858,6 +881,7 @@ class _MyHomePageState extends State<MyHomePage> {
   bool _searchTabExternalOnly = false;
   bool _searchTabFlightHoursExpanded = false;
   bool _searchTabFlightHoursOtherExpanded = false;
+  bool _searchTabFlightHoursHelicopterExpanded = false;
   bool _searchTabFlightInstructionExpanded = false;
   bool _searchTabSpecialtyHoursExpanded = false;
   bool _searchTabPicSicExpanded = false;
@@ -960,6 +984,7 @@ class _MyHomePageState extends State<MyHomePage> {
   bool _useCompanyLocationForJob = true;
   String _selectedCrewRole = 'Single Pilot';
   String _selectedCrewPosition = 'Captain';
+  String _selectedAirframeScope = 'Fixed Wing';
   final List<String> _selectedFaaRules = [];
   String? _part135SubType; // 'ifr' or 'vfr'
   final List<String> _selectedFaaCertificates = [];
@@ -973,6 +998,7 @@ class _MyHomePageState extends State<MyHomePage> {
   final Set<String> _preferredSpecialtyHours = {};
   bool _createHoursPicSicExpanded = false;
   bool _createHoursOtherExpanded = false;
+  bool _createHoursHelicopterExpanded = false;
   bool _createHoursSpecialtyExpanded = false;
   bool _createHoursInstructionExpanded = false;
   String _createHoursGroupFilter = 'all';
@@ -1164,6 +1190,7 @@ class _MyHomePageState extends State<MyHomePage> {
     final loadedProfile = await _appRepository.loadJobSeekerProfile();
     final hydratedProfile = loadedProfile.copyWith(
       email: _resolvedJobSeekerEmail(loadedProfile),
+      airframeScope: loadedProfile.airframeScope,
       faaCertificates: _canonicalizeCertificates(loadedProfile.faaCertificates),
     );
     if (!mounted) {
@@ -1220,6 +1247,7 @@ class _MyHomePageState extends State<MyHomePage> {
       crewRole: job.crewRole,
       crewPosition: job.crewPosition,
       faaRules: List<String>.from(job.faaRules),
+      airframeScope: job.airframeScope,
       part135SubType: job.part135SubType,
       description: job.description,
       faaCertificates: _canonicalizeCertificates(job.faaCertificates),
@@ -2573,16 +2601,18 @@ class _MyHomePageState extends State<MyHomePage> {
       'PIC Turbine', 'SIC Turbine',
       'PIC Jet', 'SIC Jet',
     ];
-    const otherOptions = ['Multi-engine', 'Instrument', 'Cross-Country', 'Night'];
+    const otherOptions = availableOtherFlightHourOptions;
+    const helicopterOptions = availableHelicopterHourOptions;
 
     final totalTimeItems  = hrs(const ['Total Time'], profile.flightHoursTypes, profile.flightHours);
     final picSicItems     = hrs(picSicOptions, profile.flightHoursTypes, profile.flightHours);
     final otherItems      = hrs(otherOptions, profile.flightHoursTypes, profile.flightHours);
+    final helicopterItems = hrs(helicopterOptions, profile.flightHoursTypes, profile.flightHours);
     final specialtyItems  = hrs(_availableSpecialtyExperience, profile.specialtyFlightHours, profile.specialtyFlightHoursMap);
     final instructionItems = hrs(_availableInstructorHours, profile.flightHoursTypes, profile.flightHours);
 
     final hasAny = totalTimeItems.isNotEmpty || picSicItems.isNotEmpty ||
-        otherItems.isNotEmpty || specialtyItems.isNotEmpty || instructionItems.isNotEmpty;
+        otherItems.isNotEmpty || helicopterItems.isNotEmpty || specialtyItems.isNotEmpty || instructionItems.isNotEmpty;
 
     Widget groupSection(String label, List<String> items) {
       if (items.isEmpty) return const SizedBox.shrink();
@@ -2653,6 +2683,7 @@ class _MyHomePageState extends State<MyHomePage> {
             groupSection('OTHER CATEGORIES', otherItems),
             groupSection('SPECIALTY HOURS', specialtyItems),
             groupSection('FLIGHT INSTRUCTION', instructionItems),
+            groupSection('HELICOPTER HOURS', helicopterItems),
           ],
         ],
       ),
@@ -2847,6 +2878,13 @@ class _MyHomePageState extends State<MyHomePage> {
       missing.addAll(const ['Single-Engine Sea', 'Multi-Engine Sea']);
     }
 
+    final needsHelicopterRating = availableHelicopterHourOptions.any(
+      requiredFlight.contains,
+    );
+    if (needsHelicopterRating && !selected.contains('Helicopter')) {
+      missing.add('Helicopter');
+    }
+
     final needsTailwheel =
         requiredSpecialty.contains('Ski-plane') ||
         requiredSpecialty.contains('Tailwheel') ||
@@ -2882,6 +2920,13 @@ class _MyHomePageState extends State<MyHomePage> {
       messages.add(
         'Floatplane hours require Single-Engine Sea or Multi-Engine Sea',
       );
+    }
+
+    final needsHelicopterRating = availableHelicopterHourOptions.any(
+      requiredFlight.contains,
+    );
+    if (needsHelicopterRating && !selected.contains('Helicopter')) {
+      messages.add('Helicopter hours require Helicopter rating');
     }
 
     final needsTailwheel =
@@ -3465,6 +3510,7 @@ class _MyHomePageState extends State<MyHomePage> {
     );
     var seekerHoursPicSicExpanded = false;
     var seekerHoursOtherExpanded = false;
+    var seekerHoursHelicopterExpanded = false;
     var seekerHoursSpecialtyExpanded = false;
     var seekerHoursInstructionExpanded = false;
     var seekerHoursGroupFilter = 'all';
@@ -3501,16 +3547,22 @@ class _MyHomePageState extends State<MyHomePage> {
                       requiredSpecialtyHourLabels: draftProfile.specialtyFlightHours,
                     ).isNotEmpty ||
                 seekerInstrumentHoursSelected;
+            final selectedInstructorHourLabels =
+                _availableInstructorHours
+                    .where(
+                      (label) =>
+                          _instructorHoursForLabel(
+                            draftProfile.flightHours,
+                            label,
+                          ) >
+                          0,
+                    )
+                    .toList();
+            final seekerInstructorHoursSelected =
+                selectedInstructorHourLabels.isNotEmpty;
             final seekerMissingInstructorCerts =
                 _requiredInstructorCertificatesForHours(
-                      _availableInstructorHours.where(
-                        (label) =>
-                            _instructorHoursForLabel(
-                              draftProfile.flightHours,
-                              label,
-                            ) >
-                            0,
-                      ),
+                      selectedInstructorHourLabels,
                     )
                     .where((cert) => !draftProfile.faaCertificates.contains(cert))
                     .toSet();
@@ -3522,8 +3574,32 @@ class _MyHomePageState extends State<MyHomePage> {
                   _availableRatingSelections.contains,
                 ) &&
                 seekerMissingRatingsByHours.isEmpty;
+            final seekerAirframeScopeSatisfied = _availableAirframeScopes
+              .contains(draftProfile.airframeScope);
             final seekerHoursSatisfied =
                 (draftProfile.flightHours['Total Time'] ?? 0) > 0;
+
+            Widget airframeScopeSelector() {
+              return Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: _availableAirframeScopes
+                    .map(
+                      (scope) => ChoiceChip(
+                        label: Text(scope),
+                        selected: draftProfile.airframeScope == scope,
+                        onSelected: (_) {
+                          setPageState(() {
+                            draftProfile = draftProfile.copyWith(
+                              airframeScope: scope,
+                            );
+                          });
+                        },
+                      ),
+                    )
+                    .toList(),
+              );
+            }
 
             Widget ratingTitle(String rating) {
               final isMissingImpliedRating =
@@ -3800,8 +3876,7 @@ class _MyHomePageState extends State<MyHomePage> {
                       ),
                     ),
                     children: [
-                      for (final label
-                          in const ['Multi-engine', 'Instrument', 'Cross-Country', 'Night'])
+                      for (final label in _availableOtherFlightHours)
                         seekerHourInputRow(
                           label: label,
                           value: draftProfile.flightHours[label] ?? 0,
@@ -3867,6 +3942,32 @@ class _MyHomePageState extends State<MyHomePage> {
                           ),
                         )
                         .toList(),
+                  ),
+                  ExpansionTile(
+                    key: ValueKey(
+                      'seeker-hours-helicopter-${seekerHoursHelicopterExpanded ? 'open' : 'closed'}',
+                    ),
+                    initiallyExpanded: seekerHoursHelicopterExpanded,
+                    onExpansionChanged: (expanded) {
+                      setPageState(() => seekerHoursHelicopterExpanded = expanded);
+                    },
+                    tilePadding: EdgeInsets.zero,
+                    title: const Text(
+                      'HELICOPTER HOURS',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 0.8,
+                      ),
+                    ),
+                    children: [
+                      for (final label in _availableHelicopterHours)
+                        seekerHourInputRow(
+                          label: label,
+                          value: draftProfile.flightHours[label] ?? 0,
+                          onChanged: (val) => updateDraftFlightHours(label, val),
+                        ),
+                    ],
                   ),
                 ],
               );
@@ -3974,7 +4075,8 @@ class _MyHomePageState extends State<MyHomePage> {
                   !_sameStringSet(
                     draftProfile.aircraftFlown,
                     _jobSeekerProfile.aircraftFlown,
-                  );
+                  ) ||
+                  draftProfile.airframeScope != _jobSeekerProfile.airframeScope;
             }
 
             final canSave = hasQualificationsChanges();
@@ -3987,6 +4089,17 @@ class _MyHomePageState extends State<MyHomePage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      qualificationSection(
+                        sectionKey: 'AirframeScope',
+                        title: seekerAirframeScopeSatisfied
+                          ? 'Airframe Scope'
+                          : 'Airframe Scope *',
+                        isSatisfied: seekerAirframeScopeSatisfied,
+                        subtitle:
+                          'Select whether your experience is fixed wing, helicopter, or both.',
+                        icon: Icons.flight_outlined,
+                        child: airframeScopeSelector(),
+                      ),
                       qualificationSection(
                         sectionKey: 'Certificates',
                         title: seekerCertificatesSatisfied
@@ -4028,39 +4141,6 @@ class _MyHomePageState extends State<MyHomePage> {
                         ),
                       ),
                       qualificationSection(
-                        sectionKey: 'InstructorCertificates',
-                        title: seekerMissingInstructorCerts.isNotEmpty
-                            ? 'Instructor Certificates *'
-                            : 'Instructor Certificates',
-                        isSatisfied: seekerMissingInstructorCerts.isEmpty,
-                        subtitle:
-                            seekerMissingInstructorCerts.isNotEmpty
-                            ? 'Review credentials required by selected instructor hours.'
-                            : 'Select instructor credentials you currently hold.',
-                        icon: Icons.school_outlined,
-                        child: _buildCheckboxCard(
-                          options: _availableInstructorCertificates,
-                          titleBuilder: instructorCertTitle,
-                          isSelected: (cert) =>
-                              draftProfile.faaCertificates.contains(cert),
-                          onChanged: (cert, selected) {
-                            setPageState(() {
-                              final newCerts = List<String>.from(
-                                draftProfile.faaCertificates,
-                              );
-                              if (selected) {
-                                newCerts.add(cert);
-                              } else {
-                                newCerts.remove(cert);
-                              }
-                              draftProfile = draftProfile.copyWith(
-                                faaCertificates: newCerts,
-                              );
-                            });
-                          },
-                        ),
-                      ),
-                      qualificationSection(
                         sectionKey: 'Ratings',
                         title: seekerHasHoursTriggeredRatingRules
                           ? seekerRatingsSatisfied
@@ -4069,9 +4149,7 @@ class _MyHomePageState extends State<MyHomePage> {
                             ? 'Ratings * (Review implied ratings)'
                             : 'Ratings *'
                           : 'Ratings (Optional)',
-                        isSatisfied: seekerHasHoursTriggeredRatingRules
-                          ? seekerRatingsSatisfied
-                          : null,
+                        isSatisfied: seekerRatingsSatisfied,
                         subtitle: seekerHasHoursTriggeredRatingRules
                           ? seekerMissingRatingsByHours.isNotEmpty
                             ? 'Ratings marked Required by hours should be selected.'
@@ -4098,6 +4176,44 @@ class _MyHomePageState extends State<MyHomePage> {
                             'Select categories and add your logged hours.',
                         icon: Icons.schedule_outlined,
                         child: seekerCategorizedHoursSection(),
+                      ),
+                      qualificationSection(
+                        sectionKey: 'InstructorCertificates',
+                        title: seekerInstructorHoursSelected
+                            ? seekerMissingInstructorCerts.isNotEmpty
+                                  ? 'Instructor Certificates *'
+                                  : 'Instructor Certificates'
+                            : 'Instructor Certificates (Optional)',
+                        isSatisfied: seekerInstructorHoursSelected
+                            ? seekerMissingInstructorCerts.isEmpty
+                            : null,
+                        subtitle: seekerInstructorHoursSelected
+                            ? seekerMissingInstructorCerts.isNotEmpty
+                                  ? 'Review credentials required by selected instructor hours.'
+                                  : 'Required instructor credentials are satisfied for selected hours.'
+                            : 'Select instructor credentials you currently hold (optional unless instructor hours are entered).',
+                        icon: Icons.school_outlined,
+                        child: _buildCheckboxCard(
+                          options: _availableInstructorCertificates,
+                          titleBuilder: instructorCertTitle,
+                          isSelected: (cert) =>
+                              draftProfile.faaCertificates.contains(cert),
+                          onChanged: (cert, selected) {
+                            setPageState(() {
+                              final newCerts = List<String>.from(
+                                draftProfile.faaCertificates,
+                              );
+                              if (selected) {
+                                newCerts.add(cert);
+                              } else {
+                                newCerts.remove(cert);
+                              }
+                              draftProfile = draftProfile.copyWith(
+                                faaCertificates: newCerts,
+                              );
+                            });
+                          },
+                        ),
                       ),
                       qualificationSection(
                         sectionKey: 'Aircraft',
@@ -4656,6 +4772,7 @@ class _MyHomePageState extends State<MyHomePage> {
           : 'Full-Time',
       crewRole: _selectedCrewRole,
       crewPosition: _selectedCrewRole == 'Crew' ? _selectedCrewPosition : null,
+      airframeScope: _selectedAirframeScope,
       description: _createDescriptionController.text.trim(),
       faaCertificates: List<String>.from(_selectedFaaCertificates),
       requiredRatings: List<String>.from(_selectedRequiredRatings),
@@ -4719,6 +4836,7 @@ class _MyHomePageState extends State<MyHomePage> {
       _selectedCrewPosition = job.crewPosition == 'Co-Pilot'
           ? 'Co-Pilot'
           : 'Captain';
+        _selectedAirframeScope = job.airframeScope;
 
       _selectedFaaRules
         ..clear()
@@ -5116,6 +5234,7 @@ class _MyHomePageState extends State<MyHomePage> {
         crewRole: job.crewRole,
         crewPosition: job.crewPosition,
         faaRules: List<String>.from(job.faaRules),
+        airframeScope: job.airframeScope,
         part135SubType: job.part135SubType,
         description: job.description,
         faaCertificates: List<String>.from(job.faaCertificates),
@@ -5236,6 +5355,10 @@ class _MyHomePageState extends State<MyHomePage> {
 
   List<String> get _searchTabFaaRuleOptions {
     return const ['all', 'Part 121', 'Part 135 IFR', 'Part 135 VFR', 'Part 91'];
+  }
+
+  List<String> get _searchTabAirframeScopeOptions {
+    return const ['all', 'Fixed Wing', 'Helicopter', 'Both'];
   }
 
   List<String> get _searchTabCertificateOptions {
@@ -5500,6 +5623,10 @@ class _MyHomePageState extends State<MyHomePage> {
       _searchTabFaaRuleFilter,
       _searchTabFaaRuleOptions,
     );
+    final airframeScopeFilters = _decodeSearchTabMultiFilter(
+      _searchTabAirframeScopeFilter,
+      _searchTabAirframeScopeOptions,
+    );
     final specialtyFilters = _decodeSearchTabMultiFilter(
       _searchTabSpecialtyFilter,
       _searchTabSpecialtyOptions,
@@ -5548,6 +5675,11 @@ class _MyHomePageState extends State<MyHomePage> {
           !faaRuleFilters.any(
             (filterValue) => _matchesSearchTabFaaRuleFilter(job, filterValue),
           )) {
+        return false;
+      }
+
+      if (!airframeScopeFilters.contains('all') &&
+          !airframeScopeFilters.contains(job.airframeScope)) {
         return false;
       }
 
@@ -6936,10 +7068,12 @@ class _MyHomePageState extends State<MyHomePage> {
     String selectedCrewPosition = job.crewPosition == 'Co-Pilot'
         ? 'Co-Pilot'
         : 'Captain';
+    String selectedAirframeScope = job.airframeScope;
     bool isOpenListing = job.deadlineDate == null;
     DateTime? selectedDeadlineDate = job.deadlineDate;
     bool editHoursPicSicExpanded = false;
     bool editHoursOtherExpanded = false;
+    bool editHoursHelicopterExpanded = false;
     bool editHoursSpecialtyExpanded = false;
     bool editHoursInstructionExpanded = false;
     String editHoursGroupFilter = 'all';
@@ -7072,6 +7206,10 @@ class _MyHomePageState extends State<MyHomePage> {
       return selectedFaaRule != null &&
           selectedFaaRule!.isNotEmpty &&
           (selectedFaaRule != 'Part 135' || editPart135SubType != null);
+    }
+
+    bool editAirframeScopeSatisfied() {
+      return _availableAirframeScopes.contains(selectedAirframeScope);
     }
 
     bool editCertificatesSatisfied() {
@@ -7260,11 +7398,15 @@ class _MyHomePageState extends State<MyHomePage> {
               'PIC Jet',
               'SIC Jet',
               'Multi-engine',
+              'Total Turbine Time',
               'Instrument',
               'Cross-Country',
               'Night',
             ].contains(item),
           )
+          .toList();
+      final extraOtherFlight = extraFlight
+          .where((item) => !_availableHelicopterHours.contains(item))
           .toList();
 
       return Column(
@@ -7388,7 +7530,7 @@ class _MyHomePageState extends State<MyHomePage> {
               style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: 0.8),
             ),
             children: [
-              for (final label in const ['Multi-engine', 'Instrument', 'Cross-Country', 'Night'])
+              for (final label in _availableOtherFlightHours)
                 editHourRow(
                   label: label,
                   selectedSet: selectedFlightHours,
@@ -7396,7 +7538,7 @@ class _MyHomePageState extends State<MyHomePage> {
                   controllers: flightHourControllers,
                   setModalState: setModalState,
                 ),
-              for (final label in extraFlight)
+              for (final label in extraOtherFlight)
                 editHourRow(
                   label: label,
                   selectedSet: selectedFlightHours,
@@ -7447,6 +7589,29 @@ class _MyHomePageState extends State<MyHomePage> {
                     selectedSet: selectedInstructorHours,
                     preferredSet: preferredInstructorHours,
                     controllers: instructorHourControllers,
+                    setModalState: setModalState,
+                  ),
+                )
+                .toList(),
+          ),
+          ExpansionTile(
+            key: ValueKey('edit-hours-helicopter-${editHoursHelicopterExpanded ? 'open' : 'closed'}'),
+            initiallyExpanded: editHoursHelicopterExpanded,
+            onExpansionChanged: (expanded) {
+              setModalState(() => editHoursHelicopterExpanded = expanded);
+            },
+            tilePadding: EdgeInsets.zero,
+            title: const Text(
+              'HELICOPTER HOURS',
+              style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: 0.8),
+            ),
+            children: _availableHelicopterHours
+                .map(
+                  (label) => editHourRow(
+                    label: label,
+                    selectedSet: selectedFlightHours,
+                    preferredSet: preferredFlightHours,
+                    controllers: flightHourControllers,
                     setModalState: setModalState,
                   ),
                 )
@@ -7719,6 +7884,7 @@ class _MyHomePageState extends State<MyHomePage> {
         type: selectedEmploymentType!,
         crewRole: selectedCrewRole,
         crewPosition: selectedCrewRole == 'Crew' ? selectedCrewPosition : null,
+        airframeScope: selectedAirframeScope,
         faaRules: selectedFaaRule == null ? [] : [selectedFaaRule!],
         part135SubType: editPart135SubType,
         description: descriptionController.text.trim(),
@@ -8093,6 +8259,31 @@ class _MyHomePageState extends State<MyHomePage> {
           ),
           const SizedBox(height: 14),
           _buildEditAccordionSection(
+            title: editAirframeScopeSatisfied()
+                ? 'Airframe Scope'
+                : 'Airframe Scope *',
+            isSatisfied: editAirframeScopeSatisfied(),
+            initiallyExpanded: false,
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: _availableAirframeScopes
+                  .map(
+                    (scope) => ChoiceChip(
+                      label: Text(scope),
+                      selected: selectedAirframeScope == scope,
+                      onSelected: (_) {
+                        setModalState(() {
+                          selectedAirframeScope = scope;
+                        });
+                      },
+                    ),
+                  )
+                  .toList(),
+            ),
+          ),
+          const SizedBox(height: 10),
+          _buildEditAccordionSection(
             title: editCertificatesSatisfied()
                 ? 'Required FAA Certificates'
                 : 'Required FAA Certificates *',
@@ -8198,6 +8389,15 @@ class _MyHomePageState extends State<MyHomePage> {
           ),
           const SizedBox(height: 10),
           _buildEditAccordionSection(
+            title: editHoursSatisfied()
+                ? 'Hours Requirements'
+                : 'Hours Requirements *',
+            isSatisfied: editHoursSatisfied(),
+            initiallyExpanded: false,
+            child: buildEditCategorizedHoursSection(setModalState),
+          ),
+          const SizedBox(height: 14),
+          _buildEditAccordionSection(
             title: editInstructorCertsSatisfied()
                 ? 'Instructor Certificates'
                 : editRequiredInstructorCerts().isNotEmpty
@@ -8249,15 +8449,6 @@ class _MyHomePageState extends State<MyHomePage> {
                 );
               }).toList(),
             ),
-          ),
-          const SizedBox(height: 14),
-          _buildEditAccordionSection(
-            title: editHoursSatisfied()
-                ? 'Hours Requirements'
-                : 'Hours Requirements *',
-            isSatisfied: editHoursSatisfied(),
-            initiallyExpanded: false,
-            child: buildEditCategorizedHoursSection(setModalState),
           ),
           const SizedBox(height: 10),
           _buildEditAccordionSection(
@@ -8532,6 +8723,7 @@ class _MyHomePageState extends State<MyHomePage> {
     _selectedCreatePayRateMetric = null;
     _selectedCrewRole = 'Single Pilot';
     _selectedCrewPosition = 'Captain';
+    _selectedAirframeScope = 'Fixed Wing';
     _createDescriptionController.clear();
     _createTypeRatingsController.clear();
     _selectedFaaCertificates.clear();
@@ -8550,6 +8742,7 @@ class _MyHomePageState extends State<MyHomePage> {
     _preferredSpecialtyHours.clear();
     _createHoursPicSicExpanded = false;
     _createHoursOtherExpanded = false;
+    _createHoursHelicopterExpanded = false;
     _createHoursSpecialtyExpanded = false;
     _createHoursInstructionExpanded = false;
     _createHoursGroupFilter = 'all';
@@ -10372,6 +10565,7 @@ class _MyHomePageState extends State<MyHomePage> {
     _searchTabPositionExpanded = false;
     _searchTabLocationExpanded = false;
     _searchTabFaaRuleExpanded = false;
+    _searchTabAirframeScopeExpanded = false;
     _searchTabCertificateExpanded = false;
     _searchTabRatingExpanded = false;
     _searchTabInstructionFilterExpanded = false;
@@ -10410,6 +10604,7 @@ class _MyHomePageState extends State<MyHomePage> {
     final locationOptions = _searchTabLocationOptions;
     final positionOptions = _searchTabPositionOptions;
     final faaRuleOptions = _searchTabFaaRuleOptions;
+    final airframeScopeOptions = _searchTabAirframeScopeOptions;
     final specialtyOptions = _searchTabSpecialtyOptions;
     final certificateOptions = _searchTabCertificateOptions;
     final ratingOptions = _searchTabRatingOptions;
@@ -10430,6 +10625,10 @@ class _MyHomePageState extends State<MyHomePage> {
     final selectedFaaRuleFilters = _decodeSearchTabMultiFilter(
       _searchTabFaaRuleFilter,
       faaRuleOptions,
+    );
+    final selectedAirframeScopeFilters = _decodeSearchTabMultiFilter(
+      _searchTabAirframeScopeFilter,
+      airframeScopeOptions,
     );
     final selectedSpecialtyFilters = _decodeSearchTabMultiFilter(
       _searchTabSpecialtyFilter,
@@ -10470,6 +10669,10 @@ class _MyHomePageState extends State<MyHomePage> {
       _searchTabPendingFaaRuleFilter ?? _encodeSearchTabMultiFilter(selectedFaaRuleFilters),
       faaRuleOptions,
     );
+    final pendingAirframeScopeFilters = _decodeSearchTabMultiFilter(
+      _searchTabPendingAirframeScopeFilter ?? _encodeSearchTabMultiFilter(selectedAirframeScopeFilters),
+      airframeScopeOptions,
+    );
     final pendingSpecialtyFilters = _decodeSearchTabMultiFilter(
       _searchTabPendingSpecialtyFilter ??
           _encodeSearchTabMultiFilter(selectedSpecialtyFilters),
@@ -10498,6 +10701,7 @@ class _MyHomePageState extends State<MyHomePage> {
       pendingLocation != selectedLocation ||
       !setEquals(pendingPositionFilters, selectedPositionFilters) ||
       !setEquals(pendingFaaRuleFilters, selectedFaaRuleFilters) ||
+      !setEquals(pendingAirframeScopeFilters, selectedAirframeScopeFilters) ||
       !setEquals(pendingSpecialtyFilters, selectedSpecialtyFilters) ||
       !setEquals(pendingInstructorHourFilters, selectedInstructorHourFilters) ||
       !setEquals(pendingCertificateFilters, selectedCertificateFilters) ||
@@ -10507,6 +10711,7 @@ class _MyHomePageState extends State<MyHomePage> {
       !pendingTypeFilters.contains('all') ||
       !pendingPositionFilters.contains('all') ||
       !pendingFaaRuleFilters.contains('all') ||
+      !pendingAirframeScopeFilters.contains('all') ||
       !pendingSpecialtyFilters.contains('all') ||
       !pendingInstructorHourFilters.contains('all') ||
       !pendingCertificateFilters.contains('all') ||
@@ -10666,6 +10871,9 @@ class _MyHomePageState extends State<MyHomePage> {
       );
       _searchTabPendingFaaRuleFilter = _encodeSearchTabMultiFilter(
         selectedFaaRuleFilters,
+      );
+      _searchTabPendingAirframeScopeFilter = _encodeSearchTabMultiFilter(
+        selectedAirframeScopeFilters,
       );
       _searchTabPendingSpecialtyFilter = _encodeSearchTabMultiFilter(
         selectedSpecialtyFilters,
@@ -11011,6 +11219,21 @@ class _MyHomePageState extends State<MyHomePage> {
         });
       });
     }
+    for (final scope in selectedAirframeScopeFilters.where(
+      (value) => value != 'all',
+    )) {
+      addActiveFilter('Airframe: $scope', () {
+        setState(() {
+          final next = Set<String>.from(selectedAirframeScopeFilters)
+            ..remove(scope);
+          final encoded = _encodeSearchTabMultiFilter(
+            next.isEmpty ? {'all'} : next,
+          );
+          _searchTabAirframeScopeFilter = encoded;
+          _searchTabPendingAirframeScopeFilter = encoded;
+        });
+      });
+    }
     for (final specialty in selectedSpecialtyFilters.where(
       (value) => value != 'all',
     )) {
@@ -11326,6 +11549,11 @@ class _MyHomePageState extends State<MyHomePage> {
                                   map: _searchTabFlightHourMinimums,
                                 ),
                                 _buildSearchHourSliderRow(
+                                  label: 'Total Turbine Time',
+                                  sliderMax: 3000,
+                                  map: _searchTabFlightHourMinimums,
+                                ),
+                                _buildSearchHourSliderRow(
                                   label: 'Instrument',
                                   sliderMax: 500,
                                   map: _searchTabFlightHourMinimums,
@@ -11342,7 +11570,6 @@ class _MyHomePageState extends State<MyHomePage> {
                                 ),
                               ],
                             ),
-                            const SizedBox(height: 4),
                             const SizedBox(height: 4),
                             ExpansionTile(
                               key: ValueKey(
@@ -11456,6 +11683,37 @@ class _MyHomePageState extends State<MyHomePage> {
                                   map: _searchTabInstructorHourMinimums,
                                 ),
                               ],
+                            ),
+                            const SizedBox(height: 4),
+                            ExpansionTile(
+                              key: ValueKey(
+                                'search-hours-helicopter-${_searchTabFlightHoursHelicopterExpanded ? 'open' : 'closed'}',
+                              ),
+                              initiallyExpanded:
+                                  _searchTabFlightHoursHelicopterExpanded,
+                              onExpansionChanged: (expanded) {
+                                setState(() {
+                                  _searchTabFlightHoursHelicopterExpanded = expanded;
+                                });
+                              },
+                              tilePadding: EdgeInsets.zero,
+                              title: const Text(
+                                'HELICOPTER HOURS',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                  letterSpacing: 0.8,
+                                ),
+                              ),
+                              children: _availableHelicopterHours
+                                  .map(
+                                    (label) => _buildSearchHourSliderRow(
+                                      label: label,
+                                      sliderMax: _hourSliderMax(label),
+                                      map: _searchTabFlightHourMinimums,
+                                    ),
+                                  )
+                                  .toList(),
                             ),
                           ],
                         ),
@@ -11698,6 +11956,39 @@ class _MyHomePageState extends State<MyHomePage> {
                                               },
                                             ),
                                             const SizedBox(height: 10),
+                                            buildFilterOptionBoxes(
+                                              title: 'Airframe Scope',
+                                              options: airframeScopeOptions,
+                                              selectedValues:
+                                                  pendingAirframeScopeFilters,
+                                              allLabel: 'All Scopes',
+                                              isExpanded:
+                                                  _searchTabAirframeScopeExpanded,
+                                              headerKey:
+                                                  _searchTabAirframeScopeHeaderKey,
+                                              onToggle: () {
+                                                _toggleExclusiveFilterSection(
+                                                  isCurrentlyExpanded:
+                                                      _searchTabAirframeScopeExpanded,
+                                                  expandSection: () {
+                                                    _searchTabAirframeScopeExpanded = true;
+                                                  },
+                                                  headerKey:
+                                                      _searchTabAirframeScopeHeaderKey,
+                                                );
+                                              },
+                                              onSelected: (values) {
+                                                setState(() {
+                                                  _searchTabPendingAirframeScopeFilter =
+                                                      _encodeSearchTabMultiFilter(
+                                                        values,
+                                                      );
+                                                  _searchTabFiltersPinned = true;
+                                                });
+                                                _pinFiltersCardBelowTabs();
+                                              },
+                                            ),
+                                            const SizedBox(height: 10),
                                             buildGroupedFilterOptionBoxes(
                                               title: 'Certificate',
                                               groups: certificateFilterGroups,
@@ -11865,6 +12156,7 @@ class _MyHomePageState extends State<MyHomePage> {
                                                   _searchTabPendingTypeFilter = 'all';
                                                   _searchTabPendingPositionFilter = 'all';
                                                   _searchTabPendingFaaRuleFilter = 'all';
+                                                  _searchTabPendingAirframeScopeFilter = 'all';
                                                   _searchTabPendingSpecialtyFilter = 'all';
                                                   _searchTabPendingInstructorHoursFilter = 'all';
                                                   _searchTabPendingCertificateFilter = 'all';
@@ -11894,6 +12186,10 @@ class _MyHomePageState extends State<MyHomePage> {
                                                         _searchTabFaaRuleFilter =
                                                             _encodeSearchTabMultiFilter(
                                                               pendingFaaRuleFilters,
+                                                            );
+                                                        _searchTabAirframeScopeFilter =
+                                                            _encodeSearchTabMultiFilter(
+                                                              pendingAirframeScopeFilters,
                                                             );
                                                         _searchTabSpecialtyFilter =
                                                             _encodeSearchTabMultiFilter(
@@ -13403,6 +13699,11 @@ class _MyHomePageState extends State<MyHomePage> {
                 child: Column(
                   children: [
                     _buildChipSummaryCard(
+                      title: 'Airframe Scope',
+                      items: [_jobSeekerProfile.airframeScope],
+                      emptyText: 'No airframe scope selected',
+                    ),
+                    _buildChipSummaryCard(
                       title: 'FAA Certificates',
                       items: _selectedJobSeekerCertificates(_jobSeekerProfile),
                       emptyText: 'No FAA certificates selected',
@@ -13464,6 +13765,12 @@ class _MyHomePageState extends State<MyHomePage> {
         return 1000;
       case 'Multi-engine':
         return 2000;
+      case 'Total Turbine Time':
+        return 3000;
+      case 'Helicopter Time':
+        return 4000;
+      case 'Helicopter PIC':
+        return 2500;
       case 'Cross-Country':
       case 'Alaska Time':
       case 'Flight Instruction (CFI)':
@@ -13472,6 +13779,9 @@ class _MyHomePageState extends State<MyHomePage> {
       case 'Night':
       case 'Fire Fighting':
       case 'Instrument (CFII)':
+      case 'Turbine Helicopter':
+      case 'External Load':
+      case 'Night Vision Ops':
         return 500;
       case 'Multi-Engine (MEI)':
       case 'Aerobatic':
@@ -13695,6 +14005,11 @@ class _MyHomePageState extends State<MyHomePage> {
               preferredSet: _preferredFlightHours,
             ),
             _buildCreateHourInputRow(
+              label: 'Total Turbine Time',
+              map: _selectedFlightHours,
+              preferredSet: _preferredFlightHours,
+            ),
+            _buildCreateHourInputRow(
               label: 'Instrument',
               map: _selectedFlightHours,
               preferredSet: _preferredFlightHours,
@@ -13764,6 +14079,33 @@ class _MyHomePageState extends State<MyHomePage> {
                   label: label,
                   map: _selectedInstructorHours,
                   preferredSet: _preferredInstructorHours,
+                ),
+              )
+              .toList(),
+        ),
+        ExpansionTile(
+          key: ValueKey(
+            'create-hours-helicopter-${_createHoursHelicopterExpanded ? 'open' : 'closed'}',
+          ),
+          initiallyExpanded: _createHoursHelicopterExpanded,
+          onExpansionChanged: (expanded) {
+            setState(() => _createHoursHelicopterExpanded = expanded);
+          },
+          tilePadding: EdgeInsets.zero,
+          title: const Text(
+            'HELICOPTER HOURS',
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.8,
+            ),
+          ),
+          children: _availableHelicopterHours
+              .map(
+                (label) => _buildCreateHourInputRow(
+                  label: label,
+                  map: _selectedFlightHours,
+                  preferredSet: _preferredFlightHours,
                 ),
               )
               .toList(),
@@ -14208,6 +14550,9 @@ class _MyHomePageState extends State<MyHomePage> {
     final createRatingsSatisfied =
       _selectedRequiredRatings.any(_availableRatingSelections.contains) &&
       createMissingImpliedRatings.isEmpty;
+    final createAirframeScopeSatisfied = _availableAirframeScopes.contains(
+      _selectedAirframeScope,
+    );
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -14229,6 +14574,33 @@ class _MyHomePageState extends State<MyHomePage> {
           isSatisfied: createOperationalScopeSatisfied,
           initiallyExpanded: false,
           child: _buildCreateFaaRulesCard(),
+        ),
+        const SizedBox(height: 12),
+        _buildExpandableRequirementSection(
+          sectionKey: 'Airframe Scope',
+          title: createAirframeScopeSatisfied
+              ? 'Airframe Scope'
+              : 'Airframe Scope *',
+          summary: _selectedAirframeScope,
+          isSatisfied: createAirframeScopeSatisfied,
+          initiallyExpanded: false,
+          child: Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: _availableAirframeScopes
+                .map(
+                  (scope) => ChoiceChip(
+                    label: Text(scope),
+                    selected: _selectedAirframeScope == scope,
+                    onSelected: (_) {
+                      setState(() {
+                        _selectedAirframeScope = scope;
+                      });
+                    },
+                  ),
+                )
+                .toList(),
+          ),
         ),
         const SizedBox(height: 12),
         _buildExpandableRequirementSection(
@@ -14260,6 +14632,15 @@ class _MyHomePageState extends State<MyHomePage> {
           child: _buildCreateRatingsContent(),
         ),
         _buildExpandableRequirementSection(
+          sectionKey: 'Hours Requirements',
+          title: createHoursSatisfied
+              ? 'Hours Requirements'
+              : 'Hours Requirements *',
+          summary: _hoursRequirementSummary(),
+          isSatisfied: createHoursSatisfied,
+          child: _buildCreateCategorizedHoursSection(),
+        ),
+        _buildExpandableRequirementSection(
           sectionKey: 'Instructor Certs',
           title: createInstructorCertsSatisfied
               ? 'Instructor Certificates'
@@ -14273,15 +14654,6 @@ class _MyHomePageState extends State<MyHomePage> {
           isSatisfied: createInstructorCertsSatisfied,
           initiallyExpanded: false,
           child: _buildCreateInstructorCertsContent(),
-        ),
-        _buildExpandableRequirementSection(
-          sectionKey: 'Hours Requirements',
-          title: createHoursSatisfied
-              ? 'Hours Requirements'
-              : 'Hours Requirements *',
-          summary: _hoursRequirementSummary(),
-          isSatisfied: createHoursSatisfied,
-          child: _buildCreateCategorizedHoursSection(),
         ),
         _buildExpandableRequirementSection(
           sectionKey: 'Aircraft Experience',
@@ -15075,6 +15447,7 @@ class _MyHomePageState extends State<MyHomePage> {
                   _searchTabLocationFilter = 'all';
                   _searchTabPositionFilter = 'all';
                   _searchTabFaaRuleFilter = 'all';
+                  _searchTabAirframeScopeFilter = 'all';
                   _searchTabSpecialtyFilter = 'all';
                   _searchTabCertificateFilter = 'all';
                   _searchTabRatingFilter = 'all';
@@ -15802,7 +16175,7 @@ class JobDetailsPage extends StatelessWidget {
                                       if (job.salaryRange != null)
                                         Chip(
                                           label: Text(
-                                            'Salary: ${job.salaryRange}',
+                                            '${job.salaryRange}',
                                           ),
                                         ),
                                       Chip(label: Text(crewLabel)),
@@ -15899,8 +16272,17 @@ class JobDetailsPage extends StatelessWidget {
                                     ],
                                   ),
                                   // ── Certificates & Ratings ──
+                                  const SizedBox(height: 14),
+                                  _buildRequirementsSubsection(
+                                    context,
+                                    'Airframe Scope',
+                                    Icons.flight_outlined,
+                                    _buildChipWrap([
+                                      Chip(label: Text(job.airframeScope)),
+                                    ]),
+                                  ),
                                   if (job.faaCertificates.isNotEmpty) ...[
-                                    const SizedBox(height: 14),
+                                    const SizedBox(height: 12),
                                     _buildRequirementsSubsection(
                                       context,
                                       'FAA Certificates',

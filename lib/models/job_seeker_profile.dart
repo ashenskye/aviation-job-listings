@@ -7,6 +7,7 @@ class JobSeekerProfile {
   final String city;
   final String stateOrProvince;
   final String country;
+  final String airframeScope;
   final List<String> faaCertificates;
   final List<String> typeRatings;
   final Map<String, int> flightHours;
@@ -25,6 +26,7 @@ class JobSeekerProfile {
     this.city = '',
     this.stateOrProvince = '',
     this.country = '',
+    this.airframeScope = 'Fixed Wing',
     this.faaCertificates = const [],
     this.typeRatings = const [],
     this.flightHours = const {},
@@ -78,6 +80,20 @@ class JobSeekerProfile {
       city: json['city']?.toString() ?? '',
       stateOrProvince: json['stateOrProvince']?.toString() ?? '',
       country: json['country']?.toString() ?? '',
+      airframeScope: (() {
+        final normalized = json['airframeScope']?.toString().trim().toLowerCase();
+        switch (normalized) {
+          case 'fixed wing':
+            return 'Fixed Wing';
+          case 'helicopter':
+          case 'rotorcraft':
+            return 'Helicopter';
+          case 'both':
+            return 'Both';
+          default:
+            return 'Fixed Wing';
+        }
+      })(),
       faaCertificates:
           (json['faaCertificates'] as List<dynamic>?)
               ?.map((e) => e.toString())
@@ -131,6 +147,7 @@ class JobSeekerProfile {
     'city': city,
     'stateOrProvince': stateOrProvince,
     'country': country,
+    'airframeScope': airframeScope,
     'faaCertificates': faaCertificates,
     'typeRatings': typeRatings,
     'flightHours': flightHours,
@@ -150,6 +167,7 @@ class JobSeekerProfile {
     String? city,
     String? stateOrProvince,
     String? country,
+    String? airframeScope,
     List<String>? faaCertificates,
     List<String>? typeRatings,
     Map<String, int>? flightHours,
@@ -175,6 +193,7 @@ class JobSeekerProfile {
       city: city ?? this.city,
       stateOrProvince: stateOrProvince ?? this.stateOrProvince,
       country: country ?? this.country,
+      airframeScope: airframeScope ?? this.airframeScope,
       faaCertificates: faaCertificates ?? this.faaCertificates,
       typeRatings: typeRatings ?? this.typeRatings,
       flightHours: flightHours ?? this.flightHours,

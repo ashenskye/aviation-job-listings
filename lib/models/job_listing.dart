@@ -6,6 +6,21 @@ String _normalizeRequiredRatingLabel(String rating) {
   return normalized == 'rotorcraft' ? 'Helicopter' : rating;
 }
 
+String _normalizeAirframeScope(String? value, {String fallback = 'Fixed Wing'}) {
+  final normalized = value?.trim().toLowerCase();
+  switch (normalized) {
+    case 'fixed wing':
+      return 'Fixed Wing';
+    case 'helicopter':
+    case 'rotorcraft':
+      return 'Helicopter';
+    case 'both':
+      return 'Both';
+    default:
+      return fallback;
+  }
+}
+
 class JobListing {
   final String id;
   final String title;
@@ -15,6 +30,7 @@ class JobListing {
   final String crewRole;
   final String? crewPosition;
   final List<String> faaRules;
+  final String airframeScope;
   final String? part135SubType; // 'ifr' or 'vfr' when faaRules contains 'Part 135'
   final String description;
   final List<String> faaCertificates;
@@ -56,6 +72,7 @@ class JobListing {
     required this.crewRole,
     this.crewPosition,
     required this.faaRules,
+    this.airframeScope = 'Fixed Wing',
     this.part135SubType,
     required this.description,
     required this.faaCertificates,
@@ -158,6 +175,9 @@ class JobListing {
               ?.map((e) => e.toString())
               .toList() ??
           [],
+      airframeScope: _normalizeAirframeScope(
+        json['airframeScope']?.toString(),
+      ),
       part135SubType: json['part135SubType']?.toString(),
       description: json['description'] ?? '',
       faaCertificates:
@@ -249,6 +269,7 @@ class JobListing {
     'crewRole': crewRole,
     'crewPosition': crewPosition,
     'faaRules': faaRules,
+    'airframeScope': airframeScope,
     'part135SubType': part135SubType,
     'description': description,
     'faaCertificates': faaCertificates,
@@ -337,6 +358,7 @@ class JobListing {
     String? crewRole,
     Object? crewPosition = _sentinel,
     List<String>? faaRules,
+    String? airframeScope,
     String? part135SubType,
     String? description,
     List<String>? faaCertificates,
@@ -380,6 +402,9 @@ class JobListing {
           ? this.crewPosition
           : crewPosition as String?,
       faaRules: faaRules ?? this.faaRules,
+        airframeScope: airframeScope == null
+          ? this.airframeScope
+          : _normalizeAirframeScope(airframeScope),
       part135SubType: part135SubType ?? this.part135SubType,
       description: description ?? this.description,
       faaCertificates: faaCertificates ?? this.faaCertificates,

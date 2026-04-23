@@ -689,6 +689,7 @@ class SupabaseAppRepository implements AppRepository {
       'crew_role': job.crewRole,
       'crew_position': job.crewPosition,
       'faa_rules': job.faaRules,
+      'airframe_scope': job.airframeScope,
       'part135_sub_type': job.part135SubType,
       'description': job.description,
       'faa_certificates': job.faaCertificates,
@@ -735,6 +736,7 @@ class SupabaseAppRepository implements AppRepository {
       'crewRole': row['crew_role'],
       'crewPosition': row['crew_position'],
       'faaRules': List<String>.from((row['faa_rules'] as List?) ?? const []),
+      'airframeScope': row['airframe_scope'],
       'part135SubType': row['part135_sub_type']?.toString(),
       'description': row['description'],
       'faaCertificates': List<String>.from(
@@ -797,6 +799,7 @@ class SupabaseAppRepository implements AppRepository {
       'city': profile.city,
       'state_or_province': profile.stateOrProvince,
       'country': profile.country,
+      'airframe_scope': profile.airframeScope,
       'faa_certificates': profile.faaCertificates,
       'type_ratings': profile.typeRatings,
       'flight_hours': profile.flightHours,
@@ -816,6 +819,7 @@ class SupabaseAppRepository implements AppRepository {
       'city': row['city'],
       'stateOrProvince': row['state_or_province'],
       'country': row['country'],
+      'airframeScope': row['airframe_scope'],
       'faaCertificates': List<String>.from(
         (row['faa_certificates'] as List?) ?? const [],
       ),

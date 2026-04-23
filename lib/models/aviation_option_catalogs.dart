@@ -23,6 +23,28 @@ const List<String> availableFaaRuleOptions = [
   'Part 91',
 ];
 
+const List<String> availableAirframeScopeOptions = [
+  'Fixed Wing',
+  'Helicopter',
+  'Both',
+];
+
+const List<String> availableOtherFlightHourOptions = [
+  'Multi-engine',
+  'Total Turbine Time',
+  'Instrument',
+  'Cross-Country',
+  'Night',
+];
+
+const List<String> availableHelicopterHourOptions = [
+  'Helicopter Time',
+  'Helicopter PIC',
+  'Turbine Helicopter',
+  'External Load',
+  'Night Vision Ops',
+];
+
 const List<String> availableEmployerFlightHourOptions = [
   'Total Time',
   'Total PIC Time',
@@ -31,10 +53,8 @@ const List<String> availableEmployerFlightHourOptions = [
   'SIC Turbine',
   'PIC Jet',
   'SIC Jet',
-  'Multi-engine',
-  'Instrument',
-  'Cross-Country',
-  'Night',
+  ...availableOtherFlightHourOptions,
+  ...availableHelicopterHourOptions,
 ];
 
 const List<String> availableInstructorHourOptions = [

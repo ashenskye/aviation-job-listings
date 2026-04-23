@@ -27,4 +27,16 @@ void main() {
     expect(updated.lastName, 'Johnson');
     expect(updated.fullName, 'Katherine Johnson');
   });
+
+  test('airframe scope survives JSON normalization and copyWith', () {
+    final profile = JobSeekerProfile.fromJson(const {
+      'fullName': 'Mika Heli',
+      'airframeScope': 'rotorcraft',
+    });
+
+    expect(profile.airframeScope, 'Helicopter');
+
+    final updated = profile.copyWith(airframeScope: 'Both');
+    expect(updated.airframeScope, 'Both');
+  });
 }

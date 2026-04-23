@@ -13,6 +13,7 @@ void main() {
       'crewRole': 'Single Pilot',
       'crewPosition': null,
       'faaRules': const <String>['Part 135'],
+      'airframeScope': 'Helicopter',
       'part135SubType': 'vfr',
       'description': 'Critical utility missions in varied terrain.',
       'faaCertificates': const <String>['Commercial Pilot (CPL)'],
@@ -37,6 +38,7 @@ void main() {
     final decoded = JobListing.fromJson(encoded);
 
     expect(decoded.faaRules, ['Part 135']);
+    expect(decoded.airframeScope, 'Helicopter');
     expect(decoded.part135SubType, 'vfr');
     expect(decoded.faaCertificates, ['Commercial Pilot (CPL)']);
     expect(decoded.requiredRatings, ['Helicopter']);
@@ -88,6 +90,7 @@ void main() {
       location: 'Boise, ID',
       type: 'Full-Time',
       crewRole: 'Single Pilot',
+      airframeScope: 'Helicopter',
       faaRules: ['Part 91'],
       description: 'Validates copyWith behavior for external fields.',
       faaCertificates: [],
@@ -103,6 +106,7 @@ void main() {
 
     final unchanged = source.copyWith(title: 'Updated Title');
     expect(unchanged.isExternal, isTrue);
+    expect(unchanged.airframeScope, 'Helicopter');
     expect(unchanged.externalApplyUrl, 'https://example.com/apply');
     expect(unchanged.contactName, 'Hiring Team');
     expect(unchanged.companyPhone, '+1-208-555-0100');
@@ -118,6 +122,7 @@ void main() {
       companyUrl: null,
     );
     expect(changed.isExternal, isFalse);
+    expect(changed.airframeScope, 'Helicopter');
     expect(changed.externalApplyUrl, isNull);
     expect(changed.contactName, isNull);
     expect(changed.companyPhone, isNull);

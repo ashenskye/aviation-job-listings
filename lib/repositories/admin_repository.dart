@@ -53,6 +53,7 @@ abstract class AdminRepository {
     required String location,
     required String employmentType,
     required String description,
+    String airframeScope = 'Fixed Wing',
     String crewRole = 'Single Pilot',
     String? crewPosition,
     List<String> faaRules = const [],
