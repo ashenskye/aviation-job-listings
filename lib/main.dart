@@ -4697,6 +4697,7 @@ class _MyHomePageState extends State<MyHomePage> {
       _selectedFaaRules
         ..clear()
         ..addAll(job.faaRules.take(1));
+      _part135SubType = job.part135SubType;
       _selectedFaaCertificates
         ..clear()
         ..addAll(job.faaCertificates);
@@ -5085,6 +5086,7 @@ class _MyHomePageState extends State<MyHomePage> {
         crewRole: job.crewRole,
         crewPosition: job.crewPosition,
         faaRules: List<String>.from(job.faaRules),
+        part135SubType: job.part135SubType,
         description: job.description,
         faaCertificates: List<String>.from(job.faaCertificates),
         requiredRatings: List<String>.from(job.requiredRatings),
@@ -5107,6 +5109,8 @@ class _MyHomePageState extends State<MyHomePage> {
         createdAt: now,
         updatedAt: now,
         employerId: _currentEmployer.id,
+        autoRejectThreshold: job.autoRejectThreshold,
+        reapplyWindowDays: job.reapplyWindowDays,
       ),
       createdAt: now,
       updatedAt: now,
