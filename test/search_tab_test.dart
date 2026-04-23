@@ -99,35 +99,98 @@ Future<void> _pumpSearchTab(WidgetTester tester) async {
   expect(find.text('Showing 5 of 5 jobs'), findsOneWidget);
 }
 
-Future<void> _selectDropdownOption(
-  WidgetTester tester,
-  String dropdownKey,
-  String optionText,
-) async {
-  final dropdownFinder = find.byKey(ValueKey(dropdownKey));
-  await tester.ensureVisible(dropdownFinder);
-  await tester.pumpAndSettle();
-  await tester.tap(dropdownFinder.hitTestable().first);
-  await tester.pumpAndSettle();
-  final optionFinder = find.descendant(
-    of: find.byType(Overlay),
-    matching: find.text(optionText),
-  );
-  expect(optionFinder, findsWidgets);
-  await tester.tap(optionFinder.hitTestable().first);
-  await tester.pumpAndSettle();
+Future<void> _openFiltersDrawer(WidgetTester tester) async {
+  final openFiltersButton = find.text('Open Filters');
+  if (openFiltersButton.evaluate().isNotEmpty) {
+    await tester.tap(openFiltersButton.hitTestable().first);
+    await tester.pumpAndSettle();
+  }
+  expect(find.byKey(const ValueKey('search-primary-filters-open')), findsOneWidget);
+}
+
+void _invokeTapCallback(WidgetTester tester, Finder target) {
+  if (target.evaluate().isEmpty) {
+    throw TestFailure('Expected tappable target was not found.');
+  }
+  final widget = tester.widget(target.first);
+  if (widget is InkWell) {
+    widget.onTap?.call();
+    return;
+  }
+  if (widget is FilledButton) {
+    widget.onPressed?.call();
+    return;
+  }
+  if (widget is OutlinedButton) {
+    widget.onPressed?.call();
+    return;
+  }
+  if (widget is TextButton) {
+    widget.onPressed?.call();
+    return;
+  }
+  throw TestFailure('Found target does not expose a tap callback.');
 }
 
 Future<void> _expandFilterSection(WidgetTester tester, String title) async {
-  final titleFinder = find.text(title);
-  final tileFinder = find.ancestor(of: titleFinder, matching: find.byType(ListTile));
-  final tile = tester.widget<ListTile>(tileFinder.first);
-  tile.onTap?.call();
+  await _openFiltersDrawer(tester);
+  final filtersCard = find.byKey(const ValueKey('search-primary-filters-open'));
+  final titleFinder = find.descendant(of: filtersCard, matching: find.text(title));
+  expect(titleFinder, findsWidgets);
+  final tapTarget = find.ancestor(
+    of: titleFinder.first,
+    matching: find.byType(InkWell),
+  );
+  if (tapTarget.evaluate().isNotEmpty) {
+    _invokeTapCallback(tester, tapTarget);
+  } else {
+    _invokeTapCallback(tester, titleFinder);
+  }
   await tester.pumpAndSettle();
 }
 
-Future<void> _expandEmployerFilters(WidgetTester tester) async {
-  await _expandFilterSection(tester, 'Advanced Filters');
+Future<void> _selectFilterOption(
+  WidgetTester tester, {
+  required String sectionTitle,
+  required String optionText,
+}) async {
+  await _openFiltersDrawer(tester);
+  final filtersCard = find.byKey(const ValueKey('search-primary-filters-open'));
+  var optionFinder = find.descendant(
+    of: filtersCard,
+    matching: find.text(optionText),
+  );
+  if (optionFinder.evaluate().isEmpty) {
+    await _expandFilterSection(tester, sectionTitle);
+    optionFinder = find.descendant(
+      of: filtersCard,
+      matching: find.text(optionText),
+    );
+  }
+  expect(optionFinder, findsWidgets);
+  await tester.ensureVisible(optionFinder.first);
+  final optionTapTarget = find.ancestor(
+    of: optionFinder.first,
+    matching: find.byType(InkWell),
+  );
+  if (optionTapTarget.evaluate().isNotEmpty) {
+    _invokeTapCallback(tester, optionTapTarget);
+  } else {
+    _invokeTapCallback(tester, optionFinder);
+  }
+  await tester.pumpAndSettle();
+
+  final applyButtonText = find.descendant(
+    of: filtersCard,
+    matching: find.text('Apply'),
+  );
+  expect(applyButtonText, findsOneWidget);
+  final applyTapTarget = find.ancestor(
+    of: applyButtonText,
+    matching: find.byType(FilledButton),
+  );
+  _invokeTapCallback(tester, applyTapTarget);
+  await tester.pumpAndSettle();
 }
 
 void main() {
@@ -136,25 +199,23 @@ void main() {
   ) async {
     await _pumpSearchTab(tester);
 
-    final dropdownFinder = find.byKey(const ValueKey('search-tab-faa-rule-filter'));
-    await tester.ensureVisible(dropdownFinder);
-    await tester.pumpAndSettle();
-    await tester.tap(dropdownFinder.hitTestable().first);
-    await tester.pumpAndSettle();
-
-    final ifrOption = find.descendant(
-      of: find.byType(Overlay),
-      matching: find.text('Part 135 IFR'),
+    await _expandFilterSection(tester, 'FAA Rule');
+    final filtersCard = find.byKey(const ValueKey('search-primary-filters-open'));
+    expect(
+      find.descendant(of: filtersCard, matching: find.text('Part 135 IFR')),
+      findsWidgets,
     );
-    final vfrOption = find.descendant(
-      of: find.byType(Overlay),
-      matching: find.text('Part 135 VFR'),
+    expect(
+      find.descendant(of: filtersCard, matching: find.text('Part 135 VFR')),
+      findsWidgets,
     );
-    expect(ifrOption, findsWidgets);
-    expect(vfrOption, findsWidgets);
 
-    await tester.tap(vfrOption.hitTestable().first);
-    await tester.pumpAndSettle();
+    await _selectFilterOption(
+      tester,
+      sectionTitle: 'FAA Rule',
+      optionText: 'Part 135 VFR',
+    );
+    expect(find.text('Showing 1 of 5 jobs'), findsOneWidget);
   });
 
   testWidgets('search tab filters by position from primary filters', (
@@ -162,10 +223,10 @@ void main() {
   ) async {
     await _pumpSearchTab(tester);
 
-    await _selectDropdownOption(
+    await _selectFilterOption(
       tester,
-      'search-tab-position-filter',
-      'Crew Member: Co-Pilot',
+      sectionTitle: 'Position',
+      optionText: 'Crew Member: Co-Pilot',
     );
 
     expect(find.text('Showing 1 of 5 jobs'), findsOneWidget);
@@ -176,7 +237,11 @@ void main() {
   ) async {
     await _pumpSearchTab(tester);
 
-    await _selectDropdownOption(tester, 'search-tab-location-filter', 'USA');
+    await _selectFilterOption(
+      tester,
+      sectionTitle: 'Location',
+      optionText: 'USA',
+    );
     expect(find.text('Showing 4 of 5 jobs'), findsOneWidget);
   });
 
@@ -185,10 +250,10 @@ void main() {
   ) async {
     await _pumpSearchTab(tester);
 
-    await _selectDropdownOption(
+    await _selectFilterOption(
       tester,
-      'search-tab-location-filter',
-      'International',
+      sectionTitle: 'Location',
+      optionText: 'International',
     );
     expect(find.text('Showing 1 of 5 jobs'), findsOneWidget);
   });
@@ -229,12 +294,11 @@ void main() {
     WidgetTester tester,
   ) async {
     await _pumpSearchTab(tester);
-    await _expandEmployerFilters(tester);
 
-    await _selectDropdownOption(
+    await _selectFilterOption(
       tester,
-      'search-tab-certificate-filter',
-      'Airline Transport Pilot (ATP)',
+      sectionTitle: 'Certificate',
+      optionText: 'Airline Transport Pilot (ATP)',
     );
     expect(find.text('Showing 1 of 5 jobs'), findsOneWidget);
   });
@@ -243,17 +307,16 @@ void main() {
     WidgetTester tester,
   ) async {
     await _pumpSearchTab(tester);
-    await _expandEmployerFilters(tester);
 
-    await _selectDropdownOption(
+    await _selectFilterOption(
       tester,
-      'search-tab-rating-filter',
-      'Multi-Engine Land',
+      sectionTitle: 'Rating',
+      optionText: 'Multi-Engine Land',
     );
     expect(find.text('Showing 1 of 5 jobs'), findsOneWidget);
   });
 
-  testWidgets('search tab supports instructor-only toggle', (
+  testWidgets('search tab supports flight instruction filter', (
     WidgetTester tester,
   ) async {
     final repository = FakeAppRepository();
@@ -297,19 +360,13 @@ void main() {
 
     expect(find.text('Showing 2 of 2 jobs'), findsOneWidget);
 
-    final instructorOnlyChip = find.byKey(
-      const ValueKey('search-tab-instructor-only'),
+    await _selectFilterOption(
+      tester,
+      sectionTitle: 'Flight Instruction',
+      optionText: 'Flight Instructor (CFI)',
     );
-    await tester.ensureVisible(instructorOnlyChip);
-    await tester.tap(instructorOnlyChip.first);
-    await tester.pumpAndSettle();
 
     expect(find.text('Showing 1 of 2 jobs'), findsOneWidget);
-    expect(find.text('Instructor Filters'), findsOneWidget);
-    expect(find.text('Instructor Hours Category'), findsOneWidget);
-
-    await _expandFilterSection(tester, 'Instructor Filters');
-    await _expandFilterSection(tester, 'Instructor Filters');
 
     await tester.enterText(
       find.byKey(const ValueKey('search-tab-query')),

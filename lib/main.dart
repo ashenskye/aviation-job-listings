@@ -836,6 +836,7 @@ class _MyHomePageState extends State<MyHomePage> {
   bool _searchTabPrimaryFiltersDrawerOpen = true;
   bool _searchTabEmploymentTypeExpanded = false;
   bool _searchTabPositionExpanded = false;
+  bool _searchTabLocationExpanded = false;
   bool _searchTabFaaRuleExpanded = false;
   bool _searchTabSpecialtyFilterExpanded = false;
   bool _searchTabInstructionFilterExpanded = false;
@@ -843,6 +844,7 @@ class _MyHomePageState extends State<MyHomePage> {
   bool _searchTabRatingExpanded = false;
   final GlobalKey _searchTabEmploymentTypeHeaderKey = GlobalKey();
   final GlobalKey _searchTabPositionHeaderKey = GlobalKey();
+  final GlobalKey _searchTabLocationHeaderKey = GlobalKey();
   final GlobalKey _searchTabFaaRuleHeaderKey = GlobalKey();
   final GlobalKey _searchTabCertificateHeaderKey = GlobalKey();
   final GlobalKey _searchTabRatingHeaderKey = GlobalKey();
@@ -10344,6 +10346,7 @@ class _MyHomePageState extends State<MyHomePage> {
   void _collapseAllFilterSections() {
     _searchTabEmploymentTypeExpanded = false;
     _searchTabPositionExpanded = false;
+    _searchTabLocationExpanded = false;
     _searchTabFaaRuleExpanded = false;
     _searchTabCertificateExpanded = false;
     _searchTabRatingExpanded = false;
@@ -11596,6 +11599,42 @@ class _MyHomePageState extends State<MyHomePage> {
                                                       _encodeSearchTabMultiFilter(
                                                         values,
                                                       );
+                                                  _searchTabFiltersPinned = true;
+                                                });
+                                                _pinFiltersCardBelowTabs();
+                                              },
+                                            ),
+                                            const SizedBox(height: 10),
+                                            buildFilterOptionBoxes(
+                                              title: 'Location',
+                                              options: locationOptions,
+                                              selectedValues: {pendingLocation},
+                                              allLabel: 'All Locations',
+                                              isExpanded:
+                                                  _searchTabLocationExpanded,
+                                              headerKey:
+                                                  _searchTabLocationHeaderKey,
+                                              onToggle: () {
+                                                _toggleExclusiveFilterSection(
+                                                  isCurrentlyExpanded:
+                                                      _searchTabLocationExpanded,
+                                                  expandSection: () {
+                                                    _searchTabLocationExpanded = true;
+                                                  },
+                                                  headerKey:
+                                                      _searchTabLocationHeaderKey,
+                                                );
+                                              },
+                                              onSelected: (values) {
+                                                setState(() {
+                                                  if (values.contains('all') ||
+                                                      values.isEmpty) {
+                                                    _searchTabPendingLocationFilter =
+                                                        'all';
+                                                  } else {
+                                                    _searchTabPendingLocationFilter =
+                                                        values.first;
+                                                  }
                                                   _searchTabFiltersPinned = true;
                                                 });
                                                 _pinFiltersCardBelowTabs();

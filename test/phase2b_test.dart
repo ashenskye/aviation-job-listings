@@ -5,7 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'helpers/fake_app_repository.dart';
 
 void main() {
-  final now = DateTime(2026, 4, 17, 12);
+  final now = DateTime.now();
 
   Application makeApp({
     String id = 'app-1',
