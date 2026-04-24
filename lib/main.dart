@@ -567,6 +567,16 @@ class _MatchResult {
       totalCount == 0 ? 100 : ((matchedCount * 100) ~/ totalCount);
 }
 
+/// Returns true when the job and profile have mutually exclusive airframe
+/// scopes (one is Fixed Wing and the other is Helicopter).  When either side
+/// is 'Both' there is no mismatch.
+bool _airframeScopeMismatch(JobListing job, JobSeekerProfile profile) {
+  final jobScope = job.airframeScope.trim();
+  final profileScope = profile.airframeScope.trim();
+  if (jobScope == 'Both' || profileScope == 'Both') return false;
+  return jobScope != profileScope;
+}
+
 _MatchResult _evaluateJobMatchForProfile({
   required JobListing job,
   required JobSeekerProfile profile,
@@ -579,6 +589,11 @@ _MatchResult _evaluateJobMatchForProfile({
     for (final cert in profile.faaCertificates)
       ...expandedCertificateQualifications(cert),
   };
+
+  // When airframe scopes are mutually exclusive (e.g. Fixed Wing vs Helicopter)
+  // the seeker's hours do not apply to this job.  Certificates and ratings
+  // still count regardless of scope.
+  final hoursBlocked = _airframeScopeMismatch(job, profile);
 
   for (final cert in job.faaCertificates) {
     totalCount++;
@@ -610,6 +625,7 @@ _MatchResult _evaluateJobMatchForProfile({
     totalCount++;
     final profileHours = profile.flightHours[requirement.key] ?? 0;
     final hasRequirement =
+        !hoursBlocked &&
         profile.flightHoursTypes.contains(requirement.key) &&
         profileHours >= requirement.value;
 
@@ -641,6 +657,7 @@ _MatchResult _evaluateJobMatchForProfile({
       requirement.key,
     );
     final hasRequirement =
+        !hoursBlocked &&
         _containsInstructorHourLabel(
           profile.flightHoursTypes,
           requirement.key,
@@ -669,6 +686,7 @@ _MatchResult _evaluateJobMatchForProfile({
     totalCount++;
     final profileHours = profile.specialtyFlightHoursMap[requirement.key] ?? 0;
     final hasRequirement =
+        !hoursBlocked &&
         profile.specialtyFlightHours.contains(requirement.key) &&
         profileHours >= requirement.value;
 
@@ -691,7 +709,7 @@ _MatchResult _evaluateJobMatchForProfile({
     if (job.airframeScope == profile.airframeScope) {
       matchedCount++;
     } else {
-      missingRequirements.add('Airframe Scope: ${job.airframeScope}');
+      missingRequirements.add('Airframe Category: ${job.airframeScope}');
     }
   }
 
@@ -2272,11 +2290,40 @@ class _MyHomePageState extends State<MyHomePage> {
                     countryController.text.trim() != _jobSeekerProfile.country;
               }
 
-              final canSave = hasPersonalChanges();
+              final hasChanges = hasPersonalChanges();
+              final canSave = hasChanges;
 
-              return Scaffold(
-                appBar: AppBar(title: const Text('Edit Personal Information')),
-                body: SafeArea(
+              return PopScope(
+                canPop: !hasChanges,
+                onPopInvokedWithResult: (didPop, result) {
+                  if (!didPop) {
+                    showDialog<void>(
+                      context: pageContext,
+                      builder: (dialogContext) => AlertDialog(
+                        title: const Text('Unsaved Changes'),
+                        content: const Text(
+                          'You have unsaved changes. Use Cancel to discard them or Save Changes to keep them.',
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () {
+                              Navigator.of(dialogContext).pop();
+                              Navigator.of(pageContext).pop();
+                            },
+                            child: const Text('Discard Changes'),
+                          ),
+                          FilledButton(
+                            onPressed: () => Navigator.of(dialogContext).pop(),
+                            child: const Text('Keep Editing'),
+                          ),
+                        ],
+                      ),
+                    );
+                  }
+                },
+                child: Scaffold(
+                  appBar: AppBar(title: const Text('Edit Personal Information')),
+                  body: SafeArea(
                   child: SingleChildScrollView(
                     padding: const EdgeInsets.all(16),
                     child: Column(
@@ -2433,7 +2480,8 @@ class _MyHomePageState extends State<MyHomePage> {
                     ),
                   ),
                 ),
-              );
+              ),
+            ); // end PopScope (Edit Personal Information)
             },
           );
         },
@@ -4051,8 +4099,36 @@ class _MyHomePageState extends State<MyHomePage> {
 
             final canSave = hasQualificationsChanges();
 
-            return Scaffold(
-              appBar: AppBar(title: const Text('Edit Qualifications')),
+            return PopScope(
+              canPop: !canSave,
+              onPopInvokedWithResult: (didPop, result) {
+                if (!didPop) {
+                  showDialog<void>(
+                    context: pageContext,
+                    builder: (dialogContext) => AlertDialog(
+                      title: const Text('Unsaved Changes'),
+                      content: const Text(
+                        'You have unsaved changes. Use Cancel to discard them or Save Changes to keep them.',
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () {
+                            Navigator.of(dialogContext).pop();
+                            Navigator.of(pageContext).pop();
+                          },
+                          child: const Text('Discard Changes'),
+                        ),
+                        FilledButton(
+                          onPressed: () => Navigator.of(dialogContext).pop(),
+                          child: const Text('Keep Editing'),
+                        ),
+                      ],
+                    ),
+                  );
+                }
+              },
+              child: Scaffold(
+                appBar: AppBar(title: const Text('Edit Qualifications')),
               body: SafeArea(
                 child: SingleChildScrollView(
                   padding: const EdgeInsets.all(16),
@@ -4062,8 +4138,8 @@ class _MyHomePageState extends State<MyHomePage> {
                       qualificationSection(
                         sectionKey: 'AirframeScope',
                         title: seekerAirframeScopeSatisfied
-                          ? 'Airframe Scope'
-                          : 'Airframe Scope *',
+                          ? 'Airframe Category'
+                          : 'Airframe Category *',
                         isSatisfied: seekerAirframeScopeSatisfied,
                         subtitle:
                           'Select whether your experience is fixed wing, helicopter, or both.',
@@ -4326,7 +4402,8 @@ class _MyHomePageState extends State<MyHomePage> {
                   ),
                 ),
               ),
-            );
+            ), // end Scaffold
+            ); // end PopScope (Edit Qualifications)
           },
         ),
       ),
@@ -5764,6 +5841,14 @@ class _MyHomePageState extends State<MyHomePage> {
     }).toList();
 
     filtered.sort((a, b) {
+      // For job-seeker views, always sink category-mismatch jobs below
+      // any job that has an actual match percentage.
+      if (_profileType == ProfileType.jobSeeker) {
+        final aMismatch = _airframeScopeMismatch(a, _jobSeekerProfile) ? 1 : 0;
+        final bMismatch = _airframeScopeMismatch(b, _jobSeekerProfile) ? 1 : 0;
+        if (aMismatch != bMismatch) return aMismatch.compareTo(bMismatch);
+      }
+
       switch (_searchTabSort) {
         case 'newest':
           final aDate = a.updatedAt ?? a.createdAt;
@@ -8247,8 +8332,8 @@ class _MyHomePageState extends State<MyHomePage> {
           const SizedBox(height: 14),
           _buildEditAccordionSection(
             title: editAirframeScopeSatisfied()
-                ? 'Airframe Scope'
-                : 'Airframe Scope *',
+                ? 'Airframe Category'
+                : 'Airframe Category *',
             isSatisfied: editAirframeScopeSatisfied(),
             initiallyExpanded: false,
             child: Wrap(
@@ -8508,8 +8593,36 @@ class _MyHomePageState extends State<MyHomePage> {
                 final canSave =
                     draftPreview != null && hasDraftChanges(draftPreview);
 
-                return Scaffold(
-                  appBar: AppBar(title: const Text('Edit Job Listing')),
+                return PopScope(
+                  canPop: !canSave,
+                  onPopInvokedWithResult: (didPop, result) {
+                    if (!didPop) {
+                      showDialog<void>(
+                        context: pageContext,
+                        builder: (dialogContext) => AlertDialog(
+                          title: const Text('Unsaved Changes'),
+                          content: const Text(
+                            'You have unsaved changes. Use Cancel to discard them or Save Changes to keep them.',
+                          ),
+                          actions: [
+                            TextButton(
+                              onPressed: () {
+                                Navigator.of(dialogContext).pop();
+                                Navigator.of(pageContext).pop();
+                              },
+                              child: const Text('Discard Changes'),
+                            ),
+                            FilledButton(
+                              onPressed: () => Navigator.of(dialogContext).pop(),
+                              child: const Text('Keep Editing'),
+                            ),
+                          ],
+                        ),
+                      );
+                    }
+                  },
+                  child: Scaffold(
+                    appBar: AppBar(title: const Text('Edit Job Listing')),
                   body: SafeArea(
                     child: SingleChildScrollView(
                       padding: const EdgeInsets.all(16),
@@ -8553,7 +8666,8 @@ class _MyHomePageState extends State<MyHomePage> {
                       ),
                     ),
                   ),
-                );
+                ), // end Scaffold
+                ); // end PopScope (Edit Job Listing)
               },
             ),
           ),
@@ -9452,49 +9566,104 @@ class _MyHomePageState extends State<MyHomePage> {
                                         if (_profileType ==
                                             ProfileType.jobSeeker) {
                                           final match = _evaluateJobMatch(job);
-                                          Color badgeColor = Colors.red;
-                                          String badgeIcon = '✗';
-                                          if (match.matchPercentage >= 80) {
-                                            badgeColor = Colors.green;
-                                            badgeIcon = '✓';
-                                          } else if (match.matchPercentage >=
-                                              50) {
-                                            badgeColor = Colors.orange;
-                                            badgeIcon = '⚠';
-                                          }
-                                          final missingText = match
-                                              .missingRequirements
-                                              .take(2)
-                                              .join(', ');
-                                          matchBadge = Tooltip(
-                                            message: match.matchPercentage >= 80
-                                                ? 'Strong match. Your profile exceeds requirements.'
-                                                : 'Growth opportunity. Your profile is developing: $missingText',
-                                            child: Container(
-                                              margin: EdgeInsets.only(
-                                                left: isCompactHeader ? 0 : 8,
-                                                top: isCompactHeader ? 8 : 0,
-                                              ),
-                                              padding:
-                                                  const EdgeInsets.symmetric(
-                                                    horizontal: 8,
-                                                    vertical: 4,
-                                                  ),
-                                              decoration: BoxDecoration(
-                                                color: badgeColor,
-                                                borderRadius:
-                                                    BorderRadius.circular(12),
-                                              ),
-                                              child: Text(
-                                                '$badgeIcon ${match.matchPercentage}%',
-                                                style: const TextStyle(
-                                                  color: Colors.white,
-                                                  fontSize: 12,
-                                                  fontWeight: FontWeight.bold,
+                                          final isScopeMismatch =
+                                              _airframeScopeMismatch(
+                                                job,
+                                                _jobSeekerProfile,
+                                              );
+                                          if (isScopeMismatch) {
+                                            final isHelicopter =
+                                                job.airframeScope == 'Helicopter';
+                                            matchBadge = Tooltip(
+                                              message:
+                                                  'Airframe category mismatch — '
+                                                  'this job requires ${job.airframeScope} experience '
+                                                  'but your profile is ${_jobSeekerProfile.airframeScope}.',
+                                              child: Container(
+                                                margin: EdgeInsets.only(
+                                                  left: isCompactHeader ? 0 : 8,
+                                                  top: isCompactHeader ? 8 : 0,
+                                                ),
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                      horizontal: 8,
+                                                      vertical: 4,
+                                                    ),
+                                                decoration: BoxDecoration(
+                                                  color: Colors.blueGrey.shade600,
+                                                  borderRadius:
+                                                      BorderRadius.circular(12),
+                                                ),
+                                                child: Row(
+                                                  mainAxisSize: MainAxisSize.min,
+                                                  children: [
+                                                    Icon(
+                                                      isHelicopter
+                                                          ? Icons.air
+                                                          : Icons.flight,
+                                                      color: Colors.white,
+                                                      size: 14,
+                                                    ),
+                                                    const SizedBox(width: 4),
+                                                    Text(
+                                                      job.airframeScope,
+                                                      style: const TextStyle(
+                                                        color: Colors.white,
+                                                        fontSize: 12,
+                                                        fontWeight:
+                                                            FontWeight.bold,
+                                                      ),
+                                                    ),
+                                                  ],
                                                 ),
                                               ),
-                                            ),
-                                          );
+                                            );
+                                          } else {
+                                            Color badgeColor = Colors.red;
+                                            String badgeIcon = '✗';
+                                            if (match.matchPercentage >= 80) {
+                                              badgeColor = Colors.green;
+                                              badgeIcon = '✓';
+                                            } else if (match.matchPercentage >=
+                                                50) {
+                                              badgeColor = Colors.orange;
+                                              badgeIcon = '⚠';
+                                            }
+                                            final missingText = match
+                                                .missingRequirements
+                                                .take(2)
+                                                .join(', ');
+                                            matchBadge = Tooltip(
+                                              message:
+                                                  match.matchPercentage >= 80
+                                                      ? 'Strong match. Your profile exceeds requirements.'
+                                                      : 'Growth opportunity. Your profile is developing: $missingText',
+                                              child: Container(
+                                                margin: EdgeInsets.only(
+                                                  left: isCompactHeader ? 0 : 8,
+                                                  top: isCompactHeader ? 8 : 0,
+                                                ),
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                      horizontal: 8,
+                                                      vertical: 4,
+                                                    ),
+                                                decoration: BoxDecoration(
+                                                  color: badgeColor,
+                                                  borderRadius:
+                                                      BorderRadius.circular(12),
+                                                ),
+                                                child: Text(
+                                                  '$badgeIcon ${match.matchPercentage}%',
+                                                  style: const TextStyle(
+                                                    color: Colors.white,
+                                                    fontSize: 12,
+                                                    fontWeight: FontWeight.bold,
+                                                  ),
+                                                ),
+                                              ),
+                                            );
+                                          }
                                         }
 
                                         return Column(
@@ -12015,7 +12184,7 @@ class _MyHomePageState extends State<MyHomePage> {
                                             ),
                                             const SizedBox(height: 10),
                                             buildFilterOptionBoxes(
-                                              title: 'Airframe Scope',
+                                              title: 'Airframe Category',
                                               options: airframeScopeOptions,
                                               selectedValues:
                                                   pendingAirframeScopeFilters,
@@ -12526,7 +12695,13 @@ class _MyHomePageState extends State<MyHomePage> {
             );
           }
 
-          final matchColor = match.matchPercentage >= 90
+          final isScopeMismatch = _airframeScopeMismatch(
+            job,
+            _jobSeekerProfile,
+          );
+          final matchColor = isScopeMismatch
+              ? Colors.blueGrey.shade600
+              : match.matchPercentage >= 90
               ? Colors.green
               : match.matchPercentage >= 70
               ? Colors.orange
@@ -12636,13 +12811,40 @@ class _MyHomePageState extends State<MyHomePage> {
                             color: matchColor,
                             borderRadius: BorderRadius.circular(999),
                           ),
-                          child: Text(
-                            '${match.matchPercentage}%',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
+                          child: isScopeMismatch
+                              ? Tooltip(
+                                  message:
+                                      'Airframe category mismatch — '
+                                      'this job requires ${job.airframeScope} experience '
+                                      'but your profile is ${_jobSeekerProfile.airframeScope}.',
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(
+                                        job.airframeScope == 'Helicopter'
+                                            ? Icons.air
+                                            : Icons.flight,
+                                        color: Colors.white,
+                                        size: 16,
+                                      ),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        job.airframeScope,
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                )
+                              : Text(
+                                  '${match.matchPercentage}%',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
                         ),
                       ],
                     ),
@@ -12677,13 +12879,22 @@ class _MyHomePageState extends State<MyHomePage> {
                               : 'Favorite',
                         ),
                         cardActionButton(
-                          onPressed: (job.isExternal || !_hasApplied(job.id))
+                          onPressed: (job.isExternal || !_hasApplied(job.id)) &&
+                                  !(!job.isExternal &&
+                                      _airframeScopeMismatch(
+                                        job,
+                                        _jobSeekerProfile,
+                                      ))
                               ? () => _handleApplyTap(job)
                               : null,
                           icon: job.isExternal
                               ? Icons.open_in_new
                               : _hasApplied(job.id)
                               ? Icons.check_circle
+                              : _airframeScopeMismatch(job, _jobSeekerProfile)
+                              ? (job.airframeScope == 'Helicopter'
+                                  ? Icons.air
+                                  : Icons.flight)
                               : Icons.send,
                           iconColor: !job.isExternal && _hasApplied(job.id)
                               ? Colors.green
@@ -12692,6 +12903,8 @@ class _MyHomePageState extends State<MyHomePage> {
                               ? 'Contact Employer'
                               : _hasApplied(job.id)
                               ? 'Applied'
+                              : _airframeScopeMismatch(job, _jobSeekerProfile)
+                              ? '${job.airframeScope} Only'
                               : 'Apply',
                           filled: true,
                         ),
@@ -13784,9 +13997,9 @@ class _MyHomePageState extends State<MyHomePage> {
                 child: Column(
                   children: [
                     _buildChipSummaryCard(
-                      title: 'Airframe Scope',
+                      title: 'Airframe Category',
                       items: [_jobSeekerProfile.airframeScope],
-                      emptyText: 'No airframe scope selected',
+                      emptyText: 'No airframe category selected',
                     ),
                     _buildChipSummaryCard(
                       title: 'FAA Certificates',
@@ -14659,10 +14872,10 @@ class _MyHomePageState extends State<MyHomePage> {
         ),
         const SizedBox(height: 12),
         _buildExpandableRequirementSection(
-          sectionKey: 'Airframe Scope',
+          sectionKey: 'Airframe Category',
           title: createAirframeScopeSatisfied
-              ? 'Airframe Scope'
-              : 'Airframe Scope *',
+              ? 'Airframe Category'
+              : 'Airframe Category *',
           summary: _selectedAirframeScope,
           isSatisfied: createAirframeScopeSatisfied,
           initiallyExpanded: false,
@@ -16424,7 +16637,7 @@ class JobDetailsPage extends StatelessWidget {
                                   const SizedBox(height: 14),
                                   _buildRequirementsSubsection(
                                     context,
-                                    'Airframe Scope',
+                                    'Airframe Category',
                                     Icons.flight_outlined,
                                     _buildChipWrap([
                                       Chip(label: Text(job.airframeScope)),
@@ -16690,6 +16903,25 @@ class JobDetailsPage extends StatelessWidget {
       );
     }
 
+    // Disable apply when the seeker's airframe category doesn't match the job.
+    final scopeMismatch =
+        profile != null && _airframeScopeMismatch(job, profile!);
+    if (scopeMismatch) {
+      return Tooltip(
+        message:
+            'This job requires ${job.airframeScope} experience. '
+            'Your profile is ${profile!.airframeScope}. '
+            'You cannot apply to listings outside your airframe category.',
+        child: FilledButton.icon(
+          onPressed: null,
+          icon: Icon(
+            job.airframeScope == 'Helicopter' ? Icons.air : Icons.flight,
+          ),
+          label: Text('${job.airframeScope} Only'),
+        ),
+      );
+    }
+
     if (hasApplied) {
       return OutlinedButton.icon(
         onPressed: null,
@@ -16835,6 +17067,7 @@ class JobDetailsPage extends StatelessWidget {
       profile: profile!,
       includeCertPrefix: false,
     );
+    final scopeMismatch = _airframeScopeMismatch(job, profile!);
     final profileCertificates = <String>{
       for (final cert in profile!.faaCertificates)
         ...expandedCertificateQualifications(cert),
@@ -16865,6 +17098,7 @@ class JobDetailsPage extends StatelessWidget {
       profileHoursFor: (hourName) => profile!.flightHours[hourName] ?? 0,
       hasExperienceFor: (hourName) =>
           profile!.flightHoursTypes.contains(hourName),
+      hoursBlocked: scopeMismatch,
       leadingRows: [
         if (showPart135SummaryRow)
           Padding(
@@ -16911,6 +17145,7 @@ class JobDetailsPage extends StatelessWidget {
           _instructorHoursForLabel(profile!.flightHours, hourName),
       hasExperienceFor: (hourName) =>
           _containsInstructorHourLabel(profile!.flightHoursTypes, hourName),
+      hoursBlocked: scopeMismatch,
     );
     final specialtyRows = _buildMatchHoursRows(
       sectionTitle: 'Specialty Hours:',
@@ -16921,6 +17156,7 @@ class JobDetailsPage extends StatelessWidget {
           profile!.specialtyFlightHoursMap[hourName] ?? 0,
       hasExperienceFor: (hourName) =>
           profile!.specialtyFlightHours.contains(hourName),
+      hoursBlocked: scopeMismatch,
     );
 
     final hasVisibleResults =
@@ -16933,30 +17169,72 @@ class JobDetailsPage extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Wrap(
-          spacing: 10,
-          runSpacing: 8,
-          crossAxisAlignment: WrapCrossAlignment.center,
-          children: [
-            Chip(
-              label: Text('$matchPercentage% Match'),
-              backgroundColor: isFullMatch
-                  ? Colors.green[100]
-                  : Colors.orange[100],
-              labelStyle: TextStyle(
-                color: isFullMatch ? Colors.green[900] : Colors.orange[900],
-                fontWeight: FontWeight.bold,
+        if (!scopeMismatch) ...[
+          Wrap(
+            spacing: 10,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              Chip(
+                label: Text('$matchPercentage% Match'),
+                backgroundColor: isFullMatch
+                    ? Colors.green[100]
+                    : Colors.orange[100],
+                labelStyle: TextStyle(
+                  color: isFullMatch ? Colors.green[900] : Colors.orange[900],
+                  fontWeight: FontWeight.bold,
+                ),
               ),
+            ],
+          ),
+          const SizedBox(height: 16),
+        ],
+        if (scopeMismatch) ...[
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: Colors.orange.shade50,
+              border: Border.all(color: Colors.orange.shade300),
+              borderRadius: BorderRadius.circular(8),
             ),
-          ],
-        ),
-        const SizedBox(height: 16),
-        if (job.faaCertificates.isNotEmpty) ...[
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.warning_amber_rounded,
+                    size: 18, color: Colors.orange.shade800),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    '⚠ Airframe category mismatch — your hours are not counted toward this role. '
+                    'This job requires ${job.airframeScope} experience; '
+                    'your profile is ${profile!.airframeScope}.',
+                    style: TextStyle(
+                      color: Colors.orange.shade900,
+                      fontSize: 13,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+        ],
+        if (!scopeMismatch) ...[
+          if (job.faaCertificates.isNotEmpty) ...[
           const Text(
             'Certificates:',
             style: TextStyle(fontWeight: FontWeight.bold),
           ),
-          ...job.faaCertificates.map((cert) {
+          ...(() {
+            final sorted = [...job.faaCertificates];
+            sorted.sort((a, b) {
+              final aHas = profileCertificates.contains(normalizeCertificateName(a)) ? 0 : 1;
+              final bHas = profileCertificates.contains(normalizeCertificateName(b)) ? 0 : 1;
+              return aHas.compareTo(bHas);
+            });
+            return sorted;
+          })().map((cert) {
             final hasIt = profileCertificates.contains(
               normalizeCertificateName(cert),
             );
@@ -16990,7 +17268,15 @@ class JobDetailsPage extends StatelessWidget {
         ],
         if (job.requiredRatings.isNotEmpty) ...[
           const Text('Ratings:', style: TextStyle(fontWeight: FontWeight.bold)),
-          ...job.requiredRatings.map((rating) {
+          ...(() {
+            final sorted = [...job.requiredRatings];
+            sorted.sort((a, b) {
+              final aHas = profileCertificates.contains(normalizeCertificateName(a)) ? 0 : 1;
+              final bHas = profileCertificates.contains(normalizeCertificateName(b)) ? 0 : 1;
+              return aHas.compareTo(bHas);
+            });
+            return sorted;
+          })().map((rating) {
             final hasIt = profileCertificates.contains(
               normalizeCertificateName(rating),
             );
@@ -17038,6 +17324,7 @@ class JobDetailsPage extends StatelessWidget {
               style: TextStyle(color: Colors.green.shade900),
             ),
           ),
+        ], // end !scopeMismatch
       ],
     );
   }
@@ -17049,6 +17336,7 @@ class JobDetailsPage extends StatelessWidget {
     required int Function(String hourName) profileHoursFor,
     required bool Function(String hourName) hasExperienceFor,
     List<Widget> leadingRows = const [],
+    bool hoursBlocked = false,
   }) {
     final visibleEntries = entries.toList();
 
@@ -17056,15 +17344,48 @@ class JobDetailsPage extends StatelessWidget {
       return const [];
     }
 
+    // When hoursBlocked (scope mismatch), treat every entry as unmet and sort
+    // purely by name.  Otherwise use the normal met-first / progress sort.
+    final List<MapEntry<String, int>> sortedEntries;
+    if (hoursBlocked) {
+      sortedEntries = [...visibleEntries];
+    } else {
+      // Met required first, then unmet required sorted by progress% descending,
+      // then preferred (informational) items last.
+      final metRequired = visibleEntries.where(
+        (e) => !isPreferredFor(e.key) && hasExperienceFor(e.key) && profileHoursFor(e.key) >= e.value,
+      ).toList();
+      final unmetRequired = visibleEntries.where(
+        (e) => !isPreferredFor(e.key) && !(hasExperienceFor(e.key) && profileHoursFor(e.key) >= e.value),
+      ).toList();
+      unmetRequired.sort((a, b) {
+        final pctA = a.value <= 0 ? 100 : ((profileHoursFor(a.key) * 100) ~/ a.value);
+        final pctB = b.value <= 0 ? 100 : ((profileHoursFor(b.key) * 100) ~/ b.value);
+        return pctB.compareTo(pctA);
+      });
+      final preferred = visibleEntries.where((e) => isPreferredFor(e.key)).toList();
+      sortedEntries = [...metRequired, ...unmetRequired, ...preferred];
+    }
+
     return [
       const SizedBox(height: 8),
       Text(sectionTitle, style: const TextStyle(fontWeight: FontWeight.bold)),
       ...leadingRows,
-      ...visibleEntries.map((entry) {
+      ...sortedEntries.map((entry) {
         final isPreferred = isPreferredFor(entry.key);
         final profileHours = profileHoursFor(entry.key);
+        // When hours are blocked by scope mismatch, nothing counts as met.
         final hasIt =
-            hasExperienceFor(entry.key) && profileHours >= entry.value;
+            !hoursBlocked &&
+            hasExperienceFor(entry.key) &&
+            profileHours >= entry.value;
+        final rowColor = hoursBlocked
+            ? Colors.grey[500]
+            : isPreferred
+            ? Colors.grey[700]
+            : hasIt
+            ? Colors.green
+            : Colors.red;
 
         return Padding(
           padding: const EdgeInsets.only(left: 8, top: 4),
@@ -17074,17 +17395,15 @@ class JobDetailsPage extends StatelessWidget {
               Row(
                 children: [
                   Icon(
-                    isPreferred
+                    hoursBlocked
+                        ? Icons.block
+                        : isPreferred
                         ? Icons.info_outline
                         : hasIt
                         ? Icons.check_circle
                         : Icons.cancel,
                     size: 16,
-                    color: isPreferred
-                        ? Colors.grey[700]
-                        : hasIt
-                        ? Colors.green
-                        : Colors.red,
+                    color: rowColor,
                   ),
                   const SizedBox(width: 8),
                   Expanded(
@@ -17095,20 +17414,16 @@ class JobDetailsPage extends StatelessWidget {
                         isPreferred,
                       ),
                       style: TextStyle(
-                        color: isPreferred
-                            ? Colors.grey[700]
-                            : hasIt
-                            ? Colors.green
-                            : Colors.red,
-                        decoration: isPreferred || hasIt
-                            ? null
-                            : TextDecoration.lineThrough,
+                        color: rowColor,
+                        decoration: hoursBlocked || (!isPreferred && !hasIt)
+                            ? TextDecoration.lineThrough
+                            : null,
                       ),
                     ),
                   ),
                 ],
               ),
-              if (!isPreferred && !hasIt)
+              if (!isPreferred && !hasIt && !hoursBlocked)
                 Padding(
                   padding: const EdgeInsets.only(left: 24, top: 2),
                   child: Text(
@@ -17570,3 +17885,4 @@ class PublicCompanyInfoPage extends StatelessWidget {
     );
   }
 }
+

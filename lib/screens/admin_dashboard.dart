@@ -466,7 +466,7 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
 
     if (!availableAirframeScopeOptions.contains(_selectedAirframeScope)) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please select an Airframe Scope.')),
+        const SnackBar(content: Text('Please select an Airframe Category.')),
       );
       return;
     }
@@ -1588,7 +1588,7 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
                 Text(
                   'FAA Rules: ${_formatFaaRulesDisplayWithFallback(listing)}',
                 ),
-                Text('Airframe Scope: ${listing.airframeScope}'),
+                Text('Airframe Category: ${listing.airframeScope}'),
                 Text(
                   'FAA Certificates: ${_joinOrNone(listing.faaCertificates)}',
                 ),
@@ -2053,7 +2053,7 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
-                      'Airframe Scope *',
+                      'Airframe Category *',
                       style: TextStyle(fontWeight: FontWeight.w600),
                     ),
                     const SizedBox(height: 8),
@@ -3545,7 +3545,7 @@ class _ModerationTabState extends State<_ModerationTab> {
                   profile.country,
                 ].where((part) => part.trim().isNotEmpty).join(', '),
               ),
-              _DetailRow('Airframe Scope', profile.airframeScope),
+              _DetailRow('Airframe Category', profile.airframeScope),
               _DetailRow('Total Flight Hours', '${profile.totalFlightHours}'),
               if (profile.faaCertificates.isNotEmpty)
                 _DetailRow(
@@ -4634,3 +4634,4 @@ class _LogSummaryTile extends StatelessWidget {
     );
   }
 }
+
