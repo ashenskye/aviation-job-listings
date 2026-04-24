@@ -624,4 +624,128 @@ void main() {
       expect(find.byType(SnackBar), findsOneWidget);
     },
   );
+
+  testWidgets(
+    'comprehensive end-to-end apply flow verifies application persistence and status tracking',
+    (WidgetTester tester) async {
+      final repository = FakeAppRepository();
+
+      // Step 1: Create a matching job listing with specific requirements
+      await repository.createJob(
+        const JobListing(
+          id: 'e2e-apply-comprehensive',
+          title: 'Captain - Multi-Engine Charter',
+          company: 'Sky Ventures Aviation',
+          location: 'Fort Lauderdale, FL',
+          type: 'Full-Time',
+          crewRole: 'Captain',
+          faaRules: ['Part 135'],
+          part135SubType: 'IFR / Commuter',
+          description:
+              'Seeking experienced captain for charter operations across the continental US.',
+          faaCertificates: ['Airline Transport Pilot (ATP)'],
+          typeRatingsRequired: ['B737'],
+          flightExperience: [
+            'Total Time',
+            'Cross-Country',
+            'Night',
+            'Instrument',
+          ],
+          flightHours: {
+            'Total Time': 1500,
+            'Cross-Country': 500,
+            'Night': 100,
+            'Instrument': 75,
+          },
+          aircraftFlown: ['Boeing 737', 'Airbus A320'],
+          employerId: 'emp-sky-ventures',
+        ),
+      );
+
+      // Step 2: Create a job seeker profile that exceeds requirements
+      final seekerProfile = JobSeekerProfile(
+        firstName: 'Captain',
+        lastName: 'Qualified',
+        email: 'captain@example.com',
+        phone: '555-0199',
+        city: 'Fort Lauderdale',
+        stateOrProvince: 'FL',
+        faaCertificates: const [
+          'Airline Transport Pilot (ATP)',
+          'Type Rating Examiner'
+        ],
+        typeRatings: const ['B737', 'A320'],
+        flightHours: const {
+          'Total Time': 3500, // Exceeds requirement
+          'Cross-Country': 1200, // Exceeds requirement
+          'Night': 300, // Exceeds requirement
+          'Instrument': 200, // Exceeds requirement
+        },
+        flightHoursTypes: const [
+          'Total Time',
+          'Cross-Country',
+          'Night',
+          'Instrument',
+        ],
+        aircraftFlown: const ['Boeing 737', 'Airbus A320', 'Bombardier CRJ'],
+        airframeScope: 'Both',
+      );
+
+      await repository.saveJobSeekerProfile(seekerProfile);
+
+      await tester.pumpWidget(MyApp(repository: repository));
+      await tester.pumpAndSettle();
+
+      // Step 3: Switch to job seeker profile
+      await tester.tap(find.byIcon(Icons.person));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Job Seeker').last);
+      await tester.pumpAndSettle();
+
+      // Step 4: Verify profile was loaded correctly
+      expect(find.text('Favorites'), findsOneWidget);
+
+      // Step 5: Navigate to jobs listing
+      await tester.tap(find.text('Jobs'));
+      await tester.pumpAndSettle();
+
+      // Step 6: Find the created job listing
+      expect(find.text('Captain - Multi-Engine Charter'), findsOneWidget);
+
+      // Step 7: Tap on job to view details
+      await tester.tap(find.text('Captain - Multi-Engine Charter').first);
+      await tester.pumpAndSettle();
+
+      // Step 8: Verify job details are displayed correctly
+      expect(find.text('Sky Ventures Aviation'), findsOneWidget);
+      expect(find.text('Fort Lauderdale, FL'), findsOneWidget);
+      expect(find.text('Part 135 IFR'), findsWidgets);
+
+      // Step 9: Verify apply button is visible (not disabled by category mismatch)
+      expect(_hasAnyApplyCtaVisible(), isTrue);
+
+      // Step 10: Tap apply button and submit application
+      await _tapAnyApplyCta(tester);
+      await _submitQuickApplyDialogIfVisible(tester);
+
+      // Step 11: Verify success feedback
+      expect(
+        find.text('Applied! Employer will see your profile.'),
+        findsOneWidget,
+      );
+
+      // Step 12: Navigate back to profile
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+
+      // Step 13: Go to My Applications tab to verify persistence
+      await tester.tap(find.text('My Applications'));
+      await tester.pumpAndSettle();
+
+      // Step 14: Verify application appears with correct details and status
+      // This confirms the application was successfully saved and is persisting
+      expect(find.text('Captain - Multi-Engine Charter'), findsOneWidget);
+      expect(find.text('Submitted'), findsOneWidget);
+    },
+  );
 }

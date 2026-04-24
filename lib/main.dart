@@ -6201,7 +6201,8 @@ class _MyHomePageState extends State<MyHomePage> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
-              'Application submitted, but marked as not meeting requirements.',
+              'Application received! You don\'t yet meet all the requirements for this role. '
+              'Check your profile to see what\'s needed.',
             ),
           ),
         );
@@ -16909,9 +16910,9 @@ class JobDetailsPage extends StatelessWidget {
     if (scopeMismatch) {
       return Tooltip(
         message:
-            'This job requires ${job.airframeScope} experience. '
-            'Your profile is ${profile!.airframeScope}. '
-            'You cannot apply to listings outside your airframe category.',
+            'This role requires ${job.airframeScope} experience exclusively. '
+            'Your profile shows ${profile!.airframeScope} experience. '
+            'Consider building experience in ${job.airframeScope} to qualify for this role.',
         child: FilledButton.icon(
           onPressed: null,
           icon: Icon(
@@ -17206,9 +17207,8 @@ class JobDetailsPage extends StatelessWidget {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    '⚠ Airframe category mismatch — your hours are not counted toward this role. '
-                    'This job requires ${job.airframeScope} experience; '
-                    'your profile is ${profile!.airframeScope}.',
+                    '⚠ Airframe category mismatch — your flight hours won\'t count toward this role. '
+                    'This role requires ${job.airframeScope} experience, but your profile shows ${profile!.airframeScope}.',
                     style: TextStyle(
                       color: Colors.orange.shade900,
                       fontSize: 13,

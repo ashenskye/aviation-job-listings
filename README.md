@@ -24,6 +24,10 @@ Steps:
 
 ## Compact Changelog
 
+- 2026-04-23: Added back-navigation guard for edit pages (Personal Info, Qualifications, Job Listing) — prevents accidental data loss with unsaved changes confirmation dialog.
+- 2026-04-23: Implemented airframe category mismatch detection and improved UX: category mismatch badges show icon instead of %; hours are blocked; Apply button disabled with context-aware messaging; search results sort mismatches below matched jobs.
+- 2026-04-23: Renamed "Airframe Scope" to "Airframe Category" throughout UI for clarity.
+- 2026-04-23: Added comprehensive end-to-end integration test for apply flow (job creation, seeker profile setup, application submission, and persistence verification).
 - 2026-04-22: Extended integration tests with instructor certification flow scenarios (apply flow with CFI/CFII hours and profile matching).
 - 2026-04-22: Added real-time implied instructor certificate checks to seeker qualifications editor (displays "Required by hours" chips matching job form pattern).
 - 2026-04-22: Normalized instructor hour comparisons across all matching and scoring paths (profile matching, applicant review, job details, seeker editor).
