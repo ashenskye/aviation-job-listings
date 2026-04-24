@@ -7161,6 +7161,14 @@ class _MyHomePageState extends State<MyHomePage> {
     String selectedCrewPosition = job.crewPosition == 'Co-Pilot'
         ? 'Co-Pilot'
         : 'Captain';
+    bool editAutoRejectEnabled = job.autoRejectThreshold > 0;
+    int editAutoRejectThreshold = job.autoRejectThreshold > 0
+      ? job.autoRejectThreshold
+      : 65;
+    final editReapplyWindowDaysController = TextEditingController(
+      text: job.reapplyWindowDays.toString(),
+    );
+    int editReapplyWindowDays = job.reapplyWindowDays;
     String selectedAirframeScope = job.airframeScope;
     bool isOpenListing = job.deadlineDate == null;
     DateTime? selectedDeadlineDate = job.deadlineDate;
@@ -7742,6 +7750,8 @@ class _MyHomePageState extends State<MyHomePage> {
           ) ||
           !_sameStringSet(draft.aircraftFlown, job.aircraftFlown, trim: true) ||
           draft.salaryRange != job.salaryRange ||
+          draft.autoRejectThreshold != job.autoRejectThreshold ||
+          draft.reapplyWindowDays != job.reapplyWindowDays ||
           draft.deadlineDate != job.deadlineDate;
     }
 
@@ -7780,6 +7790,16 @@ class _MyHomePageState extends State<MyHomePage> {
       }
       if (selectedPayMetric == null || selectedPayMetric!.isEmpty) {
         missingRequirements.add('Pay Metric');
+      }
+      final parsedReapplyWindowDays = int.tryParse(
+        editReapplyWindowDaysController.text.trim(),
+      );
+      if (parsedReapplyWindowDays == null ||
+          parsedReapplyWindowDays <= 0 ||
+          parsedReapplyWindowDays > _maxReapplyWindowDays) {
+        missingRequirements.add(
+          'Reapply Window must be between 1 and $_maxReapplyWindowDays days',
+        );
       }
       if (!isOpenListing && selectedDeadlineDate == null) {
         missingRequirements.add('Application Deadline');
@@ -7984,6 +8004,10 @@ class _MyHomePageState extends State<MyHomePage> {
         createdAt: job.createdAt,
         updatedAt: DateTime.now(),
         employerId: job.employerId,
+        autoRejectThreshold: editAutoRejectEnabled
+            ? editAutoRejectThreshold
+            : 0,
+        reapplyWindowDays: editReapplyWindowDays,
         status: _statusForEditedJob(
           job,
           isOpenListing ? null : selectedDeadlineDate,
@@ -8210,6 +8234,107 @@ class _MyHomePageState extends State<MyHomePage> {
                   onChanged: (value) {
                     setModalState(() => selectedPayMetric = value);
                   },
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
+          _buildEditAccordionSection(
+            title: 'Application Preferences',
+            initiallyExpanded: false,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Auto-Reject Threshold',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 6),
+                Row(
+                  children: [
+                    Checkbox(
+                      value: editAutoRejectEnabled,
+                      onChanged: (value) {
+                        setModalState(() {
+                          editAutoRejectEnabled = value ?? false;
+                        });
+                      },
+                    ),
+                    const Text('Enable auto-reject at '),
+                    if (editAutoRejectEnabled)
+                      Text(
+                        '$editAutoRejectThreshold%',
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      )
+                    else
+                      const Text('(disabled)'),
+                  ],
+                ),
+                if (editAutoRejectEnabled) ...[
+                  Slider(
+                    value: editAutoRejectThreshold.toDouble().clamp(
+                      1.0,
+                      100.0,
+                    ),
+                    min: 1,
+                    max: 100,
+                    divisions: 20,
+                    label: '$editAutoRejectThreshold%',
+                    onChanged: (value) {
+                      setModalState(() {
+                        editAutoRejectThreshold = value.round();
+                      });
+                    },
+                  ),
+                  Text(
+                    'Auto-reject applications below $editAutoRejectThreshold% match',
+                    style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                  ),
+                ],
+                const SizedBox(height: 16),
+                const Text(
+                  'Reapply Prevention Window',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 6),
+                Row(
+                  children: [
+                    SizedBox(
+                      width: 80,
+                      child: TextField(
+                        controller: editReapplyWindowDaysController,
+                        textDirection: TextDirection.ltr,
+                        keyboardType: TextInputType.number,
+                        inputFormatters: [
+                          FilteringTextInputFormatter.digitsOnly,
+                        ],
+                        decoration: const InputDecoration(
+                          border: OutlineInputBorder(),
+                          contentPadding: EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 8,
+                          ),
+                        ),
+                        onChanged: (value) {
+                          final parsed = int.tryParse(value.trim());
+                          if (parsed != null &&
+                              parsed > 0 &&
+                              parsed <= _maxReapplyWindowDays) {
+                            setModalState(() {
+                              editReapplyWindowDays = parsed;
+                            });
+                          }
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    const Text('days'),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Job seekers can apply again after this period',
+                  style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
                 ),
               ],
             ),
@@ -8751,6 +8876,7 @@ class _MyHomePageState extends State<MyHomePage> {
       topEndStartingPayController.dispose();
       typeRatingsController.dispose();
       aircraftController.dispose();
+      editReapplyWindowDaysController.dispose();
       for (final controller in flightHourControllers.values) {
         controller.dispose();
       }
