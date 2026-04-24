@@ -933,7 +933,7 @@ class _MyHomePageState extends State<MyHomePage> {
   List<ApplicationFeedback> _allFeedback = const [];
   String _selectedEmployerApplicationFilter = 'all';
   String _selectedEmployerApplicationSort = 'newest';
-  String _selectedMatchFilter = 'all';
+  int _employerMatchThreshold = 70;
   Map<String, bool> _applicationsByJobId = {};
 
   bool _hasApplied(String jobId) => _applicationsByJobId[jobId] ?? false;
@@ -10350,12 +10350,6 @@ class _MyHomePageState extends State<MyHomePage> {
       ('interested', 'Interested'),
       ('rejected', 'Not Moving Forward'),
     ];
-    final matchFilterOptions = const [
-      ('all', 'All'),
-      ('perfect', '🟢 90%+'),
-      ('good', '🟡 70–89%'),
-      ('stretch', '🔴 <70%'),
-    ];
     final sortOptions = const [
       ('newest', 'Newest'),
       ('highest_match', 'Highest Match'),
@@ -10373,14 +10367,6 @@ class _MyHomePageState extends State<MyHomePage> {
           .where((app) => app.status == 'rejected')
           .length,
     };
-    final perfectCount = allApplications
-        .where((app) => app.isPerfectMatch)
-        .length;
-    final goodCount = allApplications.where((app) => app.isGoodMatch).length;
-    final stretchCount = allApplications
-        .where((app) => app.isStretchMatch)
-        .length;
-
     // Apply status filter
     final statusFiltered = _selectedEmployerApplicationFilter == 'all'
         ? allApplications
@@ -10388,13 +10374,26 @@ class _MyHomePageState extends State<MyHomePage> {
               .where((app) => app.status == _selectedEmployerApplicationFilter)
               .toList();
 
-    // Apply match % filter
-    final filteredApplications = switch (_selectedMatchFilter) {
-      'perfect' => statusFiltered.where((app) => app.isPerfectMatch).toList(),
-      'good' => statusFiltered.where((app) => app.isGoodMatch).toList(),
-      'stretch' => statusFiltered.where((app) => app.isStretchMatch).toList(),
-      _ => statusFiltered,
-    };
+    // Apply adjustable match threshold filter.
+    final filteredApplications = statusFiltered
+      .where((app) => app.matchPercentage >= _employerMatchThreshold)
+      .toList();
+
+    final decileTallies = <({int start, int end, int count})>[];
+    for (var start = 0; start <= 90; start += 10) {
+      final end = start == 90 ? 100 : start + 9;
+      final count = statusFiltered
+        .where(
+        (app) =>
+          app.matchPercentage >= start && app.matchPercentage <= end,
+        )
+        .length;
+      decileTallies.add((start: start, end: end, count: count));
+    }
+
+    final aboveThresholdCount = statusFiltered
+      .where((app) => app.matchPercentage >= _employerMatchThreshold)
+      .length;
 
     final sorted = [...filteredApplications]
       ..sort((a, b) {
@@ -10460,21 +10459,52 @@ class _MyHomePageState extends State<MyHomePage> {
                     border: Border.all(color: Colors.blueGrey.shade100),
                     borderRadius: BorderRadius.circular(8),
                   ),
-                  child: Wrap(
-                    spacing: 16,
-                    runSpacing: 4,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        '🟢 $perfectCount perfect',
-                        style: const TextStyle(fontSize: 13),
+                        'Threshold: $_employerMatchThreshold% • Passing: $aboveThresholdCount/${statusFiltered.length}',
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
-                      Text(
-                        '🟡 $goodCount good',
-                        style: const TextStyle(fontSize: 13),
-                      ),
-                      Text(
-                        '🔴 $stretchCount stretch',
-                        style: const TextStyle(fontSize: 13),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: decileTallies.map((bucket) {
+                          final isThresholdBucket =
+                              _employerMatchThreshold >= bucket.start &&
+                              _employerMatchThreshold <= bucket.end;
+                          return Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 4,
+                            ),
+                            decoration: BoxDecoration(
+                              color: isThresholdBucket
+                                  ? Colors.blueGrey.shade200
+                                  : Colors.white,
+                              borderRadius: BorderRadius.circular(999),
+                              border: Border.all(
+                                color: isThresholdBucket
+                                    ? Colors.blueGrey.shade500
+                                    : Colors.blueGrey.shade200,
+                              ),
+                            ),
+                            child: Text(
+                              '${bucket.start.toString().padLeft(2, '0')}-${bucket.end.toString().padLeft(2, '0')}: ${bucket.count}',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: isThresholdBucket
+                                    ? FontWeight.w700
+                                    : FontWeight.w500,
+                                color: Colors.blueGrey.shade800,
+                              ),
+                            ),
+                          );
+                        }).toList(),
                       ),
                     ],
                   ),
@@ -10502,31 +10532,35 @@ class _MyHomePageState extends State<MyHomePage> {
                 ),
                 const SizedBox(height: 8),
                 // Match % filter
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  crossAxisAlignment: WrapCrossAlignment.center,
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Match:',
+                      'Match Threshold: $_employerMatchThreshold%',
                       style: TextStyle(
                         fontWeight: FontWeight.w600,
                         color: Colors.grey.shade700,
                       ),
                     ),
-                    ...matchFilterOptions.map((option) {
-                      final key = option.$1;
-                      final label = option.$2;
-                      return ChoiceChip(
-                        label: Text(label),
-                        selected: _selectedMatchFilter == key,
-                        onSelected: (_) {
-                          setState(() {
-                            _selectedMatchFilter = key;
-                          });
-                        },
-                      );
-                    }),
+                    Slider(
+                      value: _employerMatchThreshold.toDouble(),
+                      min: 0,
+                      max: 100,
+                      divisions: 100,
+                      label: '$_employerMatchThreshold%',
+                      onChanged: (value) {
+                        setState(() {
+                          _employerMatchThreshold = value.round();
+                        });
+                      },
+                    ),
+                    Text(
+                      'Showing applicants at or above $_employerMatchThreshold% match',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey.shade600,
+                      ),
+                    ),
                   ],
                 ),
                 const SizedBox(height: 8),
@@ -10608,18 +10642,8 @@ class _MyHomePageState extends State<MyHomePage> {
           _ => Colors.orange.shade100,
         };
 
-        final Color matchBadgeColor;
-        final String matchBadgeLabel;
-        if (app.isPerfectMatch) {
-          matchBadgeColor = Colors.green.shade100;
-          matchBadgeLabel = '🟢 ${app.matchPercentage}%';
-        } else if (app.isGoodMatch) {
-          matchBadgeColor = Colors.yellow.shade100;
-          matchBadgeLabel = '🟡 ${app.matchPercentage}%';
-        } else {
-          matchBadgeColor = Colors.red.shade100;
-          matchBadgeLabel = '🔴 ${app.matchPercentage}%';
-        }
+        final matchBadgeColor = Colors.blueGrey.shade100;
+        final matchBadgeLabel = 'Match ${app.matchPercentage}%';
 
         final appFeedback = _getFeedbackForApplication(app.id);
         final hasFeedback = appFeedback != null;
