@@ -69,6 +69,7 @@ void main() {
   group('JobListing.isActive / archivedAt', () {
     JobListing makeJob({
       bool isActive = true,
+      String? status,
       DateTime? archivedAt,
       DateTime? deadlineDate,
     }) {
@@ -84,6 +85,7 @@ void main() {
         faaCertificates: const [],
         flightExperience: const [],
         aircraftFlown: const [],
+        status: status,
         isActive: isActive,
         archivedAt: archivedAt,
         deadlineDate: deadlineDate,
@@ -128,6 +130,20 @@ void main() {
     test('shouldShow false for archived job', () {
       final job = makeJob(isActive: false);
       expect(job.shouldShow, isFalse);
+    });
+
+    test('explicit expired status hides the job even without deadline', () {
+      final job = makeJob(status: JobListing.statusExpired);
+      expect(job.isExpired, isTrue);
+      expect(job.shouldShow, isFalse);
+    });
+
+    test('toJson / fromJson round-trip preserves explicit status', () {
+      final job = makeJob(status: JobListing.statusExpired);
+      final restored = JobListing.fromJson(job.toJson());
+      expect(restored.status, JobListing.statusExpired);
+      expect(restored.isActive, isFalse);
+      expect(restored.isExpired, isTrue);
     });
 
     test('daysUntilDeadline is null when no deadline', () {

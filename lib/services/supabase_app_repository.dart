@@ -218,7 +218,6 @@ class SupabaseAppRepository implements AppRepository {
       final rows = await _client
           .from('job_listings')
           .select()
-          .eq('status', 'active')
           .order('created_at', ascending: false);
 
       final jobs = rows
@@ -716,7 +715,7 @@ class SupabaseAppRepository implements AppRepository {
       'contact_email': job.contactEmail,
       'company_phone': job.companyPhone,
       'company_url': job.companyUrl,
-      'status': 'active',
+      'status': job.status,
     };
   }
 
@@ -788,6 +787,10 @@ class SupabaseAppRepository implements AppRepository {
       'contactEmail': row['contact_email'],
       'companyPhone': row['company_phone'],
       'companyUrl': row['company_url'],
+      'status': row['status'],
+      'archivedAt': row['status'] == JobListing.statusArchived
+          ? row['updated_at']
+          : null,
     };
   }
 

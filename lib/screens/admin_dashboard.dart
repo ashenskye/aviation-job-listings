@@ -980,7 +980,10 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
   }
 
   void _cancelEditing() {
-    setState(_clearExternalListingForm);
+    setState(() {
+      _clearExternalListingForm();
+      _selectedView = _ExternalPostsView.view;
+    });
   }
 
   void _applyPart135Minimums(String subType) {
@@ -1288,6 +1291,76 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
     }
   }
 
+  Future<void> _expireExternalListing(JobListing listing) async {
+    if (_archivingListingIds.contains(listing.id) || !listing.isActive) {
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Mark listing expired'),
+        content: Text(
+          'Mark external listing "${listing.title}" from ${listing.company} as expired?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Mark Expired'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) {
+      return;
+    }
+
+    setState(() {
+      _archivingListingIds.add(listing.id);
+    });
+
+    try {
+      await widget.adminRepository.updateJobListing(
+        listing.id,
+        listing.copyWith(
+          status: JobListing.statusExpired,
+          archivedAt: null,
+          updatedAt: DateTime.now(),
+        ),
+        'Expired listing',
+      );
+      if (!mounted) {
+        return;
+      }
+      await widget.onCreated();
+      await _loadExternalListings();
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Marked external listing expired: ${listing.title}')),
+      );
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not mark listing expired: $e')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _archivingListingIds.remove(listing.id);
+        });
+      }
+    }
+  }
+
   Future<String?> _promptDeleteReason(JobListing listing) async {
     final controller = TextEditingController();
     String? errorText;
@@ -1490,7 +1563,9 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
                 Text('${listing.company} • ${listing.location}'),
                 const SizedBox(height: 8),
                 Text('Type: ${listing.type}'),
-                Text('Status: ${listing.isActive ? 'Active' : 'Archived'}'),
+                Text(
+                  'Status: ${listing.isArchived ? 'Archived' : listing.isExpired ? 'Expired' : 'Active'}',
+                ),
                 Text(
                   'Crew: ${listing.crewRole == 'Crew' ? 'Crew - ${listing.crewPosition ?? 'Captain'}' : 'Single Pilot'}',
                 ),
@@ -1628,10 +1703,6 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
                       fontWeight: FontWeight.w600,
                     ),
                   ),
-                ),
-                TextButton(
-                  onPressed: _cancelEditing,
-                  child: const Text('Cancel'),
                 ),
               ],
             ),
@@ -2192,54 +2263,60 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
                 ),
               ),
               const SizedBox(height: 12),
-              if (_editingListing == null)
-                SizedBox(
-                  height: 44,
-                  child: ElevatedButton.icon(
-                    onPressed: _isSubmitting ? null : _submitExternalListing,
-                    icon: _isSubmitting
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.post_add),
-                    label: const Text('Post External Listing'),
-                  ),
-                ),
-              if (_editingListing == null) const SizedBox(height: 16),
               const SizedBox(height: 16),
             ],
           ),
         ),
-        if (_editingListing != null)
-          Container(
-            padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
-            decoration: BoxDecoration(
-              color: Theme.of(context).scaffoldBackgroundColor,
-              border: Border(top: BorderSide(color: Colors.grey.shade300)),
-            ),
-            child: SafeArea(
-              top: false,
-              child: SizedBox(
-                height: 44,
-                width: double.infinity,
-                child: ElevatedButton.icon(
-                  onPressed: _isSubmitting ? null : _submitExternalListing,
-                  icon: _isSubmitting
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.save),
-                  label: Text(
-                    _isSubmitting ? 'Saving...' : 'Save External Listing',
+        Container(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+          decoration: BoxDecoration(
+            color: Theme.of(context).scaffoldBackgroundColor,
+            border: Border(top: BorderSide(color: Colors.grey.shade300)),
+          ),
+          child: SafeArea(
+            top: false,
+            child: Row(
+              children: [
+                SizedBox(
+                  height: 44,
+                  child: OutlinedButton(
+                    onPressed: _isSubmitting ? null : _cancelEditing,
+                    child: const Text('Cancel'),
                   ),
                 ),
-              ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: SizedBox(
+                    height: 44,
+                    child: ElevatedButton.icon(
+                      onPressed: _isSubmitting ? null : _submitExternalListing,
+                      icon: _isSubmitting
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : Icon(
+                              _editingListing == null
+                                  ? Icons.post_add
+                                  : Icons.save,
+                            ),
+                      label: Text(
+                        _isSubmitting
+                            ? (_editingListing == null
+                                  ? 'Posting...'
+                                  : 'Updating...')
+                            : (_editingListing == null
+                                  ? 'Post External Listing'
+                                  : 'Update Listing'),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
+        ),
       ],
     );
   }
@@ -2542,10 +2619,6 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
               ?.toLocal()
               .toString()
               .substring(0, 19);
-            final totalHourItems =
-              listing.flightHoursByType.length +
-              listing.instructorHoursByType.length +
-              listing.specialtyHoursByType.length;
 
           return Card(
             margin: const EdgeInsets.only(bottom: 10),
@@ -2568,10 +2641,14 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
                             ),
                           ),
                         ),
-                        if (!listing.isActive)
+                        if (listing.isArchived || listing.isExpired)
                           Chip(
-                            label: const Text('Archived'),
-                            backgroundColor: Colors.grey.shade200,
+                            label: Text(
+                              listing.isArchived ? 'Archived' : 'Expired',
+                            ),
+                            backgroundColor: listing.isArchived
+                                ? Colors.grey.shade200
+                                : Colors.orange.shade100,
                           ),
                       ],
                     ),
@@ -2579,23 +2656,6 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
                     Text('${listing.company} • ${listing.location}'),
                     const SizedBox(height: 4),
                     Text('Type: ${listing.type}'),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Hours items: $totalHourItems',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.grey.shade700,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    if (listing.externalApplyUrl?.trim().isNotEmpty ??
-                        false) ...[
-                      const SizedBox(height: 4),
-                      Text(
-                        'Apply URL: ${listing.externalApplyUrl}',
-                        style: TextStyle(color: Colors.blueGrey.shade700),
-                      ),
-                    ],
                     if (createdLabel != null) ...[
                       const SizedBox(height: 6),
                       Text(
@@ -2606,26 +2666,6 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
                         ),
                       ),
                     ],
-                    const SizedBox(height: 8),
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          Icons.open_in_full,
-                          size: 14,
-                          color: Colors.blueGrey.shade600,
-                        ),
-                        const SizedBox(width: 6),
-                        Text(
-                          'View Full Listing',
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.blueGrey.shade700,
-                          ),
-                        ),
-                      ],
-                    ),
                     const SizedBox(height: 10),
                     Wrap(
                       spacing: 8,
@@ -2636,6 +2676,26 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
                           icon: const Icon(Icons.edit_outlined),
                           label: const Text('Edit'),
                         ),
+                        if (listing.isActive)
+                          OutlinedButton.icon(
+                            onPressed: _archivingListingIds.contains(listing.id)
+                                ? null
+                                : () => _expireExternalListing(listing),
+                            icon: _archivingListingIds.contains(listing.id)
+                                ? const SizedBox(
+                                    width: 14,
+                                    height: 14,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : const Icon(Icons.event_busy_outlined),
+                            label: Text(
+                              _archivingListingIds.contains(listing.id)
+                                  ? 'Expiring...'
+                                  : 'Mark Expired',
+                            ),
+                          ),
                         if (listing.isActive)
                           OutlinedButton.icon(
                             onPressed: _archivingListingIds.contains(listing.id)

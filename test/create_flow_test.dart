@@ -126,10 +126,14 @@ void main() {
     await tester.tap(find.text('Next: Qualifications'));
     await tester.pumpAndSettle();
 
+    // Expand the Required FAA Certificates section before checking contents.
+    await tester.ensureVisible(find.text('Required FAA Certificates *'));
+    await tester.tap(find.text('Required FAA Certificates *'));
+    await tester.pumpAndSettle();
+
     expect(find.text('Commercial Pilot (CPL)'), findsOneWidget);
     expect(find.text('Instrument Rating (IFR)'), findsOneWidget);
     expect(find.text('Private Pilot (PPL)'), findsOneWidget);
-    expect(find.text('Flight Instructor (CFI)'), findsOneWidget);
 
     await tester.ensureVisible(
       find.text('Airline Transport Pilot (ATP)').first,

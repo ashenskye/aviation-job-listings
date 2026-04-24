@@ -129,7 +129,7 @@ create table if not exists public.job_listings (
   company_phone text null,
   company_url text null,
   deadline_date timestamptz null,
-  status text not null default 'active' check (status in ('active', 'draft', 'archived', 'closed')),
+  status text not null default 'active' check (status in ('active', 'draft', 'expired', 'archived', 'closed')),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -384,7 +384,50 @@ drop policy if exists job_listings_select_authenticated on public.job_listings;
 create policy job_listings_select_authenticated
   on public.job_listings
   for select
-  using (auth.uid() is not null and status = 'active');
+  using (
+    auth.uid() is not null
+    and (
+      status = 'active'
+      or (
+        employer_id is not null
+        and exists (
+          select 1
+          from public.employer_profiles ep
+          where ep.id = job_listings.employer_id
+            and ep.owner_user_id = auth.uid()
+        )
+      )
+    )
+  );
+
+*** Add File: c:\Users\scott\Flutter_Test\aviation job listings\supabase\migrations\20260424123000_add_expired_status_and_owner_job_listing_read_access.sql
+alter table public.job_listings
+  drop constraint if exists job_listings_status_check;
+
+alter table public.job_listings
+  add constraint job_listings_status_check
+  check (status in ('active', 'draft', 'expired', 'archived', 'closed'));
+
+drop policy if exists job_listings_select_authenticated on public.job_listings;
+
+create policy job_listings_select_authenticated
+  on public.job_listings
+  for select
+  using (
+    auth.uid() is not null
+    and (
+      status = 'active'
+      or (
+        employer_id is not null
+        and exists (
+          select 1
+          from public.employer_profiles ep
+          where ep.id = job_listings.employer_id
+            and ep.owner_user_id = auth.uid()
+        )
+      )
+    )
+  );
 
 drop policy if exists job_listings_insert_own_employer on public.job_listings;
 create policy job_listings_insert_own_employer

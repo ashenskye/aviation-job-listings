@@ -22,6 +22,23 @@ String _normalizeAirframeScope(String? value, {String fallback = 'Fixed Wing'}) 
 }
 
 class JobListing {
+  static const String statusActive = 'active';
+  static const String statusExpired = 'expired';
+  static const String statusArchived = 'archived';
+
+  static String normalizeStatus(String? value) {
+    final normalized = value?.trim().toLowerCase();
+    switch (normalized) {
+      case statusExpired:
+        return statusExpired;
+      case statusArchived:
+        return statusArchived;
+      case statusActive:
+      default:
+        return statusActive;
+    }
+  }
+
   final String id;
   final String title;
   final String company;
@@ -60,7 +77,7 @@ class JobListing {
   final String? contactEmail; // optional listing contact email
   final String? companyPhone; // optional company contact phone
   final String? companyUrl; // optional company website URL
-  final bool isActive; // false = archived by employer
+  final String status; // active, expired, archived
   final DateTime? archivedAt; // set when archived
 
   const JobListing({
@@ -102,9 +119,10 @@ class JobListing {
     this.contactEmail,
     this.companyPhone,
     this.companyUrl,
-    this.isActive = true,
+    String? status,
+    bool? isActive,
     this.archivedAt,
-  });
+  }) : status = status ?? (isActive == false ? statusArchived : statusActive);
 
   factory JobListing.fromJson(Map<String, dynamic> json) {
     final rawFlightHours = Map<String, int>.from(
@@ -161,6 +179,17 @@ class JobListing {
           ),
         )
         .toList();
+
+    final parsedStatus = json['status']?.toString();
+    final parsedArchivedAt = json['archivedAt'] != null
+        ? DateTime.tryParse(json['archivedAt'].toString())
+        : null;
+    final legacyIsActive = json['isActive'] as bool?;
+    final resolvedStatus = parsedStatus != null
+        ? normalizeStatus(parsedStatus)
+        : legacyIsActive == false || parsedArchivedAt != null
+        ? statusArchived
+        : statusActive;
 
     return JobListing(
       id: json['id']?.toString() ?? '',
@@ -253,10 +282,8 @@ class JobListing {
       contactEmail: json['contactEmail']?.toString(),
       companyPhone: json['companyPhone']?.toString(),
       companyUrl: json['companyUrl']?.toString(),
-      isActive: (json['isActive'] as bool?) ?? true,
-      archivedAt: json['archivedAt'] != null
-          ? DateTime.tryParse(json['archivedAt'].toString())
-          : null,
+      status: resolvedStatus,
+      archivedAt: parsedArchivedAt,
     );
   }
 
@@ -299,6 +326,7 @@ class JobListing {
     'contactEmail': contactEmail,
     'companyPhone': companyPhone,
     'companyUrl': companyUrl,
+    'status': status,
     'isActive': isActive,
     'archivedAt': archivedAt?.toIso8601String(),
   };
@@ -330,11 +358,17 @@ class JobListing {
     };
   }
 
-  bool get isExpired =>
+  bool get _hasPastDeadline =>
       deadlineDate != null && deadlineDate!.isBefore(DateTime.now());
 
+  bool get isActive => status == statusActive;
+
+  bool get isArchived => status == statusArchived;
+
+  bool get isExpired => status == statusExpired || (isActive && _hasPastDeadline);
+
   /// True if the job should appear in public listings.
-  bool get shouldShow => isActive && !isExpired;
+  bool get shouldShow => isActive && !_hasPastDeadline;
 
   /// Days remaining until the deadline (negative if already passed).
   int? get daysUntilDeadline {
@@ -388,6 +422,7 @@ class JobListing {
     Object? contactEmail = _sentinel,
     Object? companyPhone = _sentinel,
     Object? companyUrl = _sentinel,
+    String? status,
     bool? isActive,
     Object? archivedAt = _sentinel,
   }) {
@@ -458,7 +493,9 @@ class JobListing {
       companyUrl: companyUrl == _sentinel
           ? this.companyUrl
           : companyUrl as String?,
-      isActive: isActive ?? this.isActive,
+        status: normalizeStatus(
+        status ?? ((isActive ?? this.isActive) ? statusActive : statusArchived),
+        ),
       archivedAt: archivedAt == _sentinel
           ? this.archivedAt
           : archivedAt as DateTime?,

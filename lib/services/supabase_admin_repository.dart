@@ -909,7 +909,7 @@ class SupabaseAdminRepository implements AdminRepository {
       'contact_email': job.contactEmail,
       'company_phone': job.companyPhone,
       'company_url': job.companyUrl,
-      'status': job.isActive ? 'active' : 'archived',
+      'status': job.status,
     };
   }
 
@@ -981,8 +981,10 @@ class SupabaseAdminRepository implements AdminRepository {
       'contactEmail': row['contact_email'],
       'companyPhone': row['company_phone'],
       'companyUrl': row['company_url'],
-      'isActive': row['status'] == 'active',
-      'archivedAt': row['status'] == 'archived' ? row['updated_at'] : null,
+      'status': row['status'],
+      'archivedAt': row['status'] == JobListing.statusArchived
+          ? row['updated_at']
+          : null,
     };
   }
 

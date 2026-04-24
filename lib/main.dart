@@ -1275,7 +1275,7 @@ class _MyHomePageState extends State<MyHomePage> {
       contactEmail: job.contactEmail,
       companyPhone: job.companyPhone,
       companyUrl: job.companyUrl,
-      isActive: job.isActive,
+      status: job.status,
       archivedAt: job.archivedAt,
     );
   }
@@ -4664,7 +4664,7 @@ class _MyHomePageState extends State<MyHomePage> {
 
   List<JobListing> get _visibleJobs {
     if (_profileType != ProfileType.employer) {
-      return _allJobs;
+      return _allJobs.where((job) => job.shouldShow).toList();
     }
 
     return _allJobs
@@ -6876,6 +6876,10 @@ class _MyHomePageState extends State<MyHomePage> {
                       value: 'Inappropriate Content',
                       child: Text('Inappropriate Content'),
                     ),
+                    DropdownMenuItem(
+                      value: 'Expired Listing',
+                      child: Text('Expired Listing'),
+                    ),
                     DropdownMenuItem(value: 'Other', child: Text('Other')),
                   ],
                   onChanged: (value) {
@@ -7892,6 +7896,10 @@ class _MyHomePageState extends State<MyHomePage> {
         createdAt: job.createdAt,
         updatedAt: DateTime.now(),
         employerId: job.employerId,
+        status: _statusForEditedJob(
+          job,
+          isOpenListing ? null : selectedDeadlineDate,
+        ),
         isExternal: job.isExternal,
         externalApplyUrl: job.externalApplyUrl,
       );
@@ -8695,6 +8703,60 @@ class _MyHomePageState extends State<MyHomePage> {
         job.employerId == _currentEmployer.id;
   }
 
+  String _statusForEditedJob(JobListing job, DateTime? deadlineDate) {
+    if (job.isArchived) {
+      return JobListing.statusArchived;
+    }
+    if (deadlineDate != null && deadlineDate.isBefore(DateTime.now())) {
+      return JobListing.statusExpired;
+    }
+    return JobListing.statusActive;
+  }
+
+  Future<void> _reopenExpiredJob(JobListing job) async {
+    if (!_canEditJob(job) || !job.isExpired) {
+      return;
+    }
+
+    final messenger = ScaffoldMessenger.of(context);
+
+    try {
+      final updatedJob = await _appRepository.updateJob(
+        job.copyWith(
+          status: JobListing.statusActive,
+          deadlineDate: null,
+          archivedAt: null,
+          updatedAt: DateTime.now(),
+        ),
+      );
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _allJobs = _allJobs
+            .map((item) => item.id == updatedJob.id ? updatedJob : item)
+            .toList();
+      });
+
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            'Reopened job listing "${updatedJob.title}" with no deadline.',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+
+      messenger.showSnackBar(
+        SnackBar(content: Text('Could not reopen job listing: $e')),
+      );
+    }
+  }
+
   String _buildCompanyLocationString() {
     final city = _currentEmployer.headquartersCity.trim();
     final state = _currentEmployer.headquartersState.trim();
@@ -9473,6 +9535,26 @@ class _MyHomePageState extends State<MyHomePage> {
                                                                           .w600,
                                                                 ),
                                                           ),
+                                                          if (_profileType ==
+                                                                  ProfileType
+                                                                      .employer &&
+                                                              (job.isExpired ||
+                                                                  job
+                                                                      .isArchived))
+                                                            Chip(
+                                                              label: Text(
+                                                                job.isArchived
+                                                                    ? 'Archived'
+                                                                    : 'Expired',
+                                                              ),
+                                                              backgroundColor:
+                                                                  job.isArchived
+                                                                  ? Colors.grey
+                                                                        .shade200
+                                                                  : Colors
+                                                                        .orange
+                                                                        .shade100,
+                                                            ),
                                                           if (job.isExternal)
                                                             const Text(
                                                               'EXTERNAL JOB',
@@ -9673,6 +9755,14 @@ class _MyHomePageState extends State<MyHomePage> {
                                                   _reportJobListing(job),
                                               icon: Icons.flag_outlined,
                                               label: 'Report',
+                                            ),
+                                          if (_canEditJob(job) &&
+                                              job.isExpired)
+                                            cardActionButton(
+                                              onPressed: () =>
+                                                  _reopenExpiredJob(job),
+                                              icon: Icons.restart_alt,
+                                              label: 'Reopen',
                                             ),
                                           if (_canEditJob(job))
                                             cardActionButton(
@@ -12629,7 +12719,7 @@ class _MyHomePageState extends State<MyHomePage> {
 
   Widget _buildFavoritesTab() {
     final favoriteJobs = _allJobs
-        .where((job) => _favoriteIds.contains(job.id))
+        .where((job) => _favoriteIds.contains(job.id) && job.shouldShow)
         .toList();
     if (favoriteJobs.isEmpty) {
       return const Center(child: Text('No favorite jobs yet.'));
