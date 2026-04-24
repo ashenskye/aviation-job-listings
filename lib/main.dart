@@ -9709,6 +9709,52 @@ class _MyHomePageState extends State<MyHomePage> {
                                                           ),
                                                           if (_profileType ==
                                                                   ProfileType
+                                                                      .jobSeeker &&
+                                                              !job.isExternal &&
+                                                              job.autoRejectThreshold >
+                                                                  0)
+                                                            Tooltip(
+                                                              message:
+                                                                  'Employer auto-rejects applications under ${job.autoRejectThreshold}% match.',
+                                                              child: Container(
+                                                                padding:
+                                                                    const EdgeInsets.symmetric(
+                                                                      horizontal:
+                                                                          8,
+                                                                      vertical:
+                                                                          3,
+                                                                    ),
+                                                                decoration: BoxDecoration(
+                                                                  color: Colors
+                                                                      .blueGrey
+                                                                      .shade50,
+                                                                  borderRadius:
+                                                                      BorderRadius.circular(
+                                                                        999,
+                                                                      ),
+                                                                  border: Border.all(
+                                                                    color: Colors
+                                                                        .blueGrey
+                                                                        .shade200,
+                                                                  ),
+                                                                ),
+                                                                child: Text(
+                                                                  'Auto-Reject < ${job.autoRejectThreshold}%',
+                                                                  style: TextStyle(
+                                                                    fontSize:
+                                                                        11,
+                                                                    fontWeight:
+                                                                        FontWeight
+                                                                            .w700,
+                                                                    color: Colors
+                                                                        .blueGrey
+                                                                        .shade800,
+                                                                  ),
+                                                                ),
+                                                              ),
+                                                            ),
+                                                          if (_profileType ==
+                                                                  ProfileType
                                                                       .employer &&
                                                               (job.isExpired ||
                                                                   job
@@ -12744,6 +12790,35 @@ class _MyHomePageState extends State<MyHomePage> {
                                       fontWeight: FontWeight.w700,
                                     ),
                                   ),
+                                  if (!job.isExternal &&
+                                      job.autoRejectThreshold > 0)
+                                    Tooltip(
+                                      message:
+                                          'Employer auto-rejects applications under ${job.autoRejectThreshold}% match.',
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 8,
+                                          vertical: 3,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: Colors.blueGrey.shade50,
+                                          borderRadius: BorderRadius.circular(
+                                            999,
+                                          ),
+                                          border: Border.all(
+                                            color: Colors.blueGrey.shade200,
+                                          ),
+                                        ),
+                                        child: Text(
+                                          'Auto-Reject < ${job.autoRejectThreshold}%',
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w700,
+                                            color: Colors.blueGrey.shade800,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
                                   if (job.isExternal)
                                     Container(
                                       padding: const EdgeInsets.symmetric(
@@ -16532,6 +16607,77 @@ class JobDetailsPage extends StatelessWidget {
                                       ),
                                     ),
                                   ],
+                                  if (!job.isExternal &&
+                                      job.autoRejectThreshold > 0) ...[
+                                    const SizedBox(height: 12),
+                                    Container(
+                                      width: double.infinity,
+                                      padding: const EdgeInsets.all(12),
+                                      decoration: BoxDecoration(
+                                        color: Colors.blueGrey.shade50,
+                                        border: Border.all(
+                                          color: Colors.blueGrey.shade200,
+                                        ),
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                      child: Row(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Icon(
+                                            Icons.policy_outlined,
+                                            size: 18,
+                                            color: Colors.blueGrey.shade700,
+                                          ),
+                                          const SizedBox(width: 10),
+                                          Expanded(
+                                            child: Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  'Application Policy',
+                                                  style: TextStyle(
+                                                    fontSize: 12,
+                                                    fontWeight: FontWeight.w700,
+                                                    color:
+                                                        Colors.blueGrey.shade900,
+                                                  ),
+                                                ),
+                                                const SizedBox(height: 4),
+                                                Text(
+                                                  'Employer auto-reject threshold: ${job.autoRejectThreshold}% match',
+                                                  style: TextStyle(
+                                                    color:
+                                                        Colors.blueGrey.shade800,
+                                                  ),
+                                                ),
+                                                if (profile != null &&
+                                                    matchPercentage != null) ...[
+                                                  const SizedBox(height: 4),
+                                                  Text(
+                                                    matchPercentage! >=
+                                                            job.autoRejectThreshold
+                                                        ? 'Your current match: $matchPercentage% (above threshold)'
+                                                        : 'Your current match: $matchPercentage% (below threshold)',
+                                                    style: TextStyle(
+                                                      fontSize: 12,
+                                                      fontWeight:
+                                                          FontWeight.w600,
+                                                      color: matchPercentage! >=
+                                                              job.autoRejectThreshold
+                                                          ? Colors.green.shade700
+                                                          : Colors.orange.shade900,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ],
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
                                   const SizedBox(height: 12),
                                   Wrap(
                                     spacing: 8,
@@ -16858,29 +17004,53 @@ class JobDetailsPage extends StatelessWidget {
                       child: Center(
                         child: ConstrainedBox(
                           constraints: const BoxConstraints(maxWidth: 960),
-                          child: Wrap(
-                            spacing: 10,
-                            runSpacing: 10,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              _buildApplyButton(context),
-                              OutlinedButton.icon(
-                                onPressed: onShare,
-                                icon: const Icon(Icons.share_outlined),
-                                label: const Text('Share Listing'),
-                              ),
-                              OutlinedButton.icon(
-                                onPressed: onReport,
-                                icon: const Icon(Icons.flag_outlined),
-                                label: const Text('Report Listing'),
-                              ),
-                              OutlinedButton.icon(
-                                onPressed: onFavorite,
-                                icon: Icon(
-                                  isFavorite ? Icons.star : Icons.star_border,
+                              if (!job.isExternal &&
+                                  job.autoRejectThreshold > 0 &&
+                                  !hasApplied) ...[
+                                Text(
+                                  matchPercentage != null
+                                      ? 'Application policy: this listing auto-rejects under ${job.autoRejectThreshold}%. Your current match is $matchPercentage%.'
+                                      : 'Application policy: this listing auto-rejects applications under ${job.autoRejectThreshold}% match.',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.blueGrey.shade700,
+                                    fontWeight: FontWeight.w600,
+                                  ),
                                 ),
-                                label: Text(
-                                  isFavorite ? 'Favorited' : 'Favorite',
-                                ),
+                                const SizedBox(height: 8),
+                              ],
+                              Wrap(
+                                spacing: 10,
+                                runSpacing: 10,
+                                children: [
+                                  _buildApplyButton(context),
+                                  OutlinedButton.icon(
+                                    onPressed: onShare,
+                                    icon: const Icon(Icons.share_outlined),
+                                    label: const Text('Share Listing'),
+                                  ),
+                                  OutlinedButton.icon(
+                                    onPressed: onReport,
+                                    icon: const Icon(Icons.flag_outlined),
+                                    label: const Text('Report Listing'),
+                                  ),
+                                  OutlinedButton.icon(
+                                    onPressed: onFavorite,
+                                    icon: Icon(
+                                      isFavorite
+                                          ? Icons.star
+                                          : Icons.star_border,
+                                    ),
+                                    label: Text(
+                                      isFavorite
+                                          ? 'Favorited'
+                                          : 'Favorite',
+                                    ),
+                                  ),
+                                ],
                               ),
                             ],
                           ),
