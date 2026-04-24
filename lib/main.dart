@@ -10379,18 +10379,6 @@ class _MyHomePageState extends State<MyHomePage> {
       .where((app) => app.matchPercentage >= _employerMatchThreshold)
       .toList();
 
-    final thresholdTallies = <({int threshold, int count})>[];
-    for (var threshold = 0; threshold <= 100; threshold += 10) {
-      final count = statusFiltered
-          .where((app) => app.matchPercentage >= threshold)
-          .length;
-      thresholdTallies.add((threshold: threshold, count: count));
-    }
-
-    final aboveThresholdCount = statusFiltered
-      .where((app) => app.matchPercentage >= _employerMatchThreshold)
-      .length;
-
     final sorted = [...filteredApplications]
       ..sort((a, b) {
         if (_selectedEmployerApplicationSort == 'highest_match') {
@@ -10445,65 +10433,6 @@ class _MyHomePageState extends State<MyHomePage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Quick stats
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(10),
-                  margin: const EdgeInsets.only(bottom: 10),
-                  decoration: BoxDecoration(
-                    color: Colors.blueGrey.shade50,
-                    border: Border.all(color: Colors.blueGrey.shade100),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Threshold: $_employerMatchThreshold% • Passing: $aboveThresholdCount/${statusFiltered.length}',
-                        style: const TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 6,
-                        runSpacing: 6,
-                        children: thresholdTallies.map((bucket) {
-                          final isThresholdBucket =
-                              _employerMatchThreshold == bucket.threshold;
-                          return Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 4,
-                            ),
-                            decoration: BoxDecoration(
-                              color: isThresholdBucket
-                                  ? Colors.blueGrey.shade200
-                                  : Colors.white,
-                              borderRadius: BorderRadius.circular(999),
-                              border: Border.all(
-                                color: isThresholdBucket
-                                    ? Colors.blueGrey.shade500
-                                    : Colors.blueGrey.shade200,
-                              ),
-                            ),
-                            child: Text(
-                              '${bucket.threshold}%: ${bucket.count}',
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: isThresholdBucket
-                                    ? FontWeight.w700
-                                    : FontWeight.w500,
-                                color: Colors.blueGrey.shade800,
-                              ),
-                            ),
-                          );
-                        }).toList(),
-                      ),
-                    ],
-                  ),
-                ),
                 // Status filter
                 Wrap(
                   spacing: 8,
