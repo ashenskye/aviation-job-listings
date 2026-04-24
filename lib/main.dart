@@ -6176,8 +6176,9 @@ class _MyHomePageState extends State<MyHomePage> {
           id: _generateFeedbackId(),
           applicationId: application.id,
           message:
-              'Your application was reviewed and does not meet our minimum '
-              'match threshold of ${job.autoRejectThreshold}%.',
+              'Your application was auto-rejected because your match score '
+              '(${match.matchPercentage}%) is below this listing\'s '
+              'threshold (${job.autoRejectThreshold}%).',
           feedbackType: ApplicationFeedback.feedbackTypeNotFit,
           sentByEmployer: true,
           sentAt: DateTime.now(),
@@ -6199,10 +6200,11 @@ class _MyHomePageState extends State<MyHomePage> {
 
       if (autoRejected) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
+          SnackBar(
             content: Text(
-              'Application received! You don\'t yet meet all the requirements for this role. '
-              'Check your profile to see what\'s needed.',
+              'Application received, but auto-rejected: '
+              '${match.matchPercentage}% match is below the employer\'s '
+              '${job.autoRejectThreshold}% threshold for this listing.',
             ),
           ),
         );
