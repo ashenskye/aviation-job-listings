@@ -10379,16 +10379,12 @@ class _MyHomePageState extends State<MyHomePage> {
       .where((app) => app.matchPercentage >= _employerMatchThreshold)
       .toList();
 
-    final decileTallies = <({int start, int end, int count})>[];
-    for (var start = 0; start <= 90; start += 10) {
-      final end = start == 90 ? 100 : start + 9;
+    final thresholdTallies = <({int threshold, int count})>[];
+    for (var threshold = 0; threshold <= 100; threshold += 10) {
       final count = statusFiltered
-        .where(
-        (app) =>
-          app.matchPercentage >= start && app.matchPercentage <= end,
-        )
-        .length;
-      decileTallies.add((start: start, end: end, count: count));
+          .where((app) => app.matchPercentage >= threshold)
+          .length;
+      thresholdTallies.add((threshold: threshold, count: count));
     }
 
     final aboveThresholdCount = statusFiltered
@@ -10473,10 +10469,9 @@ class _MyHomePageState extends State<MyHomePage> {
                       Wrap(
                         spacing: 6,
                         runSpacing: 6,
-                        children: decileTallies.map((bucket) {
+                        children: thresholdTallies.map((bucket) {
                           final isThresholdBucket =
-                              _employerMatchThreshold >= bucket.start &&
-                              _employerMatchThreshold <= bucket.end;
+                              _employerMatchThreshold == bucket.threshold;
                           return Container(
                             padding: const EdgeInsets.symmetric(
                               horizontal: 8,
@@ -10494,7 +10489,7 @@ class _MyHomePageState extends State<MyHomePage> {
                               ),
                             ),
                             child: Text(
-                              '${bucket.start.toString().padLeft(2, '0')}-${bucket.end.toString().padLeft(2, '0')}: ${bucket.count}',
+                              '${bucket.threshold}%: ${bucket.count}',
                               style: TextStyle(
                                 fontSize: 12,
                                 fontWeight: isThresholdBucket
