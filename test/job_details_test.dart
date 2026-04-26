@@ -20,8 +20,8 @@ void main() {
       faaRules: ['Part 135'],
       description: 'Role',
       faaCertificates: ['Commercial Pilot (CPL)'],
-      flightExperience: ['Cross Country'],
-      flightHours: {'Cross Country': 100},
+      flightExperience: ['Cross-Country'],
+      flightHours: {'Cross-Country': 100},
       aircraftFlown: ['Cessna 172'],
     );
 
@@ -41,10 +41,7 @@ void main() {
 
     expect(find.text('Commercial Pilot (CPL) (Not yet met)'), findsNothing);
     expect(find.text('Commercial Pilot (CPL)'), findsWidgets);
-    expect(
-      find.text('Current: 0 hrs • Required: 100 hrs • Progress: 0%'),
-      findsOneWidget,
-    );
+    expect(find.text('Cross-Country: 0 / 100 hrs'), findsOneWidget);
     expect(find.text('Showing all comparisons'), findsNothing);
     expect(find.text('Showing unmet minimums only'), findsNothing);
   });

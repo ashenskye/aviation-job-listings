@@ -1,3 +1,5 @@
+import 'aviation_location_catalogs.dart';
+
 class JobSeekerProfile {
   final String firstName;
   final String lastName;
@@ -78,8 +80,8 @@ class JobSeekerProfile {
       email: json['email']?.toString() ?? '',
       phone: json['phone']?.toString() ?? '',
       city: json['city']?.toString() ?? '',
-      stateOrProvince: json['stateOrProvince']?.toString() ?? '',
-      country: json['country']?.toString() ?? '',
+      stateOrProvince: normalizeStateProvinceValue(json['stateOrProvince']?.toString() ?? '') ?? json['stateOrProvince']?.toString() ?? '',
+      country: normalizeCountryValue(json['country']?.toString() ?? '') ?? json['country']?.toString() ?? '',
       airframeScope: (() {
         final normalized = json['airframeScope']?.toString().trim().toLowerCase();
         switch (normalized) {

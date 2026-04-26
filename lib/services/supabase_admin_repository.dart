@@ -858,6 +858,61 @@ class SupabaseAdminRepository implements AdminRepository {
     );
   }
 
+  @override
+  Future<void> setUserProfileTypeByEmail({
+    required String email,
+    required String profileType,
+    String? reason,
+  }) async {
+    final normalizedEmail = email.trim().toLowerCase();
+    final normalizedType = profileType.trim().toLowerCase();
+    final note = reason?.trim() ?? '';
+
+    if (normalizedEmail.isEmpty) {
+      throw StateError('Email is required.');
+    }
+    if (normalizedType != 'job_seeker' && normalizedType != 'employer') {
+      throw StateError('Profile type must be job_seeker or employer.');
+    }
+
+    final result = await _client.rpc(
+      'admin_set_user_profile_type',
+      params: {
+        'target_email': normalizedEmail,
+        'new_profile_type': normalizedType,
+      },
+    );
+
+    final payload = result is Map<String, dynamic>
+        ? result
+        : Map<String, dynamic>.from((result as Map?) ?? const {});
+    final targetUserId = payload['user_id']?.toString() ?? '';
+    final beforeType = payload['before_profile_type']?.toString() ?? '';
+    final afterType = payload['after_profile_type']?.toString() ?? normalizedType;
+
+    await logAdminAction(
+      AdminActionLog(
+        id: _pendingId,
+        adminUserId: _adminUserId,
+        actionType: AdminActionLog.actionUpdate,
+        resourceType: 'auth_user_role',
+        resourceId: targetUserId.isEmpty ? normalizedEmail : targetUserId,
+        changesBefore: {
+          'email': normalizedEmail,
+          'profile_type': beforeType,
+        },
+        changesAfter: {
+          'email': normalizedEmail,
+          'profile_type': afterType,
+        },
+        reason: note.isEmpty
+            ? 'Admin updated account profile type.'
+            : note,
+        timestamp: DateTime.now(),
+      ),
+    );
+  }
+
   Application _fromApplicationRow(Map<String, dynamic> row) {
     final data = Map<String, dynamic>.from((row['data'] as Map?) ?? const {});
     data['id'] = row['id'] ?? data['id'];

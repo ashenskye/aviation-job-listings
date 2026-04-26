@@ -11,36 +11,39 @@ import 'package:aviation_job_listings/screens/admin_dashboard.dart';
 import 'helpers/fake_app_repository.dart';
 
 void main() {
-  testWidgets('profile menu always includes Admin option', (
+  testWidgets('role switcher is not shown for non-admin users', (
     WidgetTester tester,
   ) async {
     await tester.pumpWidget(MyApp(repository: FakeAppRepository()));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byIcon(Icons.person));
+    // No profile popup should be present for regular (non-admin) users.
+    expect(
+      find.byKey(const ValueKey('home-profile-switcher')),
+      findsNothing,
+    );
+  });
+
+  testWidgets('admin profile switcher shows all three role options', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MyHomePage(
+          title: 'Aviation Job Listings',
+          repository: FakeAppRepository(),
+          adminDashboardBuilder: (ctx, onSwitch) => const SizedBox(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('home-profile-switcher')));
     await tester.pumpAndSettle();
 
     expect(find.text('Job Seeker'), findsOneWidget);
     expect(find.text('Employer'), findsOneWidget);
     expect(find.text('Admin'), findsOneWidget);
-  });
-
-  testWidgets('selecting Admin without Supabase shows safe message', (
-    WidgetTester tester,
-  ) async {
-    await tester.pumpWidget(MyApp(repository: FakeAppRepository()));
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.byIcon(Icons.person));
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.text('Admin').last);
-    await tester.pumpAndSettle();
-
-    expect(
-      find.text('Admin dashboard requires Supabase sign-in.'),
-      findsOneWidget,
-    );
   });
 
   testWidgets('Admin dashboard menu can switch to employer', (
@@ -214,12 +217,15 @@ void main() {
   testWidgets('employer profile benefits includes Company Housing option', (
     WidgetTester tester,
   ) async {
-    await tester.pumpWidget(MyApp(repository: FakeAppRepository()));
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.byIcon(Icons.person));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Employer').last);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MyHomePage(
+          title: 'Aviation Job Listings',
+          repository: FakeAppRepository(),
+          initialProfileType: ProfileType.employer,
+        ),
+      ),
+    );
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('Employer Profile'));

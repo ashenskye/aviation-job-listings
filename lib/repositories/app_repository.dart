@@ -50,4 +50,7 @@ abstract class AppRepository {
   Future<FeedbackSaveDestination> saveFeedback(ApplicationFeedback feedback);
   Future<List<ApplicationFeedback>> getAllFeedback();
   Future<ApplicationFeedback?> getFeedbackForApplication(String applicationId);
+
+  // Employer notification utilities
+  Future<String> sendEmployerNotificationTestEmail(String employerId);
 }

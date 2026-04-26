@@ -52,12 +52,15 @@ void main() {
   testWidgets('employer state picker supports arrow key navigation', (
     WidgetTester tester,
   ) async {
-    await tester.pumpWidget(MyApp(repository: FakeAppRepository()));
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.byIcon(Icons.person));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Employer').last);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MyHomePage(
+          title: 'Aviation Job Listings',
+          repository: FakeAppRepository(),
+          initialProfileType: ProfileType.employer,
+        ),
+      ),
+    );
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('Employer Profile').last);

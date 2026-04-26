@@ -447,4 +447,9 @@ class LocalAppRepository implements AppRepository {
       return null;
     }
   }
+
+  @override
+  Future<String> sendEmployerNotificationTestEmail(String employerId) async {
+    return 'Test email is available when Supabase mode is enabled.';
+  }
 }

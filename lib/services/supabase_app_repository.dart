@@ -12,6 +12,24 @@ import 'local_app_repository.dart';
 import 'supabase_bootstrap.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+String mapNotificationTestEmailError(Object error) {
+  final errorText = error.toString().toLowerCase();
+  if (errorText.contains('failed to fetch') ||
+      errorText.contains('clientexception')) {
+    return 'Could not reach the notification service. '
+        'Confirm the edge function is deployed, Supabase function secrets '
+        '(RESEND_API_KEY/EMAIL_FROM) are set, and your browser/network '
+        'is not blocking requests to functions/v1.';
+  }
+  if (errorText.contains('domain is not verified') ||
+      errorText.contains('validation_error')) {
+    return 'Email sender domain is not verified in Resend. '
+        'Use a verified domain for EMAIL_FROM in Supabase secrets '
+        '(or temporarily onboarding@resend.dev for testing).';
+  }
+  return 'Could not send test notification: $error';
+}
+
 class SupabaseAppRepository implements AppRepository {
   SupabaseAppRepository({required this.localFallback});
 
@@ -376,6 +394,29 @@ class SupabaseAppRepository implements AppRepository {
         'match_percentage': app.matchPercentage,
         'data': app.toJson(),
       });
+
+      // Best effort: notify employers about new non-rejected applications.
+      if (app.status != Application.statusRejected) {
+        try {
+          await _client.functions.invoke(
+            'send-employer-application-email',
+            body: {
+              'applicationId': app.id,
+              'employerId': app.employerId,
+              'jobId': app.jobId,
+              'status': app.status,
+              'matchPercentage': app.matchPercentage,
+              'applicantName': app.applicantName,
+              'applicantEmail': app.applicantEmail,
+              'applicantCity': app.applicantCity,
+              'applicantStateOrProvince': app.applicantStateOrProvince,
+              'appliedAt': app.appliedAt.toIso8601String(),
+            },
+          );
+        } catch (_) {
+          // Notification sending should never block application persistence.
+        }
+      }
     } catch (_) {
       await localFallback.saveApplication(app);
     }
@@ -664,6 +705,34 @@ class SupabaseAppRepository implements AppRepository {
     }
   }
 
+  @override
+  Future<String> sendEmployerNotificationTestEmail(String employerId) async {
+    final userId = _currentUserId;
+    if (!SupabaseBootstrap.isConfigured || userId == null) {
+      return localFallback.sendEmployerNotificationTestEmail(employerId);
+    }
+
+    try {
+      final response = await _client.functions.invoke(
+        'send-employer-application-email',
+        body: {'test': true, 'employerId': employerId},
+      );
+      final data = response.data;
+      if (data is Map<String, dynamic>) {
+        if (data['success'] == true) {
+          return 'Test notification email sent.';
+        }
+        final reason = data['reason']?.toString();
+        if (reason != null && reason.isNotEmpty) {
+          return reason;
+        }
+      }
+      return 'Test notification request completed.';
+    } catch (e) {
+      return mapNotificationTestEmailError(e);
+    }
+  }
+
   Application _fromApplicationRow(Map<String, dynamic> row) {
     final data = Map<String, dynamic>.from((row['data'] as Map?) ?? const {});
     data['id'] = row['id'] ?? data['id'];
@@ -865,6 +934,11 @@ class SupabaseAppRepository implements AppRepository {
       'contact_phone': profile.contactPhone,
       'company_description': profile.companyDescription,
       'company_benefits': profile.companyBenefits,
+      'notify_on_new_non_rejected_application':
+          profile.notifyOnNewNonRejectedApplication,
+      'notify_on_application_status_changes':
+          profile.notifyOnApplicationStatusChanges,
+      'notify_daily_digest': profile.notifyDailyDigest,
     };
   }
 
@@ -888,6 +962,11 @@ class SupabaseAppRepository implements AppRepository {
       'companyBenefits': List<String>.from(
         (row['company_benefits'] as List?) ?? const [],
       ),
+      'notifyOnNewNonRejectedApplication':
+          row['notify_on_new_non_rejected_application'],
+      'notifyOnApplicationStatusChanges':
+          row['notify_on_application_status_changes'],
+      'notifyDailyDigest': row['notify_daily_digest'],
     };
   }
 

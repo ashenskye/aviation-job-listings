@@ -51,7 +51,18 @@ void main() {
   testWidgets(
     'End-to-end flow: employer creates listing and job seeker applies',
     (WidgetTester tester) async {
-      await tester.pumpWidget(MyApp(repository: FakeAppRepository()));
+      await tester.pumpWidget(
+        MaterialApp(
+          home: MyHomePage(
+            title: 'Aviation Job Listings',
+            repository: FakeAppRepository(),
+            // adminDashboardBuilder enables the role switcher in this E2E test
+            // so the test can simulate employer creating a listing and then
+            // a job seeker applying to it.
+            adminDashboardBuilder: (ctx, onSwitch) => const SizedBox(),
+          ),
+        ),
+      );
       await tester.pumpAndSettle();
 
       await tester.tap(find.byIcon(Icons.person));
@@ -499,17 +510,6 @@ void main() {
       await tester.pumpWidget(MyApp(repository: repository));
       await tester.pumpAndSettle();
 
-      // Switch to job seeker profile
-      await tester.tap(find.byIcon(Icons.person));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Job Seeker').last);
-      await tester.pumpAndSettle();
-
-      // View jobs list
-      await tester.tap(find.text('Jobs'));
-      await tester.pumpAndSettle();
-
-      // Find the instructor role and tap it
       expect(find.text('Flight Instructor Role'), findsOneWidget);
       await tester.tap(find.text('Flight Instructor Role').first);
       await tester.pumpAndSettle();
@@ -596,12 +596,6 @@ void main() {
       await repository.saveJobSeekerProfile(seekerProfile);
 
       await tester.pumpWidget(MyApp(repository: repository));
-      await tester.pumpAndSettle();
-
-      // Switch to job seeker
-      await tester.tap(find.byIcon(Icons.person));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Job Seeker').last);
       await tester.pumpAndSettle();
 
       // View jobs
@@ -696,12 +690,6 @@ void main() {
       await tester.pumpWidget(MyApp(repository: repository));
       await tester.pumpAndSettle();
 
-      // Step 3: Switch to job seeker profile
-      await tester.tap(find.byIcon(Icons.person));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Job Seeker').last);
-      await tester.pumpAndSettle();
-
       // Step 4: Verify profile was loaded correctly
       expect(find.text('Favorites'), findsOneWidget);
 
@@ -746,6 +734,68 @@ void main() {
       // This confirms the application was successfully saved and is persisting
       expect(find.text('Captain - Multi-Engine Charter'), findsOneWidget);
       expect(find.text('Submitted'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'apply flow shows auto-reject SnackBar when match score is below employer threshold',
+    (WidgetTester tester) async {
+      final repository = FakeAppRepository();
+
+      // Job with a high auto-reject threshold that an empty profile cannot meet.
+      await repository.createJob(
+        const JobListing(
+          id: 'auto-reject-threshold-test',
+          title: 'Senior ATP Captain',
+          company: 'Elite Charter Group',
+          location: 'Dallas, TX',
+          type: 'Full-Time',
+          crewRole: 'Captain',
+          faaRules: ['Part 135'],
+          part135SubType: 'IFR / Commuter',
+          description: 'High-threshold listing for auto-reject integration test.',
+          faaCertificates: ['Airline Transport Pilot (ATP)'],
+          flightExperience: ['Total Time', 'Cross-Country'],
+          flightHours: {'Total Time': 2000, 'Cross-Country': 500},
+          aircraftFlown: ['Bombardier CRJ'],
+          employerId: 'emp-elite-charter',
+          autoRejectThreshold: 80,
+        ),
+      );
+
+      // Default seeker profile has no certificates or hours — match will be 0%.
+      await tester.pumpWidget(MyApp(repository: repository));
+      await tester.pumpAndSettle();
+
+      // Navigate to Jobs tab (default profile is job seeker).
+      await tester.tap(find.text('Jobs'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Senior ATP Captain'), findsOneWidget);
+      await tester.tap(find.text('Senior ATP Captain').first);
+      await tester.pumpAndSettle();
+
+      expect(find.text('Elite Charter Group'), findsOneWidget);
+
+      // Apply even though match is below the threshold.
+      await _tapAnyApplyCta(tester);
+      await tester.tap(find.text('Submit Application').hitTestable());
+      await tester.pumpAndSettle();
+
+      // The SnackBar must mention auto-reject, not the normal success message.
+      expect(
+        find.text('Applied! Employer will see your profile.'),
+        findsNothing,
+      );
+      expect(find.textContaining('auto-rejected'), findsOneWidget);
+
+      // Navigate to My Applications and confirm the application is recorded.
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('My Applications'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Senior ATP Captain'), findsOneWidget);
     },
   );
 }

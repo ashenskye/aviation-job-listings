@@ -21,5 +21,6 @@
         "git commit": true,
         "git config": true
     },
-    "sqltools.connections": []
+    "sqltools.connections": [],
+    "cmake.sourceDirectory": "C:/Users/scott/Flutter_Test/aviation job listings/linux"
 }

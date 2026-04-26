@@ -24,6 +24,11 @@ Steps:
 
 ## Compact Changelog
 
+- 2026-04-24: Added auto-reject apply flow integration test (widget test verifying SnackBar and application persistence when match is below employer threshold).
+- 2026-04-24: Fixed Supabase security lints: locked `set_updated_at` search_path and removed broad public listing policy on company-assets storage bucket.
+- 2026-04-24: Deployed `send-employer-application-email` edge function with CORS preflight support and runtime array fix; configured Resend API key and verified sender domain (notifications.lastfrontieraviation.com).
+- 2026-04-24: Added persistent test-email status per employer (timestamp, last result, Clear button) with SharedPreferences backing and a copyable error dialog for long responses.
+- 2026-04-23: Added focused regression tests for test-notification email error mapping and documented Resend sender-domain troubleshooting steps.
 - 2026-04-23: Added back-navigation guard for edit pages (Personal Info, Qualifications, Job Listing) — prevents accidental data loss with unsaved changes confirmation dialog.
 - 2026-04-23: Implemented airframe category mismatch detection and improved UX: category mismatch badges show icon instead of %; hours are blocked; Apply button disabled with context-aware messaging; search results sort mismatches below matched jobs.
 - 2026-04-23: Renamed "Airframe Scope" to "Airframe Category" throughout UI for clarity.
@@ -35,3 +40,17 @@ Steps:
 - 2026-04-03: Added end-to-end apply flow coverage in widget tests (employer create -> job seeker apply).
 - 2026-04-03: Refined match messaging for clearer confidence and requirement guidance (badge tooltip and detail wording).
 - 2026-04-03: Kept match comparison outputs concise and action-oriented ("Not yet met" and progress wording).
+
+## Email Notifications Troubleshooting (Resend)
+
+- Symptom: `Email sender domain is not verified in Resend...`
+- Cause: `EMAIL_FROM` is set to a sender whose domain is not verified in Resend.
+- Fix:
+	1. Verify your sender domain in Resend (Domains).
+	2. Set Supabase secret: `supabase secrets set EMAIL_FROM="no-reply@your-verified-domain.com" --project-ref <project-ref>`
+	3. Confirm `RESEND_API_KEY` is set for the same project.
+	4. Re-test with the Employer Profile "Send Test Email" button.
+
+- Notes:
+	- `gmail.com` addresses cannot be verified as your sending domain in Resend.
+	- For temporary testing, `onboarding@resend.dev` may work depending on your Resend account limits.

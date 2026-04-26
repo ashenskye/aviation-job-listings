@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -27,6 +29,8 @@ abstract class SignInAuthService {
     required String email,
     String? redirectTo,
   });
+
+  Future<void> updatePassword({required String password});
 }
 
 class SupabaseSignInAuthService implements SignInAuthService {
@@ -82,15 +86,27 @@ class SupabaseSignInAuthService implements SignInAuthService {
       redirectTo: redirectTo,
     );
   }
+
+  @override
+  Future<void> updatePassword({required String password}) async {
+    await Supabase.instance.client.auth.updateUser(
+      UserAttributes(password: password),
+    );
+  }
 }
 
 /// Sign-in / sign-up screen shown when Supabase is configured but the user
 /// has no active session.  Successful auth triggers the [AuthGate] stream,
 /// which navigates to the main app automatically.
 class SignInScreen extends StatefulWidget {
-  const SignInScreen({super.key, this.authService});
+  const SignInScreen({
+    super.key,
+    this.authService,
+    this.forcePasswordRecoveryMode = false,
+  });
 
   final SignInAuthService? authService;
+  final bool forcePasswordRecoveryMode;
 
   @override
   State<SignInScreen> createState() => _SignInScreenState();
@@ -100,13 +116,18 @@ class _SignInScreenState extends State<SignInScreen> {
   final _formKey = GlobalKey<FormState>();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
+  final _confirmPasswordController = TextEditingController();
+  StreamSubscription<AuthState>? _authStateSubscription;
 
   bool _isSignUp = false;
+  bool _isPasswordRecoveryMode = false;
+  bool _showPasswordUpdatedSuccess = false;
   bool _isLoading = false;
   bool _isResendingConfirmation = false;
   bool _isSendingPasswordReset = false;
   bool _showResendConfirmationLink = false;
   bool _showPasswordResetLink = false;
+  String? _inlineAuthErrorBannerMessage;
   SignUpPath _signUpPath = SignUpPath.jobSeeker;
   String? _lastSignUpEmail;
   DateTime? _emailActionCooldownUntil;
@@ -115,6 +136,132 @@ class _SignInScreenState extends State<SignInScreen> {
 
   SignInAuthService get _authService =>
       widget.authService ?? SupabaseSignInAuthService.instance;
+
+  bool _hasInitializedSupabase() {
+    try {
+      Supabase.instance.client;
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  bool _urlIndicatesPasswordRecovery() {
+    if (!kIsWeb) {
+      return false;
+    }
+
+    final uri = Uri.base;
+    final queryType = uri.queryParameters['type']?.trim().toLowerCase() ?? '';
+    if (queryType == 'recovery') {
+      return true;
+    }
+
+    final fragment = uri.fragment;
+    if (fragment.isEmpty) {
+      return false;
+    }
+
+    final queryStart = fragment.indexOf('?');
+    final fragmentQuery = queryStart >= 0
+        ? fragment.substring(queryStart + 1)
+        : fragment;
+
+    try {
+      final params = Uri.splitQueryString(fragmentQuery);
+      final type = params['type']?.trim().toLowerCase() ?? '';
+      return type == 'recovery';
+    } catch (_) {
+      return false;
+    }
+  }
+
+  String? _urlAuthErrorMessage() {
+    if (!kIsWeb) {
+      return null;
+    }
+
+    final uri = Uri.base;
+    final queryErrorCode =
+        uri.queryParameters['error_code']?.trim().toLowerCase() ?? '';
+    if (queryErrorCode.isNotEmpty) {
+      if (queryErrorCode == 'otp_expired') {
+        return 'This password reset link has expired or was already used. Request a new reset email and use the newest link.';
+      }
+      final queryErrorDescription =
+          uri.queryParameters['error_description']?.trim() ?? '';
+      return queryErrorDescription.isNotEmpty
+          ? queryErrorDescription
+          : 'Authentication link could not be used. Please request a new password reset email.';
+    }
+
+    final fragment = uri.fragment;
+    if (fragment.isEmpty) {
+      return null;
+    }
+
+    final queryStart = fragment.indexOf('?');
+    final fragmentQuery = queryStart >= 0
+        ? fragment.substring(queryStart + 1)
+        : fragment;
+
+    try {
+      final params = Uri.splitQueryString(fragmentQuery);
+      final errorCode = params['error_code']?.trim().toLowerCase() ?? '';
+      if (errorCode == 'otp_expired') {
+        return 'This password reset link has expired or was already used. Request a new reset email and use the newest link.';
+      }
+
+      if (errorCode.isNotEmpty) {
+        final errorDescription = params['error_description']?.trim() ?? '';
+        return errorDescription.isNotEmpty
+            ? errorDescription
+            : 'Authentication link could not be used. Please request a new password reset email.';
+      }
+    } catch (_) {
+      return null;
+    }
+
+    return null;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+
+    _isPasswordRecoveryMode =
+        widget.forcePasswordRecoveryMode || _urlIndicatesPasswordRecovery();
+    final urlAuthError = _urlAuthErrorMessage();
+    if (urlAuthError != null) {
+      _isPasswordRecoveryMode = false;
+      _showPasswordResetLink = true;
+      _inlineAuthErrorBannerMessage = urlAuthError;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) {
+          return;
+        }
+        _showMessage(urlAuthError);
+      });
+    }
+
+    if (_hasInitializedSupabase()) {
+      _authStateSubscription = Supabase.instance.client.auth.onAuthStateChange
+          .listen((authState) {
+            if (!mounted) {
+              return;
+            }
+            if (authState.event == AuthChangeEvent.passwordRecovery) {
+              setState(() {
+                _isPasswordRecoveryMode = true;
+                _showPasswordUpdatedSuccess = false;
+                _isSignUp = false;
+                _showResendConfirmationLink = false;
+                _showPasswordResetLink = false;
+              });
+            }
+          });
+    }
+  }
 
   bool get _emailActionCoolingDown {
     final until = _emailActionCooldownUntil;
@@ -131,15 +278,11 @@ class _SignInScreenState extends State<SignInScreen> {
   }
 
   String? get _developmentEmailRedirectUrl {
-    if (!kDebugMode || !kIsWeb) {
+    if (!kIsWeb) {
       return null;
     }
 
-    final host = Uri.base.host.toLowerCase();
-    if (host == 'localhost' || host == '127.0.0.1') {
-      return Uri.base.origin;
-    }
-    return null;
+    return Uri.base.origin;
   }
 
   void _startEmailActionCooldown([Duration duration = _emailActionCooldown]) {
@@ -158,16 +301,35 @@ class _SignInScreenState extends State<SignInScreen> {
     });
   }
 
+  void _showMessage(String message) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: SelectableText(
+            message,
+            style: const TextStyle(color: Colors.white),
+          ),
+          duration: const Duration(minutes: 10),
+          action: SnackBarAction(
+            label: 'Dismiss',
+            onPressed: () =>
+                ScaffoldMessenger.of(context).hideCurrentSnackBar(),
+          ),
+        ),
+      );
+  }
+
+  void _dismissCurrentMessage() {
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+  }
+
   void _showEmailRateLimitMessage() {
     final waitSeconds = _emailActionSecondsRemaining > 0
         ? _emailActionSecondsRemaining
         : _emailActionCooldown.inSeconds;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          'Email rate limit reached. Please wait about $waitSeconds seconds before trying again.',
-        ),
-      ),
+    _showMessage(
+      'Email rate limit reached. Please wait about $waitSeconds seconds before trying again.',
     );
   }
 
@@ -193,12 +355,72 @@ class _SignInScreenState extends State<SignInScreen> {
 
   @override
   void dispose() {
+    _authStateSubscription?.cancel();
     _emailController.dispose();
     _passwordController.dispose();
+    _confirmPasswordController.dispose();
     super.dispose();
   }
 
+  Future<void> _submitPasswordUpdate() async {
+    _dismissCurrentMessage();
+
+    final newPassword = _passwordController.text;
+    final confirmPassword = _confirmPasswordController.text;
+
+    if (newPassword.length < 8) {
+      _showMessage('New password must be at least 8 characters.');
+      return;
+    }
+    if (newPassword != confirmPassword) {
+      _showMessage('Passwords do not match.');
+      return;
+    }
+
+    setState(() => _isLoading = true);
+    try {
+      await _authService.updatePassword(password: newPassword);
+      if (_hasInitializedSupabase()) {
+        await Supabase.instance.client.auth.signOut(scope: SignOutScope.local);
+      }
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _isPasswordRecoveryMode = false;
+        _showPasswordUpdatedSuccess = true;
+        _isSignUp = false;
+        _showPasswordResetLink = false;
+        _showResendConfirmationLink = false;
+      });
+      _dismissCurrentMessage();
+      _passwordController.clear();
+      _confirmPasswordController.clear();
+    } on AuthException catch (e) {
+      if (!mounted) {
+        return;
+      }
+      _showMessage(e.message);
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+      _showMessage('Could not update password right now.');
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
+  }
+
   Future<void> _submit() async {
+    if (_isPasswordRecoveryMode) {
+      await _submitPasswordUpdate();
+      return;
+    }
+
+    _dismissCurrentMessage();
+
     if (!_formKey.currentState!.validate()) return;
 
     setState(() => _isLoading = true);
@@ -220,13 +442,7 @@ class _SignInScreenState extends State<SignInScreen> {
         );
         if (!mounted) return;
         final signedUpEmail = email;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Check your email to confirm your account, then sign in.',
-            ),
-          ),
-        );
+        _showMessage('Check your email to confirm your account, then sign in.');
         setState(() {
           _lastSignUpEmail = signedUpEmail;
           _isSignUp = false;
@@ -235,6 +451,9 @@ class _SignInScreenState extends State<SignInScreen> {
         });
       } else {
         await _authService.signInWithPassword(email: email, password: password);
+        if (mounted) {
+          _dismissCurrentMessage();
+        }
         // AuthGate stream handles navigation — no explicit push needed.
       }
     } on AuthException catch (e) {
@@ -247,14 +466,10 @@ class _SignInScreenState extends State<SignInScreen> {
           _showPasswordResetLink = true;
         }
       });
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(e.message)));
+      _showMessage(e.message);
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('An unexpected error occurred.')),
-      );
+      _showMessage('An unexpected error occurred.');
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -271,11 +486,7 @@ class _SignInScreenState extends State<SignInScreen> {
         : (_lastSignUpEmail ?? '').trim();
 
     if (email.isEmpty || !email.contains('@')) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Enter the account email to resend confirmation.'),
-        ),
-      );
+      _showMessage('Enter the account email to resend confirmation.');
       return;
     }
 
@@ -290,9 +501,7 @@ class _SignInScreenState extends State<SignInScreen> {
         return;
       }
       _startEmailActionCooldown();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Confirmation email sent to $email.')),
-      );
+      _showMessage('Confirmation email sent to $email.');
     } on AuthException catch (e) {
       if (!mounted) {
         return;
@@ -301,19 +510,13 @@ class _SignInScreenState extends State<SignInScreen> {
         _startEmailActionCooldown();
         _showEmailRateLimitMessage();
       } else {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(e.message)));
+        _showMessage(e.message);
       }
     } catch (_) {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Could not resend confirmation email right now.'),
-        ),
-      );
+      _showMessage('Could not resend confirmation email right now.');
     } finally {
       if (mounted) {
         setState(() => _isResendingConfirmation = false);
@@ -329,11 +532,7 @@ class _SignInScreenState extends State<SignInScreen> {
 
     final email = _emailController.text.trim();
     if (email.isEmpty || !email.contains('@')) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Enter a valid account email to reset password.'),
-        ),
-      );
+      _showMessage('Enter a valid account email to reset password.');
       return;
     }
 
@@ -348,9 +547,7 @@ class _SignInScreenState extends State<SignInScreen> {
         return;
       }
       _startEmailActionCooldown();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Password reset email sent to $email.')),
-      );
+      _showMessage('Password reset email sent to $email.');
     } on AuthException catch (e) {
       if (!mounted) {
         return;
@@ -359,19 +556,13 @@ class _SignInScreenState extends State<SignInScreen> {
         _startEmailActionCooldown();
         _showEmailRateLimitMessage();
       } else {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(e.message)));
+        _showMessage(e.message);
       }
     } catch (_) {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Could not send password reset email right now.'),
-        ),
-      );
+      _showMessage('Could not send password reset email right now.');
     } finally {
       if (mounted) {
         setState(() => _isSendingPasswordReset = false);
@@ -425,7 +616,13 @@ class _SignInScreenState extends State<SignInScreen> {
     return Scaffold(
       appBar: AppBar(
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        title: Text(_isSignUp ? 'Create Account' : 'Sign In'),
+        title: Text(
+          _showPasswordUpdatedSuccess
+              ? 'Password Updated'
+              : _isPasswordRecoveryMode
+              ? 'Reset Password'
+              : (_isSignUp ? 'Create Account' : 'Sign In'),
+        ),
       ),
       body: Center(
         child: SingleChildScrollView(
@@ -445,39 +642,130 @@ class _SignInScreenState extends State<SignInScreen> {
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    _isSignUp
+                    _showPasswordUpdatedSuccess
+                        ? 'Your password was updated successfully.'
+                        : _isPasswordRecoveryMode
+                        ? 'Set a new password for your account.'
+                        : _isSignUp
                         ? 'Create an account and choose your role.'
                         : 'Sign in to access your jobs and profile.',
                     style: Theme.of(context).textTheme.bodyMedium,
                     textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: 24),
+                  if (_inlineAuthErrorBannerMessage != null) ...[
+                    Container(
+                      decoration: BoxDecoration(
+                        color: Colors.red.shade50,
+                        border: Border.all(color: Colors.red.shade300),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Icon(
+                            Icons.error_outline,
+                            size: 20,
+                            color: Colors.red.shade700,
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: SelectableText(
+                              _inlineAuthErrorBannerMessage!,
+                              style: TextStyle(
+                                color: Colors.red.shade900,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: 'Dismiss',
+                            visualDensity: VisualDensity.compact,
+                            onPressed: () =>
+                                setState(() => _inlineAuthErrorBannerMessage = null),
+                            icon: Icon(
+                              Icons.close,
+                              size: 18,
+                              color: Colors.red.shade700,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                  ],
+                  if (_showPasswordUpdatedSuccess) ...[
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: Colors.green.shade50,
+                        border: Border.all(color: Colors.green.shade300),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Column(
+                        children: [
+                          Icon(
+                            Icons.check_circle_outline,
+                            color: Colors.green.shade700,
+                            size: 36,
+                          ),
+                          const SizedBox(height: 8),
+                          const Text(
+                            'You can now sign in with your new password.',
+                            textAlign: TextAlign.center,
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    FilledButton(
+                      onPressed: _isLoading
+                          ? null
+                          : () {
+                              setState(() {
+                                _showPasswordUpdatedSuccess = false;
+                                _isPasswordRecoveryMode = false;
+                                _isSignUp = false;
+                                _showResendConfirmationLink = false;
+                                _showPasswordResetLink = false;
+                              });
+                            },
+                      child: const Text('Continue to Sign In'),
+                    ),
+                  ] else ...[
                   // Role picker — shown only during sign-up
                   if (_isSignUp) ..._buildRolePicker(),
-                  TextFormField(
-                    controller: _emailController,
-                    decoration: const InputDecoration(
-                      labelText: 'Email',
-                      border: OutlineInputBorder(),
+                  if (!_isPasswordRecoveryMode) ...[
+                    TextFormField(
+                      controller: _emailController,
+                      decoration: const InputDecoration(
+                        labelText: 'Email',
+                        border: OutlineInputBorder(),
+                      ),
+                      keyboardType: TextInputType.emailAddress,
+                      autocorrect: false,
+                      textInputAction: TextInputAction.next,
+                      validator: (v) {
+                        if (v == null || v.trim().isEmpty) {
+                          return 'Enter your email address.';
+                        }
+                        if (!v.contains('@')) {
+                          return 'Enter a valid email address.';
+                        }
+                        return null;
+                      },
                     ),
-                    keyboardType: TextInputType.emailAddress,
-                    autocorrect: false,
-                    textInputAction: TextInputAction.next,
-                    validator: (v) {
-                      if (v == null || v.trim().isEmpty) {
-                        return 'Enter your email address.';
-                      }
-                      if (!v.contains('@')) {
-                        return 'Enter a valid email address.';
-                      }
-                      return null;
-                    },
-                  ),
-                  const SizedBox(height: 16),
+                    const SizedBox(height: 16),
+                  ],
                   TextFormField(
                     controller: _passwordController,
-                    decoration: const InputDecoration(
-                      labelText: 'Password',
+                    decoration: InputDecoration(
+                      labelText:
+                          _isPasswordRecoveryMode ? 'New Password' : 'Password',
                       border: OutlineInputBorder(),
                     ),
                     obscureText: true,
@@ -485,12 +773,26 @@ class _SignInScreenState extends State<SignInScreen> {
                     onFieldSubmitted: (_) => _isLoading ? null : _submit(),
                     validator: (v) {
                       if (v == null || v.isEmpty) return 'Enter your password.';
-                      if (_isSignUp && v.length < 8) {
+                      if ((_isSignUp || _isPasswordRecoveryMode) &&
+                          v.length < 8) {
                         return 'Password must be at least 8 characters.';
                       }
                       return null;
                     },
                   ),
+                  if (_isPasswordRecoveryMode) ...[
+                    const SizedBox(height: 16),
+                    TextFormField(
+                      controller: _confirmPasswordController,
+                      decoration: const InputDecoration(
+                        labelText: 'Confirm New Password',
+                        border: OutlineInputBorder(),
+                      ),
+                      obscureText: true,
+                      textInputAction: TextInputAction.done,
+                      onFieldSubmitted: (_) => _isLoading ? null : _submit(),
+                    ),
+                  ],
                   const SizedBox(height: 24),
                   FilledButton(
                     onPressed: _isLoading ? null : _submit,
@@ -500,13 +802,20 @@ class _SignInScreenState extends State<SignInScreen> {
                             width: 20,
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
-                        : Text(_isSignUp ? 'Create Account' : 'Sign In'),
+                        : Text(
+                            _isPasswordRecoveryMode
+                                ? 'Update Password'
+                                : (_isSignUp ? 'Create Account' : 'Sign In'),
+                          ),
                   ),
                   if (!_isSignUp &&
+                      !_isPasswordRecoveryMode &&
                       (_showResendConfirmationLink ||
                           _showPasswordResetLink))
                     const SizedBox(height: 8),
-                  if (!_isSignUp && _showResendConfirmationLink)
+                  if (!_isSignUp &&
+                      !_isPasswordRecoveryMode &&
+                      _showResendConfirmationLink)
                     TextButton(
                       onPressed:
                           (_isLoading ||
@@ -522,7 +831,9 @@ class _SignInScreenState extends State<SignInScreen> {
                             )
                           : const Text('Resend Confirmation Email'),
                     ),
-                  if (!_isSignUp && _showPasswordResetLink)
+                  if (!_isSignUp &&
+                      !_isPasswordRecoveryMode &&
+                      _showPasswordResetLink)
                     TextButton(
                       onPressed:
                           (_isLoading ||
@@ -539,25 +850,28 @@ class _SignInScreenState extends State<SignInScreen> {
                             )
                           : const Text('Send Password Reset Email'),
                     ),
-                  const SizedBox(height: 12),
-                  TextButton(
-                    onPressed: _isLoading
-                        ? null
-                        : () => setState(() {
-                            _isSignUp = !_isSignUp;
-                            _signUpPath = SignUpPath.jobSeeker;
-                            if (_isSignUp) {
-                              _showResendConfirmationLink = false;
-                              _showPasswordResetLink = false;
-                            }
-                            _formKey.currentState?.reset();
-                          }),
-                    child: Text(
-                      _isSignUp
-                          ? 'Already have an account? Sign in'
-                          : 'New here? Create an account',
+                  if (!_isPasswordRecoveryMode) ...[
+                    const SizedBox(height: 12),
+                    TextButton(
+                      onPressed: _isLoading
+                          ? null
+                          : () => setState(() {
+                              _isSignUp = !_isSignUp;
+                              _signUpPath = SignUpPath.jobSeeker;
+                              if (_isSignUp) {
+                                _showResendConfirmationLink = false;
+                                _showPasswordResetLink = false;
+                              }
+                              _formKey.currentState?.reset();
+                            }),
+                      child: Text(
+                        _isSignUp
+                            ? 'Already have an account? Sign in'
+                            : 'New here? Create an account',
+                      ),
                     ),
-                  ),
+                  ],
+                  ],
                 ],
               ),
             ),

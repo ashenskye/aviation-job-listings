@@ -83,12 +83,58 @@ String _profileRoleLabel(Object? value) {
   return value?.toString().trim().toLowerCase() ?? '';
 }
 
+String _sessionRoleLabel(User user) {
+  final appRole = _profileRoleLabel(user.appMetadata);
+  if (appRole.isNotEmpty) {
+    return appRole;
+  }
+  return _profileRoleLabel(user.userMetadata);
+}
+
 ProfileType _profileTypeFromMetadata(Object? value) {
   final role = _profileRoleLabel(value);
   if (role == 'employer') {
     return ProfileType.employer;
   }
   return ProfileType.jobSeeker;
+}
+
+ProfileType _profileTypeFromSession(User user) {
+  final appType = _profileTypeFromMetadata(user.appMetadata);
+  if (appType == ProfileType.employer) {
+    return ProfileType.employer;
+  }
+  return _profileTypeFromMetadata(user.userMetadata);
+}
+
+bool _isPasswordRecoveryFlowActive() {
+  if (!kIsWeb) {
+    return false;
+  }
+
+  final uri = Uri.base;
+  final queryType = uri.queryParameters['type']?.trim().toLowerCase() ?? '';
+  if (queryType == 'recovery') {
+    return true;
+  }
+
+  final fragment = uri.fragment;
+  if (fragment.isEmpty) {
+    return false;
+  }
+
+  final queryStart = fragment.indexOf('?');
+  final fragmentQuery = queryStart >= 0
+      ? fragment.substring(queryStart + 1)
+      : fragment;
+
+  try {
+    final params = Uri.splitQueryString(fragmentQuery);
+    final type = params['type']?.trim().toLowerCase() ?? '';
+    return type == 'recovery';
+  } catch (_) {
+    return false;
+  }
 }
 
 final RegExp _linkifiedUrlPattern = RegExp(
@@ -229,6 +275,15 @@ class _LinkifiedText extends StatelessWidget {
       spans.add(TextSpan(text: text, style: baseStyle));
     }
 
+    // Use SelectableText.rich in full-view contexts (no maxLines) so users
+    // can right-click / long-press to copy URLs, emails, and phone numbers.
+    if (maxLines == null) {
+      return SelectableText.rich(
+        TextSpan(children: spans),
+        style: baseStyle,
+      );
+    }
+
     return RichText(
       maxLines: maxLines,
       overflow: overflow ?? TextOverflow.clip,
@@ -247,9 +302,18 @@ class _AuthGate extends StatelessWidget {
     return StreamBuilder<AuthState>(
       stream: Supabase.instance.client.auth.onAuthStateChange,
       builder: (context, snapshot) {
-        final session = snapshot.data?.session;
+        final authState = snapshot.data;
+        if (authState?.event == AuthChangeEvent.passwordRecovery) {
+          return const SignInScreen(forcePasswordRecoveryMode: true);
+        }
+
+        if (_isPasswordRecoveryFlowActive()) {
+          return const SignInScreen(forcePasswordRecoveryMode: true);
+        }
+
+        final session = authState?.session;
         if (session != null) {
-          final roleLabel = _profileRoleLabel(session.user.userMetadata);
+          final roleLabel = _sessionRoleLabel(session.user);
           final adminEmail = session.user.email?.trim() ?? '';
 
           if (roleLabel == 'admin') {
@@ -277,6 +341,19 @@ class _AuthGate extends StatelessWidget {
                       title: 'Aviation Job Listings',
                       repository: repository,
                       initialProfileType: initialType,
+                      adminDashboardBuilder: (adminContext, onSwitchView) {
+                        return AdminDashboard(
+                          adminRepository: SupabaseAdminRepository(
+                            Supabase.instance.client,
+                            session.user.id,
+                          ),
+                          appRepository: repository,
+                          adminEmail: adminEmail,
+                          adminRoleLabel: roleLabel,
+                          currentView: AdminInterfaceView.admin,
+                          onSwitchView: onSwitchView,
+                        );
+                      },
                     ),
                   ),
                 );
@@ -284,9 +361,7 @@ class _AuthGate extends StatelessWidget {
             );
           }
 
-          final initialType = _profileTypeFromMetadata(
-            session.user.userMetadata,
-          );
+          final initialType = _profileTypeFromSession(session.user);
           return MyHomePage(
             title: 'Aviation Job Listings',
             repository: repository,
@@ -801,11 +876,16 @@ class _MyHomePageState extends State<MyHomePage> {
   final TextEditingController _searchTabController = TextEditingController();
   final TextEditingController _searchTabMatchPercentController =
       TextEditingController(text: '0');
+  final TextEditingController _searchTabCityController = TextEditingController();
   final TextEditingController _createTitleController = TextEditingController();
   final FocusNode _createTitleFocusNode = FocusNode();
   final TextEditingController _createCompanyController =
       TextEditingController();
   final TextEditingController _createLocationController =
+      TextEditingController();
+  final TextEditingController _createLocationCityController =
+      TextEditingController();
+  final TextEditingController _createLocationStateController =
       TextEditingController();
   final TextEditingController _createTypeController = TextEditingController();
   final TextEditingController _createStartingPayController =
@@ -850,6 +930,8 @@ class _MyHomePageState extends State<MyHomePage> {
   bool _employerProfileEditing = false;
   String _query = '';
   String _searchTabQuery = '';
+  String _searchTabGuideCountry = 'United States';
+  int _searchTabGuideStateResetCount = 0;
   String _searchTabTypeFilter = 'all';
   String _searchTabLocationFilter = 'all';
   String _searchTabPositionFilter = 'all';
@@ -860,6 +942,7 @@ class _MyHomePageState extends State<MyHomePage> {
   String _searchTabRatingFilter = 'all';
   String _searchTabFlightHoursFilter = 'all';
   String _searchTabInstructorHoursFilter = 'all';
+  String? _searchTabActiveRegion;
   int _searchTabMinimumMatchPercent = 0;
   String _searchTabSort = 'best_match';
   String? _searchTabPendingTypeFilter;
@@ -875,16 +958,15 @@ class _MyHomePageState extends State<MyHomePage> {
   bool _searchTabPrimaryFiltersDrawerOpen = true;
   bool _searchTabEmploymentTypeExpanded = false;
   bool _searchTabPositionExpanded = false;
-  bool _searchTabLocationExpanded = false;
   bool _searchTabFaaRuleExpanded = false;
   bool _searchTabAirframeScopeExpanded = false;
   bool _searchTabSpecialtyFilterExpanded = false;
   bool _searchTabInstructionFilterExpanded = false;
   bool _searchTabCertificateExpanded = false;
   bool _searchTabRatingExpanded = false;
+  bool _searchTabLocationGuideExpanded = true;
   final GlobalKey _searchTabEmploymentTypeHeaderKey = GlobalKey();
   final GlobalKey _searchTabPositionHeaderKey = GlobalKey();
-  final GlobalKey _searchTabLocationHeaderKey = GlobalKey();
   final GlobalKey _searchTabFaaRuleHeaderKey = GlobalKey();
   final GlobalKey _searchTabAirframeScopeHeaderKey = GlobalKey();
   final GlobalKey _searchTabCertificateHeaderKey = GlobalKey();
@@ -912,6 +994,12 @@ class _MyHomePageState extends State<MyHomePage> {
   bool _showCookieConsentBanner = false;
   bool _uploadingEmployerLogoImage = false;
   bool _uploadingEmployerBannerImage = false;
+  bool _sendingEmployerNotificationTestEmail = false;
+  DateTime? _lastEmployerNotificationTestAt;
+  String? _lastEmployerNotificationTestMessage;
+  bool? _lastEmployerNotificationTestSucceeded;
+  static const String _employerNotificationTestStatusKeyPrefix =
+      'employer_notification_test_status_';
 
   // ============================================================================
   // JOB LISTING STATE: Data models and data persistence
@@ -942,6 +1030,91 @@ class _MyHomePageState extends State<MyHomePage> {
       DateTime.now().millisecondsSinceEpoch.toString();
 
   String _generateFeedbackId() => 'fb_${DateTime.now().millisecondsSinceEpoch}';
+
+  String _notificationTestStatusStorageKey(String employerId) {
+    return '$_employerNotificationTestStatusKeyPrefix$employerId';
+  }
+
+  void _resetEmployerNotificationTestStatusState() {
+    _lastEmployerNotificationTestAt = null;
+    _lastEmployerNotificationTestMessage = null;
+    _lastEmployerNotificationTestSucceeded = null;
+  }
+
+  Future<void> _loadEmployerNotificationTestStatus(String employerId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_notificationTestStatusStorageKey(employerId));
+
+    DateTime? lastAt;
+    String? message;
+    bool? succeeded;
+    if (raw != null && raw.trim().isNotEmpty) {
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is Map<String, dynamic>) {
+          final timestamp = decoded['timestamp']?.toString();
+          if (timestamp != null && timestamp.isNotEmpty) {
+            lastAt = DateTime.tryParse(timestamp);
+          }
+          message = decoded['message']?.toString();
+          final successValue = decoded['succeeded'];
+          if (successValue is bool) {
+            succeeded = successValue;
+          }
+        }
+      } catch (_) {
+        // Ignore malformed local cache values.
+      }
+    }
+
+    if (!mounted || _currentEmployer.id != employerId) {
+      return;
+    }
+
+    setState(() {
+      _lastEmployerNotificationTestAt = lastAt;
+      _lastEmployerNotificationTestMessage = message;
+      _lastEmployerNotificationTestSucceeded = succeeded;
+    });
+  }
+
+  Future<void> _saveEmployerNotificationTestStatus(String employerId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final key = _notificationTestStatusStorageKey(employerId);
+
+    if (_lastEmployerNotificationTestAt == null) {
+      await prefs.remove(key);
+      return;
+    }
+
+    final payload = jsonEncode({
+      'timestamp': _lastEmployerNotificationTestAt!.toIso8601String(),
+      'message': _lastEmployerNotificationTestMessage ?? '',
+      'succeeded': _lastEmployerNotificationTestSucceeded,
+    });
+    await prefs.setString(key, payload);
+  }
+
+  Future<void> _clearEmployerNotificationTestStatus(String employerId) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_notificationTestStatusStorageKey(employerId));
+    if (!mounted || _currentEmployer.id != employerId) {
+      return;
+    }
+    setState(() {
+      _resetEmployerNotificationTestStatusState();
+    });
+  }
+
+  String _formatNotificationTestTimestamp(DateTime value) {
+    final local = value.toLocal();
+    final month = local.month.toString().padLeft(2, '0');
+    final day = local.day.toString().padLeft(2, '0');
+    final year = local.year.toString();
+    final hour = local.hour.toString().padLeft(2, '0');
+    final minute = local.minute.toString().padLeft(2, '0');
+    return '$month/$day/$year $hour:$minute';
+  }
 
   String _currentJobSeekerId() {
     if (SupabaseBootstrap.isConfigured) {
@@ -1075,6 +1248,9 @@ class _MyHomePageState extends State<MyHomePage> {
       TextEditingController();
   final TextEditingController _employerDescriptionController =
       TextEditingController();
+    bool _employerNotifyNewNonRejectedApplication = true;
+    bool _employerNotifyApplicationStatusChanges = false;
+    bool _employerNotifyDailyDigest = false;
 
   // ============================================================================
   // LIFECYCLE & INITIALIZATION
@@ -1330,7 +1506,7 @@ class _MyHomePageState extends State<MyHomePage> {
             ),
           ),
           Expanded(
-            child: Text(
+            child: SelectableText(
               hasValue ? value : 'Not provided',
               style: TextStyle(
                 fontStyle: hasValue ? FontStyle.normal : FontStyle.italic,
@@ -1932,6 +2108,10 @@ class _MyHomePageState extends State<MyHomePage> {
       contactPhone: profile.contactPhone,
       companyDescription: profile.companyDescription,
       companyBenefits: List<String>.from(profile.companyBenefits),
+      notifyOnNewNonRejectedApplication:
+          profile.notifyOnNewNonRejectedApplication,
+      notifyOnApplicationStatusChanges: profile.notifyOnApplicationStatusChanges,
+      notifyDailyDigest: profile.notifyDailyDigest,
     );
   }
 
@@ -2271,8 +2451,8 @@ class _MyHomePageState extends State<MyHomePage> {
                   email: accountEmail,
                   phone: _formatPhoneNumber(phoneController.text.trim()),
                   city: cityController.text.trim(),
-                  stateOrProvince: stateController.text.trim(),
-                  country: countryController.text.trim(),
+                  stateOrProvince: normalizeStateProvinceValue(stateController.text.trim()) ?? stateController.text.trim(),
+                  country: normalizeCountryValue(countryController.text.trim()) ?? countryController.text.trim(),
                 );
                 Navigator.of(pageContext).pop(updated);
               }
@@ -3174,12 +3354,20 @@ class _MyHomePageState extends State<MyHomePage> {
                   ),
                 )
               else
-                TextField(
-                  controller: _createLocationController,
-                  decoration: const InputDecoration(
-                    hintText: 'Enter job location',
-                    isDense: true,
-                  ),
+                Column(
+                  children: [
+                    TextField(
+                      controller: _createLocationCityController,
+                      decoration: const InputDecoration(
+                        labelText: 'City',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                      onChanged: (_) => setState(() {}),
+                    ),
+                    const SizedBox(height: 8),
+                    _buildCreateLocationStateField(),
+                  ],
                 ),
             ],
           ),
@@ -3574,24 +3762,9 @@ class _MyHomePageState extends State<MyHomePage> {
               requiredFlightHourLabels: draftProfile.flightHoursTypes,
               requiredSpecialtyHourLabels: draftProfile.specialtyFlightHours,
             ).toSet();
-            final seekerInstrumentHoursSelected =
-                draftProfile.flightHoursTypes.contains('Instrument');
-            final seekerMissingInstrumentRating =
-                seekerInstrumentHoursSelected &&
-                !draftProfile.faaCertificates.contains(
-                  'Instrument Rating (IFR)',
-                );
             final seekerMissingRatingsByHours = {
               ...seekerMissingImpliedRatings,
-              if (seekerMissingInstrumentRating) 'Instrument Rating (IFR)',
             };
-            final seekerHasHoursTriggeredRatingRules =
-                _missingImpliedRatingRuleMessages(
-                      selectedRatings: const <String>[],
-                      requiredFlightHourLabels: draftProfile.flightHoursTypes,
-                      requiredSpecialtyHourLabels: draftProfile.specialtyFlightHours,
-                    ).isNotEmpty ||
-                seekerInstrumentHoursSelected;
             final selectedInstructorHourLabels =
                 _availableInstructorHours
                     .where(
@@ -4149,8 +4322,8 @@ class _MyHomePageState extends State<MyHomePage> {
                       qualificationSection(
                         sectionKey: 'Certificates',
                         title: seekerCertificatesSatisfied
-                            ? 'Certificates'
-                            : 'Certificates *',
+                            ? 'FAA Certificates'
+                            : 'FAA Certificates *',
                         isSatisfied: seekerCertificatesSatisfied,
                         subtitle: 'Select FAA certificates you hold.',
                         icon: Icons.badge_outlined,
@@ -4188,19 +4361,17 @@ class _MyHomePageState extends State<MyHomePage> {
                       ),
                       qualificationSection(
                         sectionKey: 'Ratings',
-                        title: seekerHasHoursTriggeredRatingRules
-                          ? seekerRatingsSatisfied
-                            ? 'Ratings'
-                            : seekerMissingImpliedRatings.isNotEmpty
-                            ? 'Ratings * (Review implied ratings)'
-                            : 'Ratings *'
-                          : 'Ratings (Optional)',
+                        title: seekerRatingsSatisfied
+                          ? 'Ratings'
+                          : seekerMissingImpliedRatings.isNotEmpty
+                          ? 'Ratings * (Review implied ratings)'
+                          : 'Ratings *',
                         isSatisfied: seekerRatingsSatisfied,
-                        subtitle: seekerHasHoursTriggeredRatingRules
-                          ? seekerMissingRatingsByHours.isNotEmpty
-                            ? 'Ratings marked Required by hours should be selected.'
-                            : 'Required ratings are satisfied for selected hours.'
-                          : 'Add airframe/rating details for matching (optional).',
+                        subtitle: seekerMissingRatingsByHours.isNotEmpty
+                          ? 'Ratings marked Required by hours should be selected.'
+                          : seekerRatingsSatisfied
+                          ? 'Required ratings are satisfied.'
+                          : 'Select at least one airframe rating.',
                         icon: Icons.tune_outlined,
                         child: Column(
                           children: [
@@ -4447,9 +4618,11 @@ class _MyHomePageState extends State<MyHomePage> {
           orElse: () => _employerProfiles.first,
         );
       }
+      _resetEmployerNotificationTestStatusState();
       // Pre-fill the create-form company field from the loaded profile.
       _createCompanyController.text = _currentEmployer.companyName;
     });
+    _loadEmployerNotificationTestStatus(_currentEmployer.id);
     _loadEmployerApplications();
   }
 
@@ -4491,12 +4664,14 @@ class _MyHomePageState extends State<MyHomePage> {
     final normalizedEmployer = _normalizeEmployerImageUrls(employer);
     setState(() {
       _currentEmployer = normalizedEmployer;
+      _resetEmployerNotificationTestStatusState();
       _employerProfileEditing = false;
       _selectedTemplateId = null;
       _editingTemplateId = null;
       // Keep the create-form company field in sync when switching employer.
       _createCompanyController.text = normalizedEmployer.companyName;
     });
+    _loadEmployerNotificationTestStatus(normalizedEmployer.id);
     _loadEmployerApplications();
     _saveEmployerProfiles();
   }
@@ -4542,7 +4717,136 @@ class _MyHomePageState extends State<MyHomePage> {
     _selectedEmployerBenefits
       ..clear()
       ..addAll(_currentEmployer.companyBenefits);
+    _employerNotifyNewNonRejectedApplication =
+        _currentEmployer.notifyOnNewNonRejectedApplication;
+    _employerNotifyApplicationStatusChanges =
+        _currentEmployer.notifyOnApplicationStatusChanges;
+    _employerNotifyDailyDigest = _currentEmployer.notifyDailyDigest;
     setState(() => _employerProfileEditing = true);
+  }
+
+  Future<void> _sendEmployerNotificationTestEmail() async {
+    if (_sendingEmployerNotificationTestEmail) {
+      return;
+    }
+
+    setState(() {
+      _sendingEmployerNotificationTestEmail = true;
+    });
+
+    final employerId = _currentEmployer.id;
+    try {
+      final message = await _appRepository.sendEmployerNotificationTestEmail(
+        employerId,
+      );
+      if (!mounted) {
+        return;
+      }
+      final normalized = message.toLowerCase();
+      final indicatesFailure =
+          normalized.contains('error') ||
+          normalized.contains('failed') ||
+          normalized.contains('could not');
+      final shouldShowCopyableDialog = indicatesFailure || message.length > 120;
+
+      setState(() {
+        _lastEmployerNotificationTestAt = DateTime.now();
+        _lastEmployerNotificationTestMessage = message;
+        _lastEmployerNotificationTestSucceeded = !indicatesFailure;
+      });
+      _saveEmployerNotificationTestStatus(employerId);
+
+      if (shouldShowCopyableDialog) {
+        await _showCopyableMessageDialog(
+          title: 'Notification Test Result',
+          message: message,
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(message)),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _sendingEmployerNotificationTestEmail = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _showCopyableMessageDialog({
+    required String title,
+    required String message,
+  }) async {
+    if (!mounted) {
+      return;
+    }
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: Text(title),
+          content: SizedBox(
+            width: 520,
+            child: SingleChildScrollView(
+              child: SelectableText(message),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Clipboard.setData(ClipboardData(text: message));
+                Navigator.of(dialogContext).pop();
+                if (!mounted) {
+                  return;
+                }
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Message copied to clipboard.')),
+                );
+              },
+              child: const Text('Copy'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Close'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _signOutFromHome() async {
+    try {
+      final auth = Supabase.instance.client.auth;
+      await auth.signOut(scope: SignOutScope.local);
+      if (auth.currentSession != null) {
+        throw StateError('Session is still active after sign out.');
+      }
+      if (!mounted) {
+        return;
+      }
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(
+          builder: (_) => const SignInScreen(),
+        ),
+        (route) => false,
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      var message = 'Could not sign out. Please try again.';
+      final raw = error.toString();
+      if (raw.startsWith('Bad state: ')) {
+        message = raw.substring('Bad state: '.length);
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message)),
+      );
+    }
   }
 
   _MatchResult _evaluateJobMatch(JobListing job) {
@@ -4701,11 +5005,14 @@ class _MyHomePageState extends State<MyHomePage> {
     _searchController.dispose();
     _searchTabController.dispose();
     _searchTabMatchPercentController.dispose();
+    _searchTabCityController.dispose();
     _searchTabScrollController.dispose();
     _createTitleController.dispose();
     _createTitleFocusNode.dispose();
     _createCompanyController.dispose();
     _createLocationController.dispose();
+    _createLocationCityController.dispose();
+    _createLocationStateController.dispose();
     _createTypeController.dispose();
     _createStartingPayController.dispose();
     _createPayForExperienceController.dispose();
@@ -4832,7 +5139,10 @@ class _MyHomePageState extends State<MyHomePage> {
         : _createCompanyController.text.trim();
     final location = _useCompanyLocationForJob
         ? _buildCompanyLocationString()
-        : _createLocationController.text.trim();
+        : formatCityStateLocation(
+            city: _createLocationCityController.text,
+            stateOrProvince: _createLocationStateController.text,
+          );
     final typeRatingsRequired = _createTypeRatingsController.text
         .split(',')
         .map((rating) => rating.trim())
@@ -4895,6 +5205,9 @@ class _MyHomePageState extends State<MyHomePage> {
       _createTitleController.text = job.title;
       _createCompanyController.text = _currentEmployer.companyName;
       _createLocationController.text = job.location;
+      final parsedJobLocation = parseCityStateLocation(job.location);
+      _createLocationCityController.text = parsedJobLocation.city;
+      _createLocationStateController.text = parsedJobLocation.stateOrProvince;
       _useCompanyLocationForJob =
           companyLocation.isNotEmpty &&
           companyLocation.toLowerCase() == job.location.trim().toLowerCase();
@@ -5072,7 +5385,7 @@ class _MyHomePageState extends State<MyHomePage> {
                 if (listing.faaCertificates.isNotEmpty) ...[
                   const SizedBox(height: 12),
                   const Text(
-                    'Certificates',
+                    'FAA Certificates',
                     style: TextStyle(fontWeight: FontWeight.w600),
                   ),
                   const SizedBox(height: 6),
@@ -5374,6 +5687,90 @@ class _MyHomePageState extends State<MyHomePage> {
     return null;
   }
 
+  static const Map<String, Set<String>> _usRegionStates = {
+    'Northeast Region, USA': {
+      'CT', 'ME', 'MA', 'NH', 'RI', 'VT', 'NY', 'NJ', 'PA', 'DE', 'MD',
+    },
+    'Southeast Region, USA': {
+      'VA', 'WV', 'NC', 'SC', 'GA', 'FL', 'AL', 'KY', 'MS', 'TN', 'AR', 'LA',
+    },
+    'Midwest Region, USA': {
+      'OH', 'IN', 'IL', 'MI', 'WI', 'MN', 'IA', 'MO', 'ND', 'SD', 'NE', 'KS',
+    },
+    'Southwest Region, USA': {'TX', 'OK', 'NM', 'AZ'},
+    'Rocky Mountain Region, USA': {'MT', 'ID', 'WY', 'CO', 'UT', 'NV'},
+    'West Coast Region, USA': {'WA', 'OR', 'CA'},
+    'AK, HI & US Territories': {'AK', 'HI', 'PR', 'GU', 'VI', 'AS', 'MP'},
+  };
+
+  List<String> _locationSearchAliases(String rawLocation) {
+    final trimmed = rawLocation.trim();
+    if (trimmed.isEmpty) {
+      return const [];
+    }
+
+    final parsed = parseCityStateLocation(trimmed);
+    final city = parsed.city.trim().toLowerCase();
+    final normalizedStateName =
+        normalizeStateProvinceValue(parsed.stateOrProvince) ??
+        parsed.stateOrProvince.trim();
+    final stateName = normalizedStateName.toLowerCase();
+    final stateAbbreviation =
+        (stateProvinceAbbreviations[normalizedStateName] ??
+                parsed.stateOrProvince.trim())
+            .toLowerCase();
+    final normalizedCountry =
+        normalizeCountryValue(parsed.country) ?? parsed.country.trim();
+    final country = normalizedCountry.toLowerCase();
+
+    final aliases = <String>{trimmed.toLowerCase()};
+    if (city.isNotEmpty) aliases.add(city);
+    if (stateName.isNotEmpty) aliases.add(stateName);
+    if (stateAbbreviation.isNotEmpty) aliases.add(stateAbbreviation);
+    if (country.isNotEmpty) aliases.add(country);
+
+    if (city.isNotEmpty && stateName.isNotEmpty) {
+      aliases.add('$city, $stateName');
+    }
+    if (city.isNotEmpty && stateAbbreviation.isNotEmpty) {
+      aliases.add('$city, $stateAbbreviation');
+    }
+    if (stateName.isNotEmpty && country.isNotEmpty) {
+      aliases.add('$stateName, $country');
+    }
+    if (stateAbbreviation.isNotEmpty && country.isNotEmpty) {
+      aliases.add('$stateAbbreviation, $country');
+    }
+    if (city.isNotEmpty && stateName.isNotEmpty && country.isNotEmpty) {
+      aliases.add('$city, $stateName, $country');
+    }
+    if (city.isNotEmpty &&
+        stateAbbreviation.isNotEmpty &&
+        country.isNotEmpty) {
+      aliases.add('$city, $stateAbbreviation, $country');
+    }
+
+    if (country == 'usa') {
+      aliases.add('united states');
+      aliases.add('united states of america');
+      aliases.add('us');
+      if (stateName.isNotEmpty) {
+        aliases.add('$stateName, united states');
+      }
+      if (stateAbbreviation.isNotEmpty) {
+        aliases.add('$stateAbbreviation, united states');
+      }
+      if (city.isNotEmpty && stateName.isNotEmpty) {
+        aliases.add('$city, $stateName, united states');
+      }
+      if (city.isNotEmpty && stateAbbreviation.isNotEmpty) {
+        aliases.add('$city, $stateAbbreviation, united states');
+      }
+    }
+
+    return aliases.toList(growable: false);
+  }
+
   List<JobListing> get _filteredJobs {
     final visibleJobs = _visibleJobs;
 
@@ -5381,9 +5778,11 @@ class _MyHomePageState extends State<MyHomePage> {
 
     final q = _query.toLowerCase();
     return visibleJobs.where((job) {
+      final locationAliases = _locationSearchAliases(job.location);
       return job.title.toLowerCase().contains(q) ||
           job.company.toLowerCase().contains(q) ||
           job.location.toLowerCase().contains(q) ||
+          locationAliases.any((alias) => alias.contains(q)) ||
           job.type.toLowerCase().contains(q) ||
           job.description.toLowerCase().contains(q);
     }).toList();
@@ -5809,7 +6208,26 @@ class _MyHomePageState extends State<MyHomePage> {
         }
       }
 
+      if (_searchTabActiveRegion != null) {
+        final regionStates = _usRegionStates[_searchTabActiveRegion];
+        if (regionStates != null) {
+          final parsed = parseCityStateLocation(job.location);
+          final normalized =
+              normalizeStateProvinceValue(parsed.stateOrProvince) ??
+              parsed.stateOrProvince.trim();
+          final abbr =
+              stateProvinceAbbreviations[normalized] ??
+              (parsed.stateOrProvince.trim().length == 2
+                  ? parsed.stateOrProvince.trim().toUpperCase()
+                  : null);
+          if (abbr == null || !regionStates.contains(abbr)) {
+            return false;
+          }
+        }
+      }
+
       if (query.isNotEmpty) {
+        final locationAliases = _locationSearchAliases(job.location);
         final searchableFields = [
           job.title,
           job.company,
@@ -5823,6 +6241,7 @@ class _MyHomePageState extends State<MyHomePage> {
           ...job.requiredRatings,
           ...job.typeRatingsRequired,
           ...job.aircraftFlown,
+          ...locationAliases,
         ];
         final matchesQuery = searchableFields.any(
           (value) => value.toLowerCase().contains(query),
@@ -6860,10 +7279,10 @@ class _MyHomePageState extends State<MyHomePage> {
     final coverLetterController = TextEditingController();
     final matchLabel = match.matchPercentage >= 70
         ? '${match.matchPercentage}% Good Match'
-        : '${match.matchPercentage}% Growth Opportunity';
+        : '${match.matchPercentage}% Partial Match';
     final bodyText = match.missingRequirements.isEmpty
         ? 'Add an optional cover letter.'
-        : 'Build your profile: ${match.missingRequirements.take(3).join(', ')}'
+        : 'Still needed: ${match.missingRequirements.take(3).join(', ')}'
               '${match.missingRequirements.length > 3 ? ' (and more)' : ''}.';
     final dialogTitle = match.matchPercentage >= 70 ? 'Quick Apply' : 'Express Interest';
     final submitted = await showDialog<String?>(
@@ -9003,14 +9422,10 @@ class _MyHomePageState extends State<MyHomePage> {
   String _buildCompanyLocationString() {
     final city = _currentEmployer.headquartersCity.trim();
     final state = _currentEmployer.headquartersState.trim();
-    if (city.isNotEmpty && state.isNotEmpty) {
-      return '$city, $state';
-    } else if (city.isNotEmpty) {
-      return city;
-    } else if (state.isNotEmpty) {
-      return state;
+    if (city.isEmpty && state.isEmpty) {
+      return 'Company headquarters location not set';
     }
-    return 'Company headquarters location not set';
+    return formatCityStateLocation(city: city, stateOrProvince: state);
   }
 
   String _buildJobTimelineText(JobListing job) {
@@ -9028,6 +9443,8 @@ class _MyHomePageState extends State<MyHomePage> {
     _createTitleController.clear();
     _createCompanyController.text = _currentEmployer.companyName;
     _createLocationController.clear();
+    _createLocationCityController.clear();
+    _createLocationStateController.clear();
     _createTypeController.clear();
     _selectedCreatePositionOption = null;
     _selectedTemplateId = null;
@@ -9076,7 +9493,10 @@ class _MyHomePageState extends State<MyHomePage> {
         : _createCompanyController.text.trim();
     final location = _useCompanyLocationForJob
         ? _buildCompanyLocationString()
-        : _createLocationController.text.trim();
+        : formatCityStateLocation(
+            city: _createLocationCityController.text,
+            stateOrProvince: _createLocationStateController.text,
+          );
     final type = _createTypeController.text.trim();
     final position = _selectedCreatePositionOption;
     final startingPay = _createStartingPayController.text.trim();
@@ -9413,6 +9833,416 @@ class _MyHomePageState extends State<MyHomePage> {
     }
   }
 
+  void _applySearchTabQuery(String query) {
+    setState(() {
+      _searchTabActiveRegion = null;
+      _searchTabQuery = query;
+      _searchTabController.text = query;
+      _searchTabController.selection = TextSelection.collapsed(
+        offset: query.length,
+      );
+    });
+  }
+
+  Widget _buildLocationSearchGuideCard(ColorScheme colorScheme) {
+    String countrySuffix(String country) {
+      if (country == 'United States') {
+        return 'USA';
+      }
+      if (country == 'Canada') {
+        return 'Canada';
+      }
+      return '';
+    }
+
+    final scopedStateProvinceOptions = _searchTabGuideCountry == 'United States'
+        ? _usStateOptions
+        : _searchTabGuideCountry == 'Canada'
+        ? _canadaProvinceOptions
+        : const <String>[];
+
+    final groups = <Map<String, Object>>[
+      {
+        'title': 'Search by US Region',
+        'examples': <String>[
+          'Northeast Region, USA',
+          'Southeast Region, USA',
+          'Midwest Region, USA',
+          'Southwest Region, USA',
+          'Rocky Mountain Region, USA',
+          'West Coast Region, USA',
+          'AK, HI & US Territories',
+        ],
+      },
+    ];
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.travel_explore, color: colorScheme.primary),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Location Search',
+                    style: Theme.of(context).textTheme.titleMedium,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                IconButton(
+                  tooltip: _searchTabLocationGuideExpanded
+                      ? 'Collapse location search'
+                      : 'Expand location search',
+                  onPressed: () {
+                    setState(() {
+                      _searchTabLocationGuideExpanded =
+                          !_searchTabLocationGuideExpanded;
+                    });
+                  },
+                  icon: Icon(
+                    _searchTabLocationGuideExpanded
+                        ? Icons.expand_less
+                        : Icons.expand_more,
+                  ),
+                ),
+              ],
+            ),
+            if (_searchTabLocationGuideExpanded) ...[
+              const SizedBox(height: 10),
+              Text(
+                'Search by Country',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: Colors.blueGrey.shade700,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: <Map<String, String>>[
+                  {'label': 'United States', 'filter': 'USA'},
+                  {'label': 'Canada', 'filter': 'Canada'},
+                  {'label': 'International', 'filter': 'International'},
+                ]
+                    .map((entry) => ChoiceChip(
+                          label: Text(entry['label']!),
+                          selected: entry['label'] == _searchTabGuideCountry,
+                          onSelected: (_) {
+                            setState(() {
+                              _searchTabGuideCountry = entry['label']!;
+                              _searchTabLocationFilter = entry['filter']!;
+                              _searchTabPendingLocationFilter = entry['filter']!;
+                              _searchTabQuery = '';
+                              _searchTabController.clear();
+                            });
+                          },
+                        ))
+                    .toList(),
+              ),
+              const SizedBox(height: 10),
+              if (scopedStateProvinceOptions.isNotEmpty) ...[
+                Text(
+                  'Search by State/Province',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.blueGrey.shade700,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Autocomplete<String>(
+                  key: ValueKey(
+                    'guide-state-$_searchTabGuideCountry-$_searchTabGuideStateResetCount',
+                  ),
+                  optionsBuilder: (textEditingValue) {
+                    final query = textEditingValue.text.trim().toLowerCase();
+                    if (query.isEmpty) {
+                      return scopedStateProvinceOptions;
+                    }
+                    final exactAbbrev = _stateProvinceAbbreviations.entries
+                        .where(
+                          (entry) =>
+                              entry.value.toLowerCase() == query &&
+                              scopedStateProvinceOptions.contains(entry.key),
+                        )
+                        .map((entry) => entry.key)
+                        .toList();
+                    if (exactAbbrev.isNotEmpty) return exactAbbrev;
+                    return scopedStateProvinceOptions.where((option) {
+                      final optionLower = option.toLowerCase();
+                      final abbreviation =
+                          (_stateProvinceAbbreviations[option] ?? '')
+                              .toLowerCase();
+                      final words = optionLower.split(RegExp(r'[\s-]+'));
+                      return optionLower.startsWith(query) ||
+                          words.any((word) => word.startsWith(query)) ||
+                          abbreviation.startsWith(query);
+                    });
+                  },
+                  onSelected: (selection) {
+                    final suffix = countrySuffix(_searchTabGuideCountry);
+                    final query =
+                        suffix.isEmpty ? selection : '$selection, $suffix';
+                    setState(() {
+                      _searchTabLocationFilter = 'all';
+                      _searchTabPendingLocationFilter = 'all';
+                    });
+                    _applySearchTabQuery(query);
+                  },
+                  optionsViewBuilder: (context, onSelected, options) {
+                    final optionList = options.toList(growable: false);
+                    return Align(
+                      alignment: Alignment.topLeft,
+                      child: Material(
+                        elevation: 4,
+                        borderRadius: BorderRadius.circular(8),
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(
+                            maxHeight: 240,
+                            minWidth: 280,
+                          ),
+                          child: ListView.builder(
+                            padding: EdgeInsets.zero,
+                            shrinkWrap: true,
+                            itemCount: optionList.length,
+                            itemBuilder: (context, index) {
+                              final option = optionList[index];
+                              return Builder(
+                                builder: (itemContext) {
+                                  final isHighlighted =
+                                      AutocompleteHighlightedOption.of(
+                                        itemContext,
+                                      ) == index;
+                                  if (isHighlighted) {
+                                    SchedulerBinding.instance
+                                        .addPostFrameCallback((_) {
+                                          Scrollable.ensureVisible(
+                                            itemContext,
+                                            alignment: 0.5,
+                                            duration: Duration.zero,
+                                          );
+                                        });
+                                  }
+                                  return Container(
+                                    color: isHighlighted
+                                        ? Theme.of(
+                                            itemContext,
+                                          ).colorScheme.primaryContainer
+                                        : null,
+                                    child: ListTile(
+                                      dense: true,
+                                      title: Text(_stateProvinceLabel(option)),
+                                      onTap: () => onSelected(option),
+                                    ),
+                                  );
+                                },
+                              );
+                            },
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                  fieldViewBuilder:
+                      (context, textEditingController, focusNode, onFieldSubmitted) {
+                        return TextField(
+                          controller: textEditingController,
+                          focusNode: focusNode,
+                          decoration: InputDecoration(
+                            labelText: _searchTabGuideCountry == 'United States'
+                                ? 'Type a US state…'
+                                : 'Type a Canadian province…',
+                            border: const OutlineInputBorder(),
+                            isDense: true,
+                          ),
+                          onSubmitted: (_) => onFieldSubmitted(),
+                        );
+                      },
+                ),
+                const SizedBox(height: 10),
+              ],
+              Text(
+                'Search by City',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: Colors.blueGrey.shade700,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _searchTabCityController,
+                      decoration: const InputDecoration(
+                        hintText: 'Enter City here...',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                      onSubmitted: (value) {
+                        final trimmed = value.trim();
+                        if (trimmed.isNotEmpty) {
+                          _applySearchTabQuery(trimmed);
+                        }
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    icon: const Icon(Icons.search),
+                    tooltip: 'Search city',
+                    onPressed: () {
+                      final trimmed = _searchTabCityController.text.trim();
+                      if (trimmed.isNotEmpty) {
+                        _applySearchTabQuery(trimmed);
+                      }
+                    },
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              ...groups.map((group) {
+                final title = group['title']! as String;
+                final examples = group['examples']! as List<String>;
+                if (title == 'Search by US Region' &&
+                    _searchTabGuideCountry != 'United States') {
+                  return const SizedBox.shrink();
+                }
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.blueGrey.shade700,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      LayoutBuilder(
+                        builder: (context, constraints) {
+                          final btnWidth = (constraints.maxWidth - 8) / 2;
+                          final rows = <Widget>[];
+                          for (int i = 0; i < examples.length; i += 2) {
+                            final a = examples[i];
+                            final b =
+                                i + 1 < examples.length ? examples[i + 1] : null;
+                            final isLoneItem =
+                                b == null && examples.length.isOdd;
+                            rows.add(
+                              Row(
+                                children: [
+                                  SizedBox(
+                                    width: isLoneItem
+                                        ? constraints.maxWidth
+                                        : btnWidth,
+                                    child: OutlinedButton(
+                                      onPressed: () {
+                                        setState(() {
+                                          _searchTabActiveRegion = a;
+                                          _searchTabQuery = '';
+                                          _searchTabController.clear();
+                                        });
+                                      },
+                                      style: OutlinedButton.styleFrom(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 6,
+                                          vertical: 6,
+                                        ),
+                                        shape: const StadiumBorder(),
+                                        tapTargetSize:
+                                            MaterialTapTargetSize.shrinkWrap,
+                                      ),
+                                      child: Text(
+                                        a,
+                                        textAlign: TextAlign.center,
+                                        style:
+                                            const TextStyle(fontSize: 12),
+                                      ),
+                                    ),
+                                  ),
+                                  if (b != null) ...[
+                                    const SizedBox(width: 8),
+                                    SizedBox(
+                                      width: btnWidth,
+                                      child: OutlinedButton(
+                                        onPressed: () {
+                                          setState(() {
+                                            _searchTabActiveRegion = b;
+                                            _searchTabQuery = '';
+                                            _searchTabController.clear();
+                                          });
+                                        },
+                                        style: OutlinedButton.styleFrom(
+                                          padding:
+                                              const EdgeInsets.symmetric(
+                                            horizontal: 6,
+                                            vertical: 6,
+                                          ),
+                                          shape: const StadiumBorder(),
+                                          tapTargetSize:
+                                              MaterialTapTargetSize.shrinkWrap,
+                                        ),
+                                        child: Text(
+                                          b,
+                                          textAlign: TextAlign.center,
+                                          style:
+                                              const TextStyle(fontSize: 12),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            );
+                            if (i + 2 < examples.length) {
+                              rows.add(const SizedBox(height: 8));
+                            }
+                          }
+                          return Column(children: rows);
+                        },
+                      ),
+                    ],
+                  ),
+                );
+              }),
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: () {
+                    setState(() {
+                      _searchTabActiveRegion = null;
+                      _searchTabQuery = '';
+                      _searchTabController.clear();
+                      _searchTabCityController.clear();
+                      _searchTabGuideCountry = 'United States';
+                      _searchTabGuideStateResetCount++;
+                      _searchTabLocationFilter = 'all';
+                      _searchTabPendingLocationFilter = 'all';
+                    });
+                  },
+                  icon: const Icon(Icons.clear, size: 16),
+                  label: const Text('Reset'),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildResponsiveTabContent(Widget child) {
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -9701,8 +10531,6 @@ class _MyHomePageState extends State<MyHomePage> {
                                                 _jobSeekerProfile,
                                               );
                                           if (isScopeMismatch) {
-                                            final isHelicopter =
-                                                job.airframeScope == 'Helicopter';
                                             matchBadge = Tooltip(
                                               message:
                                                   'Airframe category mismatch — '
@@ -9723,40 +10551,23 @@ class _MyHomePageState extends State<MyHomePage> {
                                                   borderRadius:
                                                       BorderRadius.circular(12),
                                                 ),
-                                                child: Row(
-                                                  mainAxisSize: MainAxisSize.min,
-                                                  children: [
-                                                    Icon(
-                                                      isHelicopter
-                                                          ? Icons.air
-                                                          : Icons.flight,
-                                                      color: Colors.white,
-                                                      size: 14,
-                                                    ),
-                                                    const SizedBox(width: 4),
-                                                    Text(
-                                                      job.airframeScope,
-                                                      style: const TextStyle(
-                                                        color: Colors.white,
-                                                        fontSize: 12,
-                                                        fontWeight:
-                                                            FontWeight.bold,
-                                                      ),
-                                                    ),
-                                                  ],
+                                                child: Text(
+                                                  job.airframeScope,
+                                                  style: const TextStyle(
+                                                    color: Colors.white,
+                                                    fontSize: 12,
+                                                    fontWeight: FontWeight.bold,
+                                                  ),
                                                 ),
                                               ),
                                             );
                                           } else {
                                             Color badgeColor = Colors.red;
-                                            String badgeIcon = '✗';
                                             if (match.matchPercentage >= 80) {
                                               badgeColor = Colors.green;
-                                              badgeIcon = '✓';
                                             } else if (match.matchPercentage >=
                                                 50) {
                                               badgeColor = Colors.orange;
-                                              badgeIcon = '⚠';
                                             }
                                             final missingText = match
                                                 .missingRequirements
@@ -9765,8 +10576,8 @@ class _MyHomePageState extends State<MyHomePage> {
                                             matchBadge = Tooltip(
                                               message:
                                                   match.matchPercentage >= 80
-                                                      ? 'Strong match. Your profile exceeds requirements.'
-                                                      : 'Growth opportunity. Your profile is developing: $missingText',
+                                                      ? 'Strong match. Your profile meets or exceeds requirements.'
+                                                      : 'Still needed: $missingText',
                                               child: Container(
                                                 margin: EdgeInsets.only(
                                                   left: isCompactHeader ? 0 : 8,
@@ -9783,7 +10594,7 @@ class _MyHomePageState extends State<MyHomePage> {
                                                       BorderRadius.circular(12),
                                                 ),
                                                 child: Text(
-                                                  '$badgeIcon ${match.matchPercentage}%',
+                                                  '${match.matchPercentage}%',
                                                   style: const TextStyle(
                                                     color: Colors.white,
                                                     fontSize: 12,
@@ -9833,52 +10644,6 @@ class _MyHomePageState extends State<MyHomePage> {
                                                                           .w600,
                                                                 ),
                                                           ),
-                                                          if (_profileType ==
-                                                                  ProfileType
-                                                                      .jobSeeker &&
-                                                              !job.isExternal &&
-                                                              job.autoRejectThreshold >
-                                                                  0)
-                                                            Tooltip(
-                                                              message:
-                                                                  'Employer auto-rejects applications under ${job.autoRejectThreshold}% match.',
-                                                              child: Container(
-                                                                padding:
-                                                                    const EdgeInsets.symmetric(
-                                                                      horizontal:
-                                                                          8,
-                                                                      vertical:
-                                                                          3,
-                                                                    ),
-                                                                decoration: BoxDecoration(
-                                                                  color: Colors
-                                                                      .blueGrey
-                                                                      .shade50,
-                                                                  borderRadius:
-                                                                      BorderRadius.circular(
-                                                                        999,
-                                                                      ),
-                                                                  border: Border.all(
-                                                                    color: Colors
-                                                                        .blueGrey
-                                                                        .shade200,
-                                                                  ),
-                                                                ),
-                                                                child: Text(
-                                                                  'Auto-Reject < ${job.autoRejectThreshold}%',
-                                                                  style: TextStyle(
-                                                                    fontSize:
-                                                                        11,
-                                                                    fontWeight:
-                                                                        FontWeight
-                                                                            .w700,
-                                                                    color: Colors
-                                                                        .blueGrey
-                                                                        .shade800,
-                                                                  ),
-                                                                ),
-                                                              ),
-                                                            ),
                                                           if (_profileType ==
                                                                   ProfileType
                                                                       .employer &&
@@ -10184,13 +10949,13 @@ class _MyHomePageState extends State<MyHomePage> {
         final String matchLabel;
         if (app.isPerfectMatch) {
           badgeColor = Colors.green.shade100;
-          matchLabel = '🟢 ${app.matchPercentage}% Perfect Match';
+          matchLabel = '${app.matchPercentage}% Match';
         } else if (app.isGoodMatch) {
           badgeColor = Colors.yellow.shade100;
-          matchLabel = '🟡 ${app.matchPercentage}% Good Match';
+          matchLabel = '${app.matchPercentage}% Match';
         } else {
           badgeColor = Colors.red.shade100;
-          matchLabel = '🔴 ${app.matchPercentage}% Growth Opportunity';
+          matchLabel = '${app.matchPercentage}% Match';
         }
 
         final statusLabel = switch (app.status) {
@@ -10953,7 +11718,6 @@ class _MyHomePageState extends State<MyHomePage> {
   void _collapseAllFilterSections() {
     _searchTabEmploymentTypeExpanded = false;
     _searchTabPositionExpanded = false;
-    _searchTabLocationExpanded = false;
     _searchTabFaaRuleExpanded = false;
     _searchTabAirframeScopeExpanded = false;
     _searchTabCertificateExpanded = false;
@@ -11106,7 +11870,6 @@ class _MyHomePageState extends State<MyHomePage> {
       !pendingInstructorHourFilters.contains('all') ||
       !pendingCertificateFilters.contains('all') ||
       !pendingRatingFilters.contains('all');
-
     List<String> orderOptionsByPreference(
       List<String> options,
       List<String> preferredOrder,
@@ -11551,6 +12314,16 @@ class _MyHomePageState extends State<MyHomePage> {
       );
     }
 
+    if (_searchTabActiveRegion != null) {
+      addActiveFilter(
+        'Region: ${_searchTabActiveRegion!.replaceAll(', USA', '')}',
+        () {
+          setState(() {
+            _searchTabActiveRegion = null;
+          });
+        },
+      );
+    }
     if (_searchTabQuery.isNotEmpty) {
       addActiveFilter('Query: "$_searchTabQuery"', () {
         setState(() {
@@ -12122,46 +12895,53 @@ class _MyHomePageState extends State<MyHomePage> {
                   ),
                 ),
                 const SizedBox(height: 12),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(maxWidth: isNarrowSearchLayout ? 420 : 360),
-                    child: AnimatedSwitcher(
-                      duration: const Duration(milliseconds: 220),
-                      child: _searchTabPrimaryFiltersDrawerOpen
-                          ? Card(
-                              key: const ValueKey('search-primary-filters-open'),
-                              clipBehavior: Clip.antiAlias,
-                              child: SizedBox(
-                                key: _searchTabPrimaryFiltersCardKey,
-                                height: isNarrowSearchLayout ? 540 : 580,
-                                child: Column(
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Card(
+                        key: const ValueKey('search-primary-filters-open'),
+                        clipBehavior: Clip.antiAlias,
+                        child: SizedBox(
+                          key: _searchTabPrimaryFiltersCardKey,
+                          height: _searchTabPrimaryFiltersDrawerOpen
+                              ? (isNarrowSearchLayout ? 540 : 580)
+                              : null,
+                          child: Column(
+                            children: [
+                              Padding(
+                                key: _searchTabFiltersHeadingKey,
+                                padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
+                                child: Row(
                                   children: [
-                                    Padding(
-                                      key: _searchTabFiltersHeadingKey,
-                                      padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
-                                      child: Row(
-                                        children: [
-                                          Icon(Icons.tune, color: colorScheme.primary),
-                                          const SizedBox(width: 8),
-                                          Text(
-                                            'Filters',
-                                            style: Theme.of(context).textTheme.titleMedium,
-                                          ),
-                                          const Spacer(),
-                                          IconButton(
-                                            tooltip: 'Close filters',
-                                            onPressed: () {
-                                              setState(() {
-                                                _searchTabPrimaryFiltersDrawerOpen = false;
-                                                _searchTabFiltersPinned = false;
-                                              });
-                                            },
-                                            icon: const Icon(Icons.close),
-                                          ),
-                                        ],
+                                    Icon(Icons.tune, color: colorScheme.primary),
+                                    const SizedBox(width: 8),
+                                    Text(
+                                      'Filters',
+                                      style: Theme.of(context).textTheme.titleMedium,
+                                    ),
+                                    const Spacer(),
+                                    IconButton(
+                                      tooltip: _searchTabPrimaryFiltersDrawerOpen
+                                          ? 'Collapse filters panel'
+                                          : 'Expand filters panel',
+                                      onPressed: () {
+                                        setState(() {
+                                          _searchTabPrimaryFiltersDrawerOpen =
+                                              !_searchTabPrimaryFiltersDrawerOpen;
+                                          _searchTabFiltersPinned = false;
+                                        });
+                                      },
+                                      icon: Icon(
+                                        _searchTabPrimaryFiltersDrawerOpen
+                                            ? Icons.expand_less
+                                            : Icons.expand_more,
                                       ),
                                     ),
+                                  ],
+                                ),
+                              ),
+                              if (_searchTabPrimaryFiltersDrawerOpen) ...[
                                     const Divider(height: 1),
                                     Expanded(
                                       child: SingleChildScrollView(
@@ -12231,42 +13011,6 @@ class _MyHomePageState extends State<MyHomePage> {
                                                       _encodeSearchTabMultiFilter(
                                                         values,
                                                       );
-                                                  _searchTabFiltersPinned = true;
-                                                });
-                                                _pinFiltersCardBelowTabs();
-                                              },
-                                            ),
-                                            const SizedBox(height: 10),
-                                            buildFilterOptionBoxes(
-                                              title: 'Location',
-                                              options: locationOptions,
-                                              selectedValues: {pendingLocation},
-                                              allLabel: 'All Locations',
-                                              isExpanded:
-                                                  _searchTabLocationExpanded,
-                                              headerKey:
-                                                  _searchTabLocationHeaderKey,
-                                              onToggle: () {
-                                                _toggleExclusiveFilterSection(
-                                                  isCurrentlyExpanded:
-                                                      _searchTabLocationExpanded,
-                                                  expandSection: () {
-                                                    _searchTabLocationExpanded = true;
-                                                  },
-                                                  headerKey:
-                                                      _searchTabLocationHeaderKey,
-                                                );
-                                              },
-                                              onSelected: (values) {
-                                                setState(() {
-                                                  if (values.contains('all') ||
-                                                      values.isEmpty) {
-                                                    _searchTabPendingLocationFilter =
-                                                        'all';
-                                                  } else {
-                                                    _searchTabPendingLocationFilter =
-                                                        values.first;
-                                                  }
                                                   _searchTabFiltersPinned = true;
                                                 });
                                                 _pinFiltersCardBelowTabs();
@@ -12586,8 +13330,6 @@ class _MyHomePageState extends State<MyHomePage> {
                                                           );
                                                         _searchTabSort = pendingSort;
                                                         _searchTabFiltersPinned = false;
-                                                        _searchTabPrimaryFiltersDrawerOpen =
-                                                            false;
                                                       });
                                                     }
                                                   : null,
@@ -12597,30 +13339,24 @@ class _MyHomePageState extends State<MyHomePage> {
                                         ],
                                       ),
                                     ),
+                              ],
                                   ],
                                 ),
                               ),
-                            )
-                          : Card(
-                              key: const ValueKey('search-primary-filters-closed'),
-                              child: Padding(
-                                padding: const EdgeInsets.all(10),
-                                child: OutlinedButton.icon(
-                                  onPressed: () {
-                                    setState(() {
-                                      _searchTabPrimaryFiltersDrawerOpen = true;
-                                      _searchTabFiltersPinned = true;
-                                    });
-                                    _pinFiltersCardBelowTabs();
-                                  },
-                                  icon: const Icon(Icons.tune),
-                                  label: const Text('Open Filters'),
-                                ),
-                              ),
-                            ),
-                    ),
-                  ),
+                        ),
+                      ),
+                    if (!isNarrowSearchLayout) ...[
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: _buildLocationSearchGuideCard(colorScheme),
+                      ),
+                    ],
+                  ],
                 ),
+                if (isNarrowSearchLayout) ...[
+                  const SizedBox(height: 10),
+                  _buildLocationSearchGuideCard(colorScheme),
+                ],
                 const SizedBox(height: 10),
                 Card(
                   child: Padding(
@@ -12864,35 +13600,6 @@ class _MyHomePageState extends State<MyHomePage> {
                                       fontWeight: FontWeight.w700,
                                     ),
                                   ),
-                                  if (!job.isExternal &&
-                                      job.autoRejectThreshold > 0)
-                                    Tooltip(
-                                      message:
-                                          'Employer auto-rejects applications under ${job.autoRejectThreshold}% match.',
-                                      child: Container(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 8,
-                                          vertical: 3,
-                                        ),
-                                        decoration: BoxDecoration(
-                                          color: Colors.blueGrey.shade50,
-                                          borderRadius: BorderRadius.circular(
-                                            999,
-                                          ),
-                                          border: Border.all(
-                                            color: Colors.blueGrey.shade200,
-                                          ),
-                                        ),
-                                        child: Text(
-                                          'Auto-Reject < ${job.autoRejectThreshold}%',
-                                          style: TextStyle(
-                                            fontSize: 11,
-                                            fontWeight: FontWeight.w700,
-                                            color: Colors.blueGrey.shade800,
-                                          ),
-                                        ),
-                                      ),
-                                    ),
                                   if (job.isExternal)
                                     Container(
                                       padding: const EdgeInsets.symmetric(
@@ -12969,25 +13676,12 @@ class _MyHomePageState extends State<MyHomePage> {
                                       'Airframe category mismatch — '
                                       'this job requires ${job.airframeScope} experience '
                                       'but your profile is ${_jobSeekerProfile.airframeScope}.',
-                                  child: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Icon(
-                                        job.airframeScope == 'Helicopter'
-                                            ? Icons.air
-                                            : Icons.flight,
-                                        color: Colors.white,
-                                        size: 16,
-                                      ),
-                                      const SizedBox(width: 4),
-                                      Text(
-                                        job.airframeScope,
-                                        style: const TextStyle(
-                                          color: Colors.white,
-                                          fontWeight: FontWeight.w700,
-                                        ),
-                                      ),
-                                    ],
+                                  child: Text(
+                                    job.airframeScope,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.w700,
+                                    ),
                                   ),
                                 )
                               : Text(
@@ -13205,6 +13899,114 @@ class _MyHomePageState extends State<MyHomePage> {
 
   List<String> _stateProvinceOptionsForCountry(String rawCountry) {
     return stateProvinceOptionsForCountry(rawCountry);
+  }
+
+  Widget _buildCreateLocationStateField() {
+    return Autocomplete<String>(
+      key: ValueKey(
+        'create-location-state-${_createLocationStateController.text}',
+      ),
+      initialValue: TextEditingValue(text: _createLocationStateController.text),
+      optionsBuilder: (textEditingValue) {
+        final scopedOptions = _stateProvinceOptionsForCountry('USA');
+        final query = textEditingValue.text.trim().toLowerCase();
+        if (query.isEmpty) return scopedOptions;
+        final exactAbbrevMatches = _stateProvinceAbbreviations.entries
+            .where(
+              (e) =>
+                  e.value.toLowerCase() == query &&
+                  scopedOptions.contains(e.key),
+            )
+            .map((e) => e.key)
+            .toList();
+        if (exactAbbrevMatches.isNotEmpty) return exactAbbrevMatches;
+        return scopedOptions.where((option) {
+          final lower = option.toLowerCase();
+          final abbr =
+              (_stateProvinceAbbreviations[option] ?? '').toLowerCase();
+          final words = lower.split(RegExp(r'[\s-]+'));
+          return lower.startsWith(query) ||
+              words.any((w) => w.startsWith(query)) ||
+              abbr.startsWith(query);
+        });
+      },
+      onSelected: (selection) {
+        setState(() {
+          _createLocationStateController.text = selection;
+        });
+      },
+      optionsViewBuilder: (context, onSelected, options) {
+        final optionList = options.toList(growable: false);
+        return Align(
+          alignment: Alignment.topLeft,
+          child: Material(
+            elevation: 4,
+            borderRadius: BorderRadius.circular(8),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 240, minWidth: 280),
+              child: ListView.builder(
+                padding: EdgeInsets.zero,
+                shrinkWrap: true,
+                itemCount: optionList.length,
+                itemBuilder: (context, index) {
+                  final option = optionList[index];
+                  return Builder(
+                    builder: (itemContext) {
+                      final isHighlighted =
+                          AutocompleteHighlightedOption.of(itemContext) == index;
+                      if (isHighlighted) {
+                        SchedulerBinding.instance.addPostFrameCallback((_) {
+                          Scrollable.ensureVisible(
+                            itemContext,
+                            alignment: 0.5,
+                            duration: Duration.zero,
+                          );
+                        });
+                      }
+                      return Container(
+                        color: isHighlighted
+                            ? Theme.of(
+                                itemContext,
+                              ).colorScheme.primaryContainer
+                            : null,
+                        child: ListTile(
+                          dense: true,
+                          title: Text(_stateProvinceLabel(option)),
+                          onTap: () => onSelected(option),
+                        ),
+                      );
+                    },
+                  );
+                },
+              ),
+            ),
+          ),
+        );
+      },
+      fieldViewBuilder: (context, textCtrl, focusNode, onFieldSubmitted) {
+        if (textCtrl.text != _createLocationStateController.text) {
+          textCtrl.value = TextEditingValue(
+            text: _createLocationStateController.text,
+            selection: TextSelection.collapsed(
+              offset: _createLocationStateController.text.length,
+            ),
+          );
+        }
+        return TextField(
+          controller: textCtrl,
+          focusNode: focusNode,
+          decoration: const InputDecoration(
+            labelText: 'State / Province',
+            border: OutlineInputBorder(),
+            isDense: true,
+          ),
+          onSubmitted: (_) => onFieldSubmitted(),
+          onChanged: (value) {
+            _createLocationStateController.text = value;
+          },
+        );
+      },
+    );
   }
 
   Widget _buildEmployerCountryField() {
@@ -13685,6 +14487,167 @@ class _MyHomePageState extends State<MyHomePage> {
                       ],
                     ),
                   ),
+                  const SizedBox(height: 12),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      border: Border.all(color: Colors.grey.shade300),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Notification Preferences',
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        CheckboxListTile(
+                          dense: true,
+                          contentPadding: EdgeInsets.zero,
+                          title: const Text(
+                            'Email on new non-rejected applications',
+                          ),
+                          subtitle: const Text(
+                            'Notifies your hiring contact when a new applicant clears auto-reject.',
+                          ),
+                          value: _employerNotifyNewNonRejectedApplication,
+                          onChanged: (checked) {
+                            setState(() {
+                              _employerNotifyNewNonRejectedApplication =
+                                  checked ?? true;
+                            });
+                          },
+                        ),
+                        CheckboxListTile(
+                          dense: true,
+                          contentPadding: EdgeInsets.zero,
+                          title: const Text('Email on application status changes'),
+                          subtitle: const Text(
+                            'Sends updates when applicants move to reviewed/interested/rejected.',
+                          ),
+                          value: _employerNotifyApplicationStatusChanges,
+                          onChanged: (checked) {
+                            setState(() {
+                              _employerNotifyApplicationStatusChanges =
+                                  checked ?? false;
+                            });
+                          },
+                        ),
+                        CheckboxListTile(
+                          dense: true,
+                          contentPadding: EdgeInsets.zero,
+                          title: const Text('Email daily applicant digest'),
+                          subtitle: const Text(
+                            'Receives one daily summary of new applicant activity.',
+                          ),
+                          value: _employerNotifyDailyDigest,
+                          onChanged: (checked) {
+                            setState(() {
+                              _employerNotifyDailyDigest = checked ?? false;
+                            });
+                          },
+                        ),
+                        const SizedBox(height: 6),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: OutlinedButton.icon(
+                            onPressed: _sendingEmployerNotificationTestEmail
+                                ? null
+                                : _sendEmployerNotificationTestEmail,
+                            icon: _sendingEmployerNotificationTestEmail
+                                ? const SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : const Icon(Icons.mark_email_read_outlined),
+                            label: Text(
+                              _sendingEmployerNotificationTestEmail
+                                  ? 'Sending Test Email...'
+                                  : 'Send Test Email',
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Sends a test to the saved Hiring Contact Email for this employer profile.',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey.shade600,
+                          ),
+                        ),
+                        if (_lastEmployerNotificationTestAt != null) ...[
+                          const SizedBox(height: 10),
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: Colors.grey.shade50,
+                              border: Border.all(color: Colors.grey.shade300),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  _lastEmployerNotificationTestSucceeded == true
+                                      ? 'Last test email: Sent'
+                                      : 'Last test email: Failed',
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                    color: _lastEmployerNotificationTestSucceeded == true
+                                        ? Colors.green.shade800
+                                        : Colors.red.shade700,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  'At: ${_formatNotificationTestTimestamp(_lastEmployerNotificationTestAt!)}',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.grey.shade700,
+                                  ),
+                                ),
+                                if ((_lastEmployerNotificationTestMessage ?? '')
+                                    .trim()
+                                    .isNotEmpty) ...[
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    _lastEmployerNotificationTestMessage!,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: Colors.grey.shade700,
+                                    ),
+                                  ),
+                                ],
+                                const SizedBox(height: 6),
+                                Align(
+                                  alignment: Alignment.centerRight,
+                                  child: TextButton.icon(
+                                    onPressed: () =>
+                                        _clearEmployerNotificationTestStatus(
+                                          _currentEmployer.id,
+                                        ),
+                                    icon: const Icon(Icons.delete_outline),
+                                    label: const Text('Clear'),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
                 ] else ...[
                   Container(
                     margin: const EdgeInsets.symmetric(vertical: 6),
@@ -13901,6 +14864,33 @@ class _MyHomePageState extends State<MyHomePage> {
                       ],
                     ),
                   ),
+                  _buildSummarySectionCard(
+                    title: 'Notification Preferences',
+                    subtitle: 'How your hiring team receives updates',
+                    icon: Icons.notifications_outlined,
+                    child: Column(
+                      children: [
+                        _buildProfileSummaryRow(
+                          'New non-rejected applications',
+                          employer.notifyOnNewNonRejectedApplication
+                              ? 'Email enabled'
+                              : 'Email disabled',
+                        ),
+                        _buildProfileSummaryRow(
+                          'Application status changes',
+                          employer.notifyOnApplicationStatusChanges
+                              ? 'Email enabled'
+                              : 'Email disabled',
+                        ),
+                        _buildProfileSummaryRow(
+                          'Daily digest',
+                          employer.notifyDailyDigest
+                              ? 'Email enabled'
+                              : 'Email disabled',
+                        ),
+                      ],
+                    ),
+                  ),
                 ],
                 const SizedBox(height: 16),
               ],
@@ -13957,10 +14947,10 @@ class _MyHomePageState extends State<MyHomePage> {
                         .text
                         .trim(),
                     headquartersCity: _employerCityController.text.trim(),
-                    headquartersState: _employerStateController.text.trim(),
+                    headquartersState: normalizeStateProvinceValue(_employerStateController.text.trim()) ?? _employerStateController.text.trim(),
                     headquartersPostalCode: _employerPostalCodeController.text
                         .trim(),
-                    headquartersCountry: _employerCountryController.text.trim(),
+                    headquartersCountry: normalizeCountryValue(_employerCountryController.text.trim()) ?? _employerCountryController.text.trim(),
                     companyBannerUrl: _normalizeExternalUrl(
                       _employerBannerUrlController.text,
                     ),
@@ -13974,6 +14964,11 @@ class _MyHomePageState extends State<MyHomePage> {
                     companyDescription: _employerDescriptionController.text
                         .trim(),
                     companyBenefits: _selectedEmployerBenefits.toList()..sort(),
+                    notifyOnNewNonRejectedApplication:
+                      _employerNotifyNewNonRejectedApplication,
+                    notifyOnApplicationStatusChanges:
+                      _employerNotifyApplicationStatusChanges,
+                    notifyDailyDigest: _employerNotifyDailyDigest,
                   );
                   _updateEmployer(updated);
                   await _cleanupReplacedEmployerImages(
@@ -15792,9 +16787,10 @@ class _MyHomePageState extends State<MyHomePage> {
           backgroundColor: Theme.of(context).colorScheme.inversePrimary,
           title: Text(widget.title),
           actions: [
-            PopupMenuButton<String>(
-              key: const ValueKey('home-profile-switcher'),
-              icon: const Icon(Icons.person),
+            if (widget.adminDashboardBuilder != null)
+              PopupMenuButton<String>(
+                key: const ValueKey('home-profile-switcher'),
+                icon: const Icon(Icons.person),
               onSelected: (value) {
                 if (value == 'admin') {
                   if (widget.adminDashboardBuilder != null) {
@@ -15897,6 +16893,7 @@ class _MyHomePageState extends State<MyHomePage> {
                   _query = '';
                   _searchTabController.clear();
                   _searchTabQuery = '';
+                  _searchTabActiveRegion = null;
                   _searchTabTypeFilter = 'all';
                   _searchTabLocationFilter = 'all';
                   _searchTabPositionFilter = 'all';
@@ -15932,9 +16929,7 @@ class _MyHomePageState extends State<MyHomePage> {
               IconButton(
                 icon: const Icon(Icons.logout),
                 tooltip: 'Sign out',
-                onPressed: () async {
-                  await Supabase.instance.client.auth.signOut();
-                },
+                onPressed: _signOutFromHome,
               ),
           ],
           bottom: PreferredSize(
@@ -16293,6 +17288,131 @@ class JobDetailsPage extends StatelessWidget {
     }
   }
 
+  String _extractDescriptionSummary(String description) {
+    const detailsHeader = '\n\nExternal listing details:';
+    final markerIndex = description.indexOf(detailsHeader);
+    if (markerIndex < 0) {
+      return description.trim();
+    }
+    return description.substring(0, markerIndex).trim();
+  }
+
+  String _extractDetailLineValue(String description, String prefix) {
+    final lines = description.split('\n');
+    for (final line in lines) {
+      final trimmed = line.trim();
+      if (trimmed.startsWith(prefix)) {
+        return trimmed.substring(prefix.length).trim();
+      }
+    }
+    return '';
+  }
+
+  Widget _buildJobDescriptionContent(BuildContext context) {
+    final descriptionStyle = Theme.of(context).textTheme.bodyLarge;
+    final summaryText = _extractDescriptionSummary(job.description);
+
+    if (!job.isExternal) {
+      return _LinkifiedText(
+        text: summaryText,
+        style: descriptionStyle,
+        onTapUrl: (url) {
+          _openDetectedUrl(context, url);
+        },
+        onTapPhone: (phone) {
+          _openPhone(context, phone);
+        },
+      );
+    }
+
+    final externalName = (job.contactName?.trim().isNotEmpty ?? false)
+        ? job.contactName!.trim()
+        : _extractDetailLineValue(job.description, 'Contact Name:');
+    final externalPhoneRaw = (job.companyPhone?.trim().isNotEmpty ?? false)
+        ? job.companyPhone!.trim()
+        : (_extractDetailLineValue(job.description, 'Contact Phone:').isNotEmpty
+              ? _extractDetailLineValue(job.description, 'Contact Phone:')
+              : _extractDetailLineValue(job.description, 'Company Phone:'));
+    final externalPhoneDisplay = _formatPhoneNumber(externalPhoneRaw).isNotEmpty
+        ? _formatPhoneNumber(externalPhoneRaw)
+        : externalPhoneRaw;
+    final externalEmail = (job.contactEmail?.trim().isNotEmpty ?? false)
+        ? job.contactEmail!.trim()
+        : _extractDetailLineValue(job.description, 'Contact Email:');
+    final externalCompanyUrl = (job.companyUrl?.trim().isNotEmpty ?? false)
+        ? job.companyUrl!.trim()
+        : _extractDetailLineValue(job.description, 'Company URL:');
+
+    final hasExternalDetails =
+        externalName.isNotEmpty ||
+        externalPhoneDisplay.isNotEmpty ||
+        externalEmail.isNotEmpty ||
+        externalCompanyUrl.isNotEmpty;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (summaryText.isNotEmpty)
+          _LinkifiedText(
+            text: summaryText,
+            style: descriptionStyle,
+            onTapUrl: (url) {
+              _openDetectedUrl(context, url);
+            },
+            onTapPhone: (phone) {
+              _openPhone(context, phone);
+            },
+          ),
+        if (hasExternalDetails) ...[
+          if (summaryText.isNotEmpty) const SizedBox(height: 12),
+          Text(
+            'External listing details:',
+            style: descriptionStyle?.copyWith(fontWeight: FontWeight.w700),
+          ),
+          if (externalName.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(
+              'Contact Name: $externalName',
+              style: descriptionStyle,
+            ),
+          ],
+          if (externalPhoneDisplay.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(
+              'Contact Phone: $externalPhoneDisplay',
+              style: descriptionStyle,
+            ),
+          ],
+          if (externalEmail.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Contact Email: ', style: descriptionStyle),
+                Expanded(
+                  child: SelectableText(
+                    externalEmail,
+                    style: descriptionStyle,
+                  ),
+                ),
+              ],
+            ),
+          ],
+          if (externalCompanyUrl.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            _LinkifiedText(
+              text: 'Company URL: $externalCompanyUrl',
+              style: descriptionStyle,
+              onTapUrl: (url) {
+                _openDetectedUrl(context, url);
+              },
+            ),
+          ],
+        ],
+      ],
+    );
+  }
+
   bool get _hasPart135Rule {
     final rules = job.faaRules
         .map((rule) => rule.trim().toLowerCase())
@@ -16583,7 +17703,7 @@ class JobDetailsPage extends StatelessWidget {
                                                 padding: const EdgeInsets.only(
                                                   top: 6,
                                                 ),
-                                                child: Text(
+                                                child: SelectableText(
                                                   'Email: $externalContactEmail',
                                                 ),
                                               ),
@@ -16812,231 +17932,247 @@ class JobDetailsPage extends StatelessWidget {
                               ),
                             ),
                             const SizedBox(height: 12),
-                            if (profile != null)
-                              _buildDetailSection(
-                                context: context,
-                                title: 'Your Match',
-                                icon: Icons.analytics_outlined,
-                                child: _buildComparisonView(context),
-                              ),
-                            // ── Requirements card ──────────────────────────
-                            Container(
-                              width: double.infinity,
-                              margin: const EdgeInsets.only(top: 12),
-                              padding: const EdgeInsets.all(14),
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                border: Border.all(
-                                  color: Colors.grey.shade300,
-                                ),
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  // Card header
-                                  Row(
+                            // ── Your Match + Requirements (responsive layout) ──
+                            LayoutBuilder(
+                              builder: (context, constraints) {
+                                final isWide = profile != null &&
+                                    constraints.maxWidth >= 700;
+
+                                final requirementsCard = Container(
+                                  width: double.infinity,
+                                  padding: const EdgeInsets.all(14),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white,
+                                    border: Border.all(
+                                      color: Colors.grey.shade300,
+                                    ),
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
                                     children: [
-                                      Icon(
-                                        Icons.checklist_outlined,
-                                        size: 18,
-                                        color: Colors.blueGrey.shade700,
+                                      // Card header
+                                      Row(
+                                        crossAxisAlignment: CrossAxisAlignment.center,
+                                        children: [
+                                          Icon(
+                                            Icons.checklist_outlined,
+                                            size: 18,
+                                            color: Colors.blueGrey.shade700,
+                                          ),
+                                          const SizedBox(width: 8),
+                                          Expanded(
+                                            child: Text(
+                                              'Requirements',
+                                              style: Theme.of(context)
+                                                  .textTheme
+                                                  .titleMedium
+                                                  ?.copyWith(
+                                                    fontWeight: FontWeight.bold,
+                                                  ),
+                                            ),
+                                          ),
+                                        ],
                                       ),
-                                      const SizedBox(width: 8),
-                                      Expanded(
-                                        child: Text(
-                                          'Requirements',
-                                          style: Theme.of(context)
-                                              .textTheme
-                                              .titleMedium
-                                              ?.copyWith(
-                                                fontWeight: FontWeight.bold,
-                                              ),
+                                      // ── Certificates & Ratings ──
+                                      const SizedBox(height: 14),
+                                      _buildRequirementsSubsection(
+                                        context,
+                                        'Airframe Category',
+                                        Icons.flight_outlined,
+                                        Text(
+                                          job.airframeScope.isNotEmpty ? job.airframeScope : 'Not specified',
+                                          style: const TextStyle(fontSize: 13, color: Colors.black87),
                                         ),
                                       ),
-                                    ],
-                                  ),
-                                  // ── Certificates & Ratings ──
-                                  const SizedBox(height: 14),
-                                  _buildRequirementsSubsection(
-                                    context,
-                                    'Airframe Category',
-                                    Icons.flight_outlined,
-                                    _buildChipWrap([
-                                      Chip(label: Text(job.airframeScope)),
-                                    ]),
-                                  ),
-                                  if (job.faaCertificates.isNotEmpty) ...[
-                                    const SizedBox(height: 12),
-                                    _buildRequirementsSubsection(
-                                      context,
-                                      'FAA Certificates',
-                                      Icons.badge_outlined,
-                                      _buildChipWrap(
-                                        job.faaCertificates
-                                            .map(
-                                              (cert) => Chip(
-                                                label: Text(
-                                                  canonicalCertificateLabel(
-                                                    cert,
+                                      if (job.faaCertificates.isNotEmpty) ...[
+                                        const SizedBox(height: 12),
+                                        _buildRequirementsSubsection(
+                                          context,
+                                          'FAA Certificates',
+                                          Icons.badge_outlined,
+                                          Wrap(
+                                            spacing: 8,
+                                            runSpacing: 4,
+                                            children: job.faaCertificates
+                                                .map((cert) => Text(
+                                                      canonicalCertificateLabel(cert),
+                                                      style: const TextStyle(fontSize: 13, color: Colors.black87),
+                                                    ))
+                                                .toList(),
+                                          ),
+                                        ),
+                                      ],
+                                      if (job.requiredRatings.isNotEmpty) ...[
+                                        const SizedBox(height: 12),
+                                        _buildRequirementsSubsection(
+                                          context,
+                                          'Required Ratings',
+                                          Icons.fact_check_outlined,
+                                          Wrap(
+                                            spacing: 8,
+                                            runSpacing: 4,
+                                            children: job.requiredRatings
+                                                .map((r) => Text(
+                                                      r,
+                                                      style: const TextStyle(fontSize: 13, color: Colors.black87),
+                                                    ))
+                                                .toList(),
+                                          ),
+                                        ),
+                                      ],
+                                      if (job.typeRatingsRequired
+                                          .isNotEmpty) ...[
+                                        const SizedBox(height: 12),
+                                        _buildRequirementsSubsection(
+                                          context,
+                                          'Type Ratings',
+                                          Icons.confirmation_number_outlined,
+                                          Wrap(
+                                            spacing: 8,
+                                            runSpacing: 4,
+                                            children: job.typeRatingsRequired
+                                                .map((r) => Text(
+                                                      r,
+                                                      style: const TextStyle(fontSize: 13, color: Colors.black87),
+                                                    ))
+                                                .toList(),
+                                          ),
+                                        ),
+                                      ],
+                                      // ── Flight Time ──
+                                      if (showPart135SummaryChip ||
+                                          standardFlightHourEntries
+                                              .isNotEmpty) ...[
+                                        const SizedBox(height: 12),
+                                        _buildRequirementsSubsection(
+                                          context,
+                                          'Flight Hours',
+                                          Icons.schedule_outlined,
+                                          Wrap(
+                                            spacing: 8,
+                                            runSpacing: 4,
+                                            children: [
+                                              if (showPart135SummaryChip)
+                                                Tooltip(
+                                                  message: baselineFlightTooltip ?? baselineFlightLabel,
+                                                  child: Text(
+                                                    baselineFlightLabel,
+                                                    style: const TextStyle(fontSize: 13, color: Colors.black87),
                                                   ),
                                                 ),
+                                              ...standardFlightHourEntries.map(
+                                                (entry) => Text(
+                                                  _formatHoursRequirementLabel(
+                                                    entry.key,
+                                                    entry.value,
+                                                    job.preferredFlightHours.contains(entry.key),
+                                                  ),
+                                                  style: const TextStyle(fontSize: 13, color: Colors.black87),
+                                                ),
                                               ),
-                                            )
-                                            .toList(),
-                                      ),
-                                    ),
-                                  ],
-                                  if (job.requiredRatings.isNotEmpty) ...[
-                                    const SizedBox(height: 12),
-                                    _buildRequirementsSubsection(
-                                      context,
-                                      'Required Ratings',
-                                      Icons.fact_check_outlined,
-                                      _buildChipWrap(
-                                        job.requiredRatings
-                                            .map(
-                                              (r) => Chip(label: Text(r)),
-                                            )
-                                            .toList(),
-                                      ),
-                                    ),
-                                  ],
-                                  if (job.typeRatingsRequired.isNotEmpty) ...[
-                                    const SizedBox(height: 12),
-                                    _buildRequirementsSubsection(
-                                      context,
-                                      'Type Ratings',
-                                      Icons.confirmation_number_outlined,
-                                      _buildChipWrap(
-                                        job.typeRatingsRequired
-                                            .map(
-                                              (r) => Chip(label: Text(r)),
-                                            )
-                                            .toList(),
-                                      ),
-                                    ),
-                                  ],
-                                  // ── Flight Time ──
-                                  if (showPart135SummaryChip ||
-                                      standardFlightHourEntries.isNotEmpty) ...[
-                                    const SizedBox(height: 12),
-                                    _buildRequirementsSubsection(
-                                      context,
-                                      'Flight Hours',
-                                      Icons.schedule_outlined,
-                                      _buildChipWrap([
-                                        if (showPart135SummaryChip)
-                                          Tooltip(
-                                            message: baselineFlightTooltip ??
-                                                baselineFlightLabel,
-                                            child: _buildRequirementChip(
-                                              label: baselineFlightLabel,
-                                              isPreferred: false,
-                                            ),
-                                          ),
-                                        ...standardFlightHourEntries.map(
-                                          (entry) => _buildRequirementChip(
-                                            label: _formatHoursRequirementLabel(
-                                              entry.key,
-                                              entry.value,
-                                              job.preferredFlightHours.contains(
-                                                entry.key,
-                                              ),
-                                            ),
-                                            isPreferred: job.preferredFlightHours
-                                                .contains(entry.key),
+                                            ],
                                           ),
                                         ),
-                                      ]),
-                                    ),
-                                  ],
-                                  if (job.specialtyHoursByType.isNotEmpty) ...[
-                                    const SizedBox(height: 12),
-                                    _buildRequirementsSubsection(
-                                      context,
-                                      'Specialty Hours',
-                                      Icons.workspace_premium_outlined,
-                                      _buildChipWrap(
-                                        job.specialtyHoursByType.entries
-                                            .map(
-                                              (entry) => _buildRequirementChip(
-                                                label:
-                                                    _formatHoursRequirementLabel(
-                                                      entry.key,
-                                                      entry.value,
-                                                      job.preferredSpecialtyHours
-                                                          .contains(entry.key),
-                                                    ),
-                                                isPreferred: job
-                                                    .preferredSpecialtyHours
-                                                    .contains(entry.key),
-                                              ),
-                                            )
-                                            .toList(),
+                                      ],
+                                      if (job.specialtyHoursByType
+                                          .isNotEmpty) ...[
+                                        const SizedBox(height: 12),
+                                        _buildRequirementsSubsection(
+                                          context,
+                                          'Specialty Hours',
+                                          Icons.workspace_premium_outlined,
+                                          Wrap(
+                                            spacing: 8,
+                                            runSpacing: 4,
+                                            children: job.specialtyHoursByType.entries
+                                                .map((entry) => Text(
+                                                      _formatHoursRequirementLabel(
+                                                        entry.key,
+                                                        entry.value,
+                                                        job.preferredSpecialtyHours.contains(entry.key),
+                                                      ),
+                                                      style: const TextStyle(fontSize: 13, color: Colors.black87),
+                                                    ))
+                                                .toList(),
+                                          ),
+                                        ),
+                                      ],
+                                      if (instructorHourEntries
+                                          .isNotEmpty) ...[
+                                        const SizedBox(height: 12),
+                                        _buildRequirementsSubsection(
+                                          context,
+                                          'Instructor Hours',
+                                          Icons.school_outlined,
+                                          Wrap(
+                                            spacing: 8,
+                                            runSpacing: 4,
+                                            children: instructorHourEntries
+                                                .map((entry) => Text(
+                                                      _formatHoursRequirementLabel(
+                                                        entry.key,
+                                                        entry.value,
+                                                        job.preferredInstructorHours.contains(entry.key),
+                                                      ),
+                                                      style: const TextStyle(fontSize: 13, color: Colors.black87),
+                                                    ))
+                                                .toList(),
+                                          ),
+                                        ),
+                                      ],
+                                      // ── Aircraft Experience ──
+                                      if (job.aircraftFlown.isNotEmpty) ...[
+                                        const SizedBox(height: 12),
+                                        _buildRequirementsSubsection(
+                                          context,
+                                          'Aircraft Experience',
+                                          Icons.flight_outlined,
+                                          Wrap(
+                                            spacing: 8,
+                                            runSpacing: 4,
+                                            children: job.aircraftFlown
+                                                .map((a) => Text(
+                                                      a,
+                                                      style: const TextStyle(fontSize: 13, color: Colors.black87),
+                                                    ))
+                                                .toList(),
+                                          ),
+                                        ),
+                                      ],
+                                    ],
+                                  ),
+                                );
+
+                                if (isWide) {
+                                  return _buildWideComparisonGrid(context);
+                                }
+
+                                return Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    if (profile != null)
+                                      _buildDetailSection(
+                                        context: context,
+                                        title: 'Your Match',
+                                        icon: Icons.analytics_outlined,
+                                        child: _buildComparisonView(context),
                                       ),
-                                    ),
+                                    if (profile != null)
+                                      const SizedBox(height: 12),
+                                    requirementsCard,
                                   ],
-                                  if (instructorHourEntries.isNotEmpty) ...[
-                                    const SizedBox(height: 12),
-                                    _buildRequirementsSubsection(
-                                      context,
-                                      'Instructor Hours',
-                                      Icons.school_outlined,
-                                      _buildChipWrap(
-                                        instructorHourEntries
-                                            .map(
-                                              (entry) => _buildRequirementChip(
-                                                label:
-                                                    _formatHoursRequirementLabel(
-                                                      entry.key,
-                                                      entry.value,
-                                                      job.preferredInstructorHours
-                                                          .contains(entry.key),
-                                                    ),
-                                                isPreferred: job
-                                                    .preferredInstructorHours
-                                                    .contains(entry.key),
-                                              ),
-                                            )
-                                            .toList(),
-                                      ),
-                                    ),
-                                  ],
-                                  // ── Aircraft Experience ──
-                                  if (job.aircraftFlown.isNotEmpty) ...[
-                                    const SizedBox(height: 12),
-                                    _buildRequirementsSubsection(
-                                      context,
-                                      'Aircraft Experience',
-                                      Icons.flight_outlined,
-                                      _buildChipWrap(
-                                        job.aircraftFlown
-                                            .map(
-                                              (a) => Chip(label: Text(a)),
-                                            )
-                                            .toList(),
-                                      ),
-                                    ),
-                                  ],
-                                ],
-                              ),
+                                );
+                              },
                             ),
                             // ── Job Description ──────────────────────────────
                             _buildDetailSection(
                               context: context,
                               title: 'Job Description',
                               icon: Icons.description_outlined,
-                              child: _LinkifiedText(
-                                text: job.description,
-                                style: Theme.of(context).textTheme.bodyLarge,
-                                onTapUrl: (url) {
-                                  _openDetectedUrl(context, url);
-                                },
-                                onTapPhone: (phone) {
-                                  _openPhone(context, phone);
-                                },
-                              ),
+                              child: _buildJobDescriptionContent(context),
                             ),
                             if (job.benefits.isNotEmpty)
                               _buildDetailSection(
@@ -17244,6 +18380,7 @@ class JobDetailsPage extends StatelessWidget {
     required String title,
     required Widget child,
     IconData? icon,
+    Widget? trailing,
   }) {
     return Container(
       width: double.infinity,
@@ -17258,6 +18395,7 @@ class JobDetailsPage extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               if (icon != null) ...[
                 Icon(icon, size: 18, color: Colors.blueGrey.shade700),
@@ -17271,9 +18409,13 @@ class JobDetailsPage extends StatelessWidget {
                   ),
                 ),
               ),
+              if (trailing != null) ...[
+                const SizedBox(width: 8),
+                trailing,
+              ],
             ],
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 14),
           child,
         ],
       ),
@@ -17284,43 +18426,501 @@ class JobDetailsPage extends StatelessWidget {
     return Wrap(spacing: 8, runSpacing: 8, children: chips);
   }
 
+  Widget _buildRequirementTag({
+    required String label,
+    Color? textColor,
+    Color? borderColor,
+    Color? backgroundColor,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: backgroundColor ?? Colors.grey.shade50,
+        border: Border.all(color: borderColor ?? Colors.grey.shade300),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 13,
+          fontWeight: FontWeight.w500,
+          color: textColor ?? Colors.blueGrey.shade800,
+        ),
+      ),
+    );
+  }
+
   Widget _buildRequirementChip({
     required String label,
     required bool isPreferred,
   }) {
-    return Chip(
-      label: Text(label),
-      avatar: Icon(
-        isPreferred ? Icons.info_outline : Icons.check_circle_outline,
-        size: 16,
-        color: isPreferred ? Colors.orange.shade800 : Colors.green.shade800,
+    return _buildRequirementTag(
+      label: label,
+      backgroundColor:
+          isPreferred ? Colors.orange.shade50 : Colors.green.shade50,
+      borderColor: isPreferred ? Colors.orange.shade200 : Colors.green.shade200,
+      textColor: isPreferred ? Colors.orange.shade900 : Colors.green.shade900,
+    );
+  }
+
+  Widget _buildWideComparisonGrid(BuildContext context) {
+    if (profile == null) return const SizedBox.shrink();
+
+    final scopeMismatch = _airframeScopeMismatch(job, profile!);
+    final match = _evaluateJobMatchForProfile(
+      job: job,
+      profile: profile!,
+      includeCertPrefix: false,
+    );
+    final profileCerts = <String>{
+      for (final cert in profile!.faaCertificates)
+        ...expandedCertificateQualifications(cert),
+    };
+    final seekerAirframeScope = profile!.airframeScope.trim();
+    final baselineFlightHours = _part135Baseline;
+    final baselineFlightLabel = _part135BaselineLabel ?? 'Part 135 Minimums';
+    final baselineFlightTooltip = _part135BaselineTooltip;
+    final showBaseline = baselineFlightHours != null;
+    final standardFlightEntries = _summaryFlightHourEntries(baselineFlightHours);
+    final instructorEntries = job.instructorHoursByType.entries.toList();
+    final specialtyEntries = job.specialtyHoursByType.entries.toList();
+
+    const cellPad = EdgeInsets.all(12);
+
+    Widget cell(Widget child) => Expanded(
+          child: Padding(padding: cellPad, child: child),
+        );
+
+    Widget gridRow(Widget left, Widget right) => IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              cell(left),
+              VerticalDivider(width: 1, thickness: 1, color: Colors.grey.shade200),
+              cell(right),
+            ],
+          ),
+        );
+
+    final sep = Divider(height: 1, thickness: 1, color: Colors.grey.shade200);
+
+    final badgeBackground = scopeMismatch
+      ? Colors.red.shade100
+      : match.isFullMatch
+      ? Colors.green.shade100
+      : Colors.orange.shade100;
+    final badgeTextColor = scopeMismatch
+      ? Colors.red.shade900
+      : match.isFullMatch
+      ? Colors.green.shade900
+      : Colors.orange.shade900;
+    final baseItemTextStyle =
+        Theme.of(context).textTheme.bodyMedium?.copyWith(
+          fontSize: 14,
+          height: 1.2,
+          fontWeight: FontWeight.w500,
+        ) ??
+        const TextStyle(
+          fontSize: 14,
+          height: 1.2,
+          fontWeight: FontWeight.w500,
+        );
+
+    Widget secHeader(IconData icon, String label) => Row(
+          children: [
+            Icon(icon, size: 14, color: Colors.blueGrey.shade600),
+            const SizedBox(width: 6),
+            Text(label,
+                style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.blueGrey.shade700)),
+          ],
+        );
+
+    Widget matchItem(bool hasIt, String label, {bool blocked = false}) =>
+        Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: Row(
+            children: [
+              Icon(
+                blocked
+                    ? Icons.block
+                    : hasIt
+                        ? Icons.check_circle
+                        : Icons.cancel,
+                size: 16,
+                color: blocked
+                    ? Colors.grey.shade400
+                    : hasIt
+                        ? Colors.green
+                        : Colors.red,
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  label,
+                  style: baseItemTextStyle.copyWith(
+                    color: blocked
+                        ? Colors.grey.shade400
+                        : hasIt
+                        ? Colors.green
+                        : Colors.red,
+                    decoration:
+                        !blocked && !hasIt ? TextDecoration.lineThrough : null,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+
+    Widget reqItem(String label) => Padding(
+          padding: const EdgeInsets.only(top: 4),
+        child: Text(label,
+          style: baseItemTextStyle.copyWith(color: Colors.black87)),
+        );
+
+    Widget matchHourItem(
+        String name, int required, bool isPreferred, bool blocked,
+        {int Function(String)? hoursFor,
+        bool Function(String)? hasExp}) {
+      hoursFor ??= (k) => profile!.flightHours[k] ?? 0;
+      hasExp ??= (k) => profile!.flightHoursTypes.contains(k);
+      final ph = hoursFor(name);
+      final hasIt = !blocked && hasExp(name) && ph >= required;
+      final suffix = required > 0 ? '$ph / $required hrs' : '$ph hrs';
+      return matchItem(hasIt, '$name: $suffix',
+          blocked: blocked && !isPreferred);
+    }
+
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(top: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: Colors.grey.shade300),
+        borderRadius: BorderRadius.circular(12),
       ),
-      backgroundColor: isPreferred
-          ? Colors.orange.shade50
-          : Colors.green.shade50,
-      side: BorderSide(
-        color: isPreferred ? Colors.orange.shade200 : Colors.green.shade200,
-      ),
-      labelStyle: TextStyle(
-        color: isPreferred ? Colors.orange.shade900 : Colors.green.shade900,
+      clipBehavior: Clip.hardEdge,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // ── Card headers ──
+          gridRow(
+            Stack(
+              alignment: Alignment.centerRight,
+              children: [
+                Row(children: [
+                  Icon(Icons.analytics_outlined,
+                      size: 18, color: Colors.blueGrey.shade700),
+                  const SizedBox(width: 8),
+                  Text('Your Match',
+                      style: Theme.of(context)
+                          .textTheme
+                          .titleMedium
+                          ?.copyWith(fontWeight: FontWeight.bold)),
+                ]),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  constraints: const BoxConstraints(minHeight: 32),
+                  decoration: BoxDecoration(
+                    color: badgeBackground,
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Text(
+                    '${match.matchPercentage}% Match',
+                    style: TextStyle(
+                      color: badgeTextColor,
+                      fontWeight: FontWeight.w800,
+                      fontSize: 15,
+                      height: 1,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            Row(children: [
+              Icon(Icons.checklist_outlined,
+                  size: 18, color: Colors.blueGrey.shade700),
+              const SizedBox(width: 8),
+              Text('Requirements',
+                  style: Theme.of(context)
+                      .textTheme
+                      .titleMedium
+                      ?.copyWith(fontWeight: FontWeight.bold)),
+            ]),
+          ),
+          sep,
+
+          // ── Airframe Category ──
+          gridRow(
+            Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              secHeader(Icons.flight_outlined, 'Airframe Category'),
+              matchItem(!scopeMismatch,
+                  seekerAirframeScope.isNotEmpty
+                      ? seekerAirframeScope
+                      : 'Not provided'),
+            ]),
+            Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              secHeader(Icons.flight_outlined, 'Airframe Category'),
+              reqItem(job.airframeScope.isNotEmpty
+                  ? job.airframeScope
+                  : 'Not specified'),
+            ]),
+          ),
+
+          // ── Scope mismatch warning ──
+          if (scopeMismatch) ...[
+            sep,
+            Padding(
+              padding: cellPad,
+              child: Container(
+                width: double.infinity,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                decoration: BoxDecoration(
+                  color: Colors.orange.shade50,
+                  border: Border.all(color: Colors.orange.shade300),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(Icons.warning_amber_rounded,
+                        size: 18, color: Colors.orange.shade800),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '⚠ Airframe category mismatch — your flight hours won\'t count toward this role. '
+                        'This role requires ${job.airframeScope} experience, but your profile shows ${profile!.airframeScope}.',
+                        style: TextStyle(
+                            color: Colors.orange.shade900, fontSize: 13),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+
+          // ── FAA Certificates ──
+          if (job.faaCertificates.isNotEmpty) ...[
+            sep,
+            gridRow(
+              Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    secHeader(Icons.badge_outlined, 'FAA Certificates'),
+                    ...job.faaCertificates.map((cert) {
+                      final hasIt = profileCerts
+                          .contains(normalizeCertificateName(cert));
+                      return matchItem(hasIt, canonicalCertificateLabel(cert),
+                          blocked: scopeMismatch && !hasIt);
+                    }),
+                  ]),
+              Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    secHeader(Icons.badge_outlined, 'FAA Certificates'),
+                    ...job.faaCertificates
+                        .map((cert) => reqItem(canonicalCertificateLabel(cert))),
+                  ]),
+            ),
+          ],
+
+          // ── Required Ratings ──
+          if (job.requiredRatings.isNotEmpty) ...[
+            sep,
+            gridRow(
+              Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    secHeader(Icons.fact_check_outlined, 'Ratings'),
+                    ...job.requiredRatings.map((r) {
+                      final hasIt =
+                          profileCerts.contains(normalizeCertificateName(r));
+                      return matchItem(hasIt, r,
+                          blocked: scopeMismatch && !hasIt);
+                    }),
+                  ]),
+              Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    secHeader(Icons.fact_check_outlined, 'Required Ratings'),
+                    ...job.requiredRatings.map((r) => reqItem(r)),
+                  ]),
+            ),
+          ],
+
+          // ── Type Ratings (requirements only) ──
+          if (job.typeRatingsRequired.isNotEmpty) ...[
+            sep,
+            gridRow(
+              Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    secHeader(
+                        Icons.confirmation_number_outlined, 'Type Ratings'),
+                    ...job.typeRatingsRequired.map((_) => Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Text('—',
+                          style: baseItemTextStyle.copyWith(
+                            color: Colors.grey.shade400)),
+                        )),
+                  ]),
+              Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    secHeader(
+                        Icons.confirmation_number_outlined, 'Type Ratings'),
+                    ...job.typeRatingsRequired.map((r) => reqItem(r)),
+                  ]),
+            ),
+          ],
+
+          // ── Flight Hours ──
+          if (showBaseline || standardFlightEntries.isNotEmpty) ...[
+            sep,
+            gridRow(
+              Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    secHeader(Icons.schedule_outlined, 'Flight Hours'),
+                    if (showBaseline) ...[
+                      (() {
+                        final met = baselineFlightHours!.entries.every((e) {
+                          final ph = profile!.flightHours[e.key] ?? 0;
+                          return profile!.flightHoursTypes.contains(e.key) &&
+                              ph >= e.value;
+                        });
+                        return matchItem(met, baselineFlightLabel,
+                            blocked: scopeMismatch);
+                      })(),
+                    ],
+                    ...standardFlightEntries.map((e) => matchHourItem(
+                        e.key,
+                        e.value,
+                        job.preferredFlightHours.contains(e.key),
+                        scopeMismatch)),
+                  ]),
+              Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    secHeader(Icons.schedule_outlined, 'Flight Hours'),
+                    if (showBaseline)
+                      Tooltip(
+                        message: baselineFlightTooltip ?? baselineFlightLabel,
+                        child: reqItem(baselineFlightLabel),
+                      ),
+                    ...standardFlightEntries.map((e) => reqItem(
+                        _formatHoursRequirementLabel(e.key, e.value,
+                            job.preferredFlightHours.contains(e.key)))),
+                  ]),
+            ),
+          ],
+
+          // ── Specialty Hours ──
+          if (specialtyEntries.isNotEmpty) ...[
+            sep,
+            gridRow(
+              Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    secHeader(
+                        Icons.workspace_premium_outlined, 'Specialty Hours'),
+                    ...specialtyEntries.map((e) => matchHourItem(
+                        e.key,
+                        e.value,
+                        job.preferredSpecialtyHours.contains(e.key),
+                        scopeMismatch,
+                        hoursFor: (k) =>
+                            profile!.specialtyFlightHoursMap[k] ?? 0,
+                        hasExp: (k) =>
+                            profile!.specialtyFlightHours.contains(k))),
+                  ]),
+              Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    secHeader(
+                        Icons.workspace_premium_outlined, 'Specialty Hours'),
+                    ...specialtyEntries.map((e) => reqItem(
+                        _formatHoursRequirementLabel(e.key, e.value,
+                            job.preferredSpecialtyHours.contains(e.key)))),
+                  ]),
+            ),
+          ],
+
+          // ── Instructor Hours ──
+          if (instructorEntries.isNotEmpty) ...[
+            sep,
+            gridRow(
+              Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    secHeader(Icons.school_outlined, 'Instructor Hours'),
+                    ...instructorEntries.map((e) => matchHourItem(
+                        e.key,
+                        e.value,
+                        _containsInstructorHourLabel(
+                            job.preferredInstructorHours, e.key),
+                        scopeMismatch,
+                        hoursFor: (k) =>
+                            _instructorHoursForLabel(profile!.flightHours, k),
+                        hasExp: (k) => _containsInstructorHourLabel(
+                            profile!.flightHoursTypes, k))),
+                  ]),
+              Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    secHeader(Icons.school_outlined, 'Instructor Hours'),
+                    ...instructorEntries.map((e) => reqItem(
+                        _formatHoursRequirementLabel(
+                            e.key,
+                            e.value,
+                            _containsInstructorHourLabel(
+                                job.preferredInstructorHours, e.key)))),
+                  ]),
+            ),
+          ],
+
+          // ── Aircraft Experience (requirements only) ──
+          if (job.aircraftFlown.isNotEmpty) ...[
+            sep,
+            gridRow(
+              Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    secHeader(Icons.flight_outlined, 'Aircraft Experience'),
+                    ...job.aircraftFlown.map((_) => Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Text('—',
+                          style: baseItemTextStyle.copyWith(
+                            color: Colors.grey.shade400)),
+                        )),
+                  ]),
+              Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    secHeader(Icons.flight_outlined, 'Aircraft Experience'),
+                    ...job.aircraftFlown.map((a) => reqItem(a)),
+                  ]),
+            ),
+          ],
+        ],
       ),
     );
   }
 
   Widget _buildComparisonView(BuildContext context) {
     if (profile == null) return const SizedBox.shrink();
-    final match = _evaluateJobMatchForProfile(
-      job: job,
-      profile: profile!,
-      includeCertPrefix: false,
-    );
     final scopeMismatch = _airframeScopeMismatch(job, profile!);
     final profileCertificates = <String>{
       for (final cert in profile!.faaCertificates)
         ...expandedCertificateQualifications(cert),
     };
-    final matchPercentage = match.matchPercentage;
-    final isFullMatch = match.isFullMatch;
+    final seekerAirframeScope = profile!.airframeScope.trim();
     final baselineFlightHours = _part135Baseline;
     final baselineFlightLabel = _part135BaselineLabel;
     final baselineFlightTooltip = _part135BaselineTooltip;
@@ -17339,7 +18939,8 @@ class JobDetailsPage extends StatelessWidget {
         : false;
 
     final flightRows = _buildMatchHoursRows(
-      sectionTitle: 'Flight Hours:',
+      sectionTitle: 'Flight Hours',
+      sectionIcon: Icons.schedule_outlined,
       entries: standardFlightHourEntries,
       isPreferredFor: (hourName) => job.preferredFlightHours.contains(hourName),
       profileHoursFor: (hourName) => profile!.flightHours[hourName] ?? 0,
@@ -17382,7 +18983,8 @@ class JobDetailsPage extends StatelessWidget {
       ],
     );
     final instructorRows = _buildMatchHoursRows(
-      sectionTitle: 'Instructor Hours:',
+      sectionTitle: 'Instructor Hours',
+      sectionIcon: Icons.school_outlined,
       entries: instructorHourEntries,
       isPreferredFor: (hourName) => _containsInstructorHourLabel(
         job.preferredInstructorHours,
@@ -17395,7 +18997,8 @@ class JobDetailsPage extends StatelessWidget {
       hoursBlocked: scopeMismatch,
     );
     final specialtyRows = _buildMatchHoursRows(
-      sectionTitle: 'Specialty Hours:',
+      sectionTitle: 'Specialty Hours',
+      sectionIcon: Icons.workspace_premium_outlined,
       entries: job.specialtyHoursByType.entries,
       isPreferredFor: (hourName) =>
           job.preferredSpecialtyHours.contains(hourName),
@@ -17416,26 +19019,39 @@ class JobDetailsPage extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (!scopeMismatch) ...[
-          Wrap(
-            spacing: 10,
-            runSpacing: 8,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              Chip(
-                label: Text('$matchPercentage% Match'),
-                backgroundColor: isFullMatch
-                    ? Colors.green[100]
-                    : Colors.orange[100],
-                labelStyle: TextStyle(
-                  color: isFullMatch ? Colors.green[900] : Colors.orange[900],
-                  fontWeight: FontWeight.bold,
+        _buildRequirementsSubsection(
+          context,
+          'Airframe Category',
+          Icons.flight_outlined,
+          Padding(
+            padding: const EdgeInsets.only(left: 8, top: 4),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(
+                  !scopeMismatch ? Icons.check_circle : Icons.cancel,
+                  size: 16,
+                  color: !scopeMismatch ? Colors.green : Colors.red,
                 ),
-              ),
-            ],
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    seekerAirframeScope.isNotEmpty
+                        ? seekerAirframeScope
+                        : 'Not provided',
+                    style: TextStyle(
+                      color: !scopeMismatch ? Colors.green : Colors.red,
+                      decoration: scopeMismatch
+                          ? TextDecoration.lineThrough
+                          : null,
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
-          const SizedBox(height: 16),
-        ],
+        ),
+        const SizedBox(height: 12),
         if (scopeMismatch) ...[
           Container(
             width: double.infinity,
@@ -17468,9 +19084,19 @@ class JobDetailsPage extends StatelessWidget {
         ],
         if (!scopeMismatch) ...[
           if (job.faaCertificates.isNotEmpty) ...[
-          const Text(
-            'Certificates:',
-            style: TextStyle(fontWeight: FontWeight.bold),
+          Row(
+            children: [
+              Icon(Icons.badge_outlined, size: 14, color: Colors.blueGrey.shade600),
+              const SizedBox(width: 6),
+              Text(
+                'FAA Certificates',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.blueGrey.shade700,
+                ),
+              ),
+            ],
           ),
           ...(() {
             final sorted = [...job.faaCertificates];
@@ -17513,7 +19139,20 @@ class JobDetailsPage extends StatelessWidget {
           const SizedBox(height: 8),
         ],
         if (job.requiredRatings.isNotEmpty) ...[
-          const Text('Ratings:', style: TextStyle(fontWeight: FontWeight.bold)),
+          Row(
+            children: [
+              Icon(Icons.fact_check_outlined, size: 14, color: Colors.blueGrey.shade600),
+              const SizedBox(width: 6),
+              Text(
+                'Ratings',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.blueGrey.shade700,
+                ),
+              ),
+            ],
+          ),
           ...(() {
             final sorted = [...job.requiredRatings];
             sorted.sort((a, b) {
@@ -17583,6 +19222,7 @@ class JobDetailsPage extends StatelessWidget {
     required bool Function(String hourName) hasExperienceFor,
     List<Widget> leadingRows = const [],
     bool hoursBlocked = false,
+    IconData? sectionIcon,
   }) {
     final visibleEntries = entries.toList();
 
@@ -17615,7 +19255,22 @@ class JobDetailsPage extends StatelessWidget {
 
     return [
       const SizedBox(height: 8),
-      Text(sectionTitle, style: const TextStyle(fontWeight: FontWeight.bold)),
+      Row(
+        children: [
+          if (sectionIcon != null) ...[
+            Icon(sectionIcon, size: 14, color: Colors.blueGrey.shade600),
+            const SizedBox(width: 6),
+          ],
+          Text(
+            sectionTitle,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: Colors.blueGrey.shade700,
+            ),
+          ),
+        ],
+      ),
       ...leadingRows,
       ...sortedEntries.map((entry) {
         final isPreferred = isPreferredFor(entry.key);
@@ -18093,10 +19748,27 @@ class PublicCompanyInfoPage extends StatelessWidget {
                             style: Theme.of(context).textTheme.bodyMedium,
                           ),
                           const SizedBox(height: 6),
-                          Text(
-                            'Contact Email: ${contactEmailValue.isNotEmpty ? contactEmailValue : 'Not provided'}',
-                            style: Theme.of(context).textTheme.bodyMedium,
-                          ),
+                          if (contactEmailValue.isNotEmpty)
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Contact Email: ',
+                                  style: Theme.of(context).textTheme.bodyMedium,
+                                ),
+                                Expanded(
+                                  child: SelectableText(
+                                    contactEmailValue,
+                                    style: Theme.of(context).textTheme.bodyMedium,
+                                  ),
+                                ),
+                              ],
+                            )
+                          else
+                            Text(
+                              'Contact Email: Not provided',
+                              style: Theme.of(context).textTheme.bodyMedium,
+                            ),
                           const SizedBox(height: 6),
                           GestureDetector(
                             onTap: canCallPhone

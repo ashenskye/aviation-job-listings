@@ -106,6 +106,11 @@ abstract class AdminRepository {
     String? displayName,
     String? email,
   });
+  Future<void> setUserProfileTypeByEmail({
+    required String email,
+    required String profileType,
+    String? reason,
+  });
 
   // Analytics / Support
   Future<int> getApplicationCountForJob(String jobId);

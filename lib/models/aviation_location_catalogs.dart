@@ -168,6 +168,15 @@ String stateProvinceLabel(String name) {
   return '$name ($abbreviation)';
 }
 
+/// Returns the canonical full name for a US state or Canadian province,
+/// accepting either the full name or its 2-letter abbreviation (case-insensitive).
+/// Returns null if the value is empty or not recognized.
+String? normalizeStateProvinceValue(String value) {
+  final trimmed = value.trim();
+  if (trimmed.isEmpty) return null;
+  return _stateProvinceValueToName[trimmed.toLowerCase()];
+}
+
 String? normalizeCountryValue(String value) {
   final normalized = value.trim().toLowerCase();
   if (normalized.isEmpty) {

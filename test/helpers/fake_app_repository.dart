@@ -200,4 +200,9 @@ class FakeAppRepository implements AppRepository {
       return null;
     }
   }
+
+  @override
+  Future<String> sendEmployerNotificationTestEmail(String employerId) async {
+    return 'Test notification request queued.';
+  }
 }

@@ -9,12 +9,15 @@ void main() {
   testWidgets('Employer create flow advances to qualifications step', (
     WidgetTester tester,
   ) async {
-    await tester.pumpWidget(MyApp(repository: FakeAppRepository()));
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.byIcon(Icons.person));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Employer').last);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MyHomePage(
+          title: 'Aviation Job Listings',
+          repository: FakeAppRepository(),
+          initialProfileType: ProfileType.employer,
+        ),
+      ),
+    );
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('Create New Listing'));
@@ -72,12 +75,15 @@ void main() {
   testWidgets('Selecting ATP hides lower pilot certificates in create flow', (
     WidgetTester tester,
   ) async {
-    await tester.pumpWidget(MyApp(repository: FakeAppRepository()));
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.byIcon(Icons.person));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Employer').last);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MyHomePage(
+          title: 'Aviation Job Listings',
+          repository: FakeAppRepository(),
+          initialProfileType: ProfileType.employer,
+        ),
+      ),
+    );
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('Create New Listing'));

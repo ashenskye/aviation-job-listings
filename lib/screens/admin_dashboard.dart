@@ -13,6 +13,7 @@ import '../models/job_listing_report.dart';
 import '../models/job_seeker_moderation.dart';
 import '../repositories/admin_repository.dart';
 import '../repositories/app_repository.dart';
+import 'sign_in_screen.dart';
 
 enum AdminInterfaceView { admin, employer, jobSeeker }
 
@@ -145,7 +146,32 @@ class _AdminDashboardState extends State<AdminDashboard>
   }
 
   Future<void> _signOut() async {
-    await Supabase.instance.client.auth.signOut();
+    try {
+      final auth = Supabase.instance.client.auth;
+      await auth.signOut(scope: SignOutScope.local);
+      if (auth.currentSession != null) {
+        throw StateError('Session is still active after sign out.');
+      }
+      if (!mounted) {
+        return;
+      }
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const SignInScreen()),
+        (route) => false,
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      var message = 'Could not sign out. Please try again.';
+      final raw = error.toString();
+      if (raw.startsWith('Bad state: ')) {
+        message = raw.substring('Bad state: '.length);
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message)),
+      );
+    }
   }
 
   @override
@@ -3941,10 +3967,14 @@ class _UsersDataTab extends StatefulWidget {
 
 class _UsersDataTabState extends State<_UsersDataTab> {
   bool _loading = false;
+  bool _updatingAccountRole = false;
   List<JobListing> _jobListings = [];
   List<Application> _applications = [];
   String _jobListingSort = 'recent';
   String _applicationSort = 'recent';
+  final TextEditingController _roleEmailController = TextEditingController();
+  final TextEditingController _roleReasonController = TextEditingController();
+  String _selectedAccountRole = 'job_seeker';
 
   static const List<(String, String)> _jobListingSortOptions = [
     ('recent', 'Most Recent'),
@@ -3956,6 +3986,11 @@ class _UsersDataTabState extends State<_UsersDataTab> {
     ('recent', 'Most Recent'),
     ('count', 'Most Applications'),
     ('name', 'Job Seeker Name'),
+  ];
+
+  static const List<(String, String)> _accountRoleOptions = [
+    ('job_seeker', 'Job Seeker'),
+    ('employer', 'Employer'),
   ];
 
   String _employerGroupLabel(JobListing listing) {
@@ -4270,6 +4305,168 @@ class _UsersDataTabState extends State<_UsersDataTab> {
     _loadData();
   }
 
+  @override
+  void dispose() {
+    _roleEmailController.dispose();
+    _roleReasonController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _applyAccountRoleUpdate() async {
+    final email = _roleEmailController.text.trim();
+    final reason = _roleReasonController.text.trim();
+    final emailPattern = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
+
+    if (email.isEmpty || !emailPattern.hasMatch(email)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Enter a valid account email address.')),
+      );
+      return;
+    }
+
+    setState(() => _updatingAccountRole = true);
+    try {
+      await widget.adminRepository.setUserProfileTypeByEmail(
+        email: email,
+        profileType: _selectedAccountRole,
+        reason: reason.isEmpty ? null : reason,
+      );
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Updated $email to ${_selectedAccountRole == 'employer' ? 'Employer' : 'Job Seeker'}. They must sign out and sign back in.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      var message = 'Could not update account role.';
+      final raw = error.toString();
+      if (raw.startsWith('Bad state: ')) {
+        message = raw.substring('Bad state: '.length);
+      } else if (raw.contains('permission denied')) {
+        message = 'Only admins can update account roles.';
+      } else if (raw.contains('No user found for email')) {
+        message = 'No account found for that email.';
+      } else if (raw.contains('admin_set_user_profile_type') &&
+          raw.contains('does not exist')) {
+        message =
+            'Account-role admin function is missing. Run Supabase migrations and try again.';
+      }
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
+    } finally {
+      if (mounted) {
+        setState(() => _updatingAccountRole = false);
+      }
+    }
+  }
+
+  Widget _buildAccountRoleEditor() {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.red.shade50,
+        border: Border.all(color: Colors.red.shade200),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.admin_panel_settings_outlined,
+                color: Colors.red.shade700,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                'Admin Only: Set Account Role',
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  color: Colors.red.shade700,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'Only Job Seeker and Employer are allowed. Admin cannot be assigned here.',
+            style: TextStyle(fontSize: 12, color: Colors.black87),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            key: const ValueKey('admin-role-email-input'),
+            controller: _roleEmailController,
+            keyboardType: TextInputType.emailAddress,
+            decoration: const InputDecoration(
+              labelText: 'Account Email',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 10),
+          DropdownButtonFormField<String>(
+            key: const ValueKey('admin-role-type-dropdown'),
+            initialValue: _selectedAccountRole,
+            decoration: const InputDecoration(
+              labelText: 'New Role',
+              border: OutlineInputBorder(),
+            ),
+            items: _accountRoleOptions
+                .map(
+                  (option) => DropdownMenuItem<String>(
+                    value: option.$1,
+                    child: Text(option.$2),
+                  ),
+                )
+                .toList(),
+            onChanged: _updatingAccountRole
+                ? null
+                : (value) {
+                    if (value == null) {
+                      return;
+                    }
+                    setState(() => _selectedAccountRole = value);
+                  },
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            key: const ValueKey('admin-role-reason-input'),
+            controller: _roleReasonController,
+            maxLines: 2,
+            decoration: const InputDecoration(
+              labelText: 'Reason (optional)',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 10),
+          Align(
+            alignment: Alignment.centerRight,
+            child: ElevatedButton.icon(
+              key: const ValueKey('admin-role-apply-button'),
+              onPressed: _updatingAccountRole ? null : _applyAccountRoleUpdate,
+              icon: _updatingAccountRole
+                  ? const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.verified_user_outlined),
+              label: Text(_updatingAccountRole ? 'Updating...' : 'Apply Role'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _loadData() async {
     setState(() => _loading = true);
     try {
@@ -4309,6 +4506,8 @@ class _UsersDataTabState extends State<_UsersDataTab> {
       child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          _buildAccountRoleEditor(),
+          const SizedBox(height: 24),
           _buildGroupedSection<JobListing>(
             context: context,
             title: 'Job Listings (${_jobListings.length})',

@@ -1,3 +1,5 @@
+import 'aviation_location_catalogs.dart';
+
 class EmployerProfile {
   final String id;
   final String companyName;
@@ -15,6 +17,9 @@ class EmployerProfile {
   final String contactPhone;
   final String companyDescription;
   final List<String> companyBenefits;
+  final bool notifyOnNewNonRejectedApplication;
+  final bool notifyOnApplicationStatusChanges;
+  final bool notifyDailyDigest;
 
   const EmployerProfile({
     required this.id,
@@ -33,6 +38,9 @@ class EmployerProfile {
     this.contactPhone = '',
     this.companyDescription = '',
     this.companyBenefits = const [],
+    this.notifyOnNewNonRejectedApplication = true,
+    this.notifyOnApplicationStatusChanges = false,
+    this.notifyDailyDigest = false,
   });
 
   factory EmployerProfile.fromJson(Map<String, dynamic> json) {
@@ -45,9 +53,9 @@ class EmployerProfile {
       headquartersAddressLine2:
           json['headquartersAddressLine2']?.toString() ?? '',
       headquartersCity: json['headquartersCity']?.toString() ?? '',
-      headquartersState: json['headquartersState']?.toString() ?? '',
+      headquartersState: normalizeStateProvinceValue(json['headquartersState']?.toString() ?? '') ?? json['headquartersState']?.toString() ?? '',
       headquartersPostalCode: json['headquartersPostalCode']?.toString() ?? '',
-      headquartersCountry: json['headquartersCountry']?.toString() ?? '',
+      headquartersCountry: normalizeCountryValue(json['headquartersCountry']?.toString() ?? '') ?? json['headquartersCountry']?.toString() ?? '',
       companyBannerUrl:
           json['companyBannerUrl']?.toString() ??
           json['company_banner_url']?.toString() ??
@@ -64,6 +72,18 @@ class EmployerProfile {
       companyBenefits: List<String>.from(
         (json['companyBenefits'] as List?) ?? const [],
       ),
+      notifyOnNewNonRejectedApplication:
+          (json['notifyOnNewNonRejectedApplication'] as bool?) ??
+          (json['notify_on_new_non_rejected_application'] as bool?) ??
+          true,
+      notifyOnApplicationStatusChanges:
+          (json['notifyOnApplicationStatusChanges'] as bool?) ??
+          (json['notify_on_application_status_changes'] as bool?) ??
+          false,
+      notifyDailyDigest:
+          (json['notifyDailyDigest'] as bool?) ??
+          (json['notify_daily_digest'] as bool?) ??
+          false,
     );
   }
 
@@ -85,5 +105,8 @@ class EmployerProfile {
     'contactPhone': contactPhone,
     'companyDescription': companyDescription,
     'companyBenefits': companyBenefits,
+    'notifyOnNewNonRejectedApplication': notifyOnNewNonRejectedApplication,
+    'notifyOnApplicationStatusChanges': notifyOnApplicationStatusChanges,
+    'notifyDailyDigest': notifyDailyDigest,
   };
 }

@@ -101,8 +101,12 @@ Future<void> _pumpSearchTab(WidgetTester tester) async {
 
 Future<void> _openFiltersDrawer(WidgetTester tester) async {
   final openFiltersButton = find.text('Open Filters');
+  final expandFiltersButton = find.text('Expand Filters');
   if (openFiltersButton.evaluate().isNotEmpty) {
     await tester.tap(openFiltersButton.hitTestable().first);
+    await tester.pumpAndSettle();
+  } else if (expandFiltersButton.evaluate().isNotEmpty) {
+    await tester.tap(expandFiltersButton.hitTestable().first);
     await tester.pumpAndSettle();
   }
   expect(find.byKey(const ValueKey('search-primary-filters-open')), findsOneWidget);
@@ -237,11 +241,15 @@ void main() {
   ) async {
     await _pumpSearchTab(tester);
 
-    await _selectFilterOption(
-      tester,
-      sectionTitle: 'Location',
-      optionText: 'USA',
+    final unitedStatesChip = find.ancestor(
+      of: find.text('United States').first,
+      matching: find.byType(ChoiceChip),
     );
+    await tester.ensureVisible(unitedStatesChip.first);
+    await tester.pumpAndSettle();
+    await tester.tap(unitedStatesChip.first);
+    await tester.pumpAndSettle();
+
     expect(find.text('Showing 4 of 5 jobs'), findsOneWidget);
   });
 
@@ -250,11 +258,15 @@ void main() {
   ) async {
     await _pumpSearchTab(tester);
 
-    await _selectFilterOption(
-      tester,
-      sectionTitle: 'Location',
-      optionText: 'International',
+    final internationalChip = find.ancestor(
+      of: find.text('International').first,
+      matching: find.byType(ChoiceChip),
     );
+    await tester.ensureVisible(internationalChip.first);
+    await tester.pumpAndSettle();
+    await tester.tap(internationalChip.first);
+    await tester.pumpAndSettle();
+
     expect(find.text('Showing 1 of 5 jobs'), findsOneWidget);
   });
 
@@ -376,4 +388,93 @@ void main() {
 
     expect(find.text('Showing 0 of 2 jobs'), findsOneWidget);
   });
+
+  testWidgets(
+    'search tab query matches state and province full names against abbreviations',
+    (WidgetTester tester) async {
+      final repository = FakeAppRepository();
+      await repository.createJob(
+        const JobListing(
+          id: 'state-query-1',
+          title: 'Mountain Utility Pilot',
+          company: 'Northern Lift',
+          location: 'Anchorage, AK',
+          type: 'Full-Time',
+          crewRole: 'Single Pilot',
+          faaRules: ['Part 135'],
+          description: 'Utility operations in remote regions.',
+          faaCertificates: [],
+          flightExperience: [],
+          aircraftFlown: ['Bell 407'],
+        ),
+      );
+      await repository.createJob(
+        const JobListing(
+          id: 'state-query-2',
+          title: 'Regional Charter Pilot',
+          company: 'Prairie Wings',
+          location: 'Calgary, AB',
+          type: 'Full-Time',
+          crewRole: 'Crew',
+          crewPosition: 'Captain',
+          faaRules: ['Part 91'],
+          description: 'Regional charter flights across western Canada.',
+          faaCertificates: [],
+          flightExperience: [],
+          aircraftFlown: ['King Air 200'],
+        ),
+      );
+      await repository.createJob(
+        const JobListing(
+          id: 'state-query-3',
+          title: 'International Coordinator',
+          company: 'Global Routes',
+          location: 'London, UK',
+          type: 'Contract',
+          crewRole: 'Crew',
+          crewPosition: 'Dispatcher',
+          faaRules: ['Part 91'],
+          description: 'Cross-border dispatch and scheduling.',
+          faaCertificates: [],
+          flightExperience: [],
+          aircraftFlown: ['Learjet 75'],
+        ),
+      );
+
+      await tester.pumpWidget(MyApp(repository: repository));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Search').last);
+      await tester.pumpAndSettle();
+
+      expect(find.text('Showing 3 of 3 jobs'), findsOneWidget);
+
+      await tester.enterText(
+        find.byKey(const ValueKey('search-tab-query')),
+        'Alaska',
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Showing 1 of 3 jobs'), findsOneWidget);
+
+      await tester.enterText(
+        find.byKey(const ValueKey('search-tab-query')),
+        'AK',
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Showing 1 of 3 jobs'), findsOneWidget);
+
+      await tester.enterText(
+        find.byKey(const ValueKey('search-tab-query')),
+        'Alberta, Canada',
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Showing 1 of 3 jobs'), findsOneWidget);
+
+      await tester.enterText(
+        find.byKey(const ValueKey('search-tab-query')),
+        'AB',
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Showing 1 of 3 jobs'), findsOneWidget);
+    },
+  );
 }
