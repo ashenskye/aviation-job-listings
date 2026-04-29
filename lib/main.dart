@@ -14406,13 +14406,16 @@ class _MyHomePageState extends State<MyHomePage> {
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          Text(
-                            'Showing ${filteredJobs.length} of ${allVisibleJobs.length} jobs',
-                            style: TextStyle(
-                              color: Colors.grey.shade800,
-                              fontWeight: FontWeight.w700,
+                          Expanded(
+                            child: Text(
+                              'Showing ${filteredJobs.length} of ${allVisibleJobs.length} jobs',
+                              style: TextStyle(
+                                color: Colors.grey.shade800,
+                                fontWeight: FontWeight.w700,
+                              ),
                             ),
                           ),
+                          const SizedBox(width: 8),
                           FilledButton.tonal(
                             key: const ValueKey('save-search-button'),
                             onPressed: _saveCurrentSearch,
