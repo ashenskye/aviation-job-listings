@@ -177,7 +177,7 @@ void main() {
       expect(updated.matchPercentage, original.matchPercentage);
     });
 
-    test('fromJson supports snake_case keys and normalizes viewed to reviewed', () {
+    test('fromJson supports snake_case keys and preserves viewed status', () {
       final app = Application.fromJson({
         'id': 'snake-1',
         'job_seeker_id': 'seeker-x',
@@ -192,7 +192,7 @@ void main() {
       expect(app.jobSeekerId, 'seeker-x');
       expect(app.jobListingId, 'job-x');
       expect(app.employerId, 'employer-x');
-      expect(app.status, 'reviewed');
+      expect(app.status, 'viewed');
       expect(app.coverLetter, 'Cover note');
       expect(app.appliedAt, now);
       expect(app.updatedAt, now);

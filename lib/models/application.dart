@@ -17,7 +17,7 @@ class Application {
   final List<String> applicantFlightHoursTypes;
   final List<String> applicantSpecialtyFlightHours;
   final Map<String, int> applicantSpecialtyFlightHoursMap;
-  final String status; // 'applied', 'reviewed', 'rejected', 'interested'
+  final String status; // 'applied', 'viewed', 'reviewed', 'future_consideration', 'rejected', 'interested'
   final int matchPercentage;
   final String coverLetter;
   final DateTime appliedAt;
@@ -25,7 +25,9 @@ class Application {
   final bool isArchived;
 
   static const String statusApplied = 'applied';
+  static const String statusViewed = 'viewed';
   static const String statusReviewed = 'reviewed';
+  static const String statusFutureConsideration = 'future_consideration';
   static const String statusRejected = 'rejected';
   static const String statusInterested = 'interested';
 
@@ -78,9 +80,10 @@ class Application {
 
   static String normalizeStatus(String value) {
     switch (value.trim().toLowerCase()) {
-      case 'viewed':
-        return statusReviewed;
+      case statusViewed:
+        return statusViewed;
       case statusReviewed:
+      case statusFutureConsideration:
       case statusRejected:
       case statusInterested:
         return value.trim().toLowerCase();

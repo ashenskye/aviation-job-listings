@@ -6,6 +6,7 @@ import 'package:aviation_job_listings/models/job_listing_report.dart';
 import 'package:aviation_job_listings/models/job_listing_template.dart';
 import 'package:aviation_job_listings/models/job_load_result.dart';
 import 'package:aviation_job_listings/models/job_seeker_profile.dart';
+import 'package:aviation_job_listings/models/saved_search.dart';
 import 'package:aviation_job_listings/repositories/app_repository.dart';
 
 class FakeAppRepository implements AppRepository {
@@ -17,6 +18,7 @@ class FakeAppRepository implements AppRepository {
   final List<Application> _applications = <Application>[];
   final List<ApplicationFeedback> _feedback = <ApplicationFeedback>[];
   final List<JobListingReport> _reports = <JobListingReport>[];
+  final List<SavedSearch> _savedSearches = <SavedSearch>[];
 
   @override
   Future<Set<String>> loadFavoriteIds() async => _favoriteIds;
@@ -202,7 +204,40 @@ class FakeAppRepository implements AppRepository {
   }
 
   @override
+  Future<List<SavedSearch>> loadSavedSearches() async {
+    return List<SavedSearch>.from(_savedSearches);
+  }
+
+  @override
+  Future<void> saveSavedSearch(SavedSearch search) async {
+    final index = _savedSearches.indexWhere((s) => s.id == search.id);
+    if (index >= 0) {
+      _savedSearches[index] = search;
+    } else {
+      _savedSearches.add(search);
+    }
+  }
+
+  @override
+  Future<void> updateSavedSearch(SavedSearch search) async {
+    final index = _savedSearches.indexWhere((s) => s.id == search.id);
+    if (index >= 0) {
+      _savedSearches[index] = search;
+    }
+  }
+
+  @override
+  Future<void> deleteSavedSearch(String searchId) async {
+    _savedSearches.removeWhere((s) => s.id == searchId);
+  }
+
+  @override
   Future<String> sendEmployerNotificationTestEmail(String employerId) async {
+    return 'Test notification request queued.';
+  }
+
+  @override
+  Future<String> sendSeekerNotificationTestEmail() async {
     return 'Test notification request queued.';
   }
 }

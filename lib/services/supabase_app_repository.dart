@@ -7,6 +7,7 @@ import '../models/job_listing_report.dart';
 import '../models/job_listing_template.dart';
 import '../models/job_load_result.dart';
 import '../models/job_seeker_profile.dart';
+import '../models/saved_search.dart';
 import '../repositories/app_repository.dart';
 import 'local_app_repository.dart';
 import 'supabase_bootstrap.dart';
@@ -497,6 +498,35 @@ class SupabaseAppRepository implements AppRepository {
             'updated_at': updatedAt,
           })
           .eq('id', applicationId);
+
+      // Best effort: notify seeker about their application status change.
+      try {
+        final applicantUserId =
+            existingRow['applicant_user_id']?.toString() ?? '';
+        final appData = Map<String, dynamic>.from(
+          (existingRow['data'] as Map?) ?? const {},
+        );
+        final applicantEmail =
+            appData['applicantEmail']?.toString() ?? '';
+        final applicantName =
+            appData['applicantName']?.toString() ?? '';
+        final jobId =
+            existingRow['job_listing_id']?.toString() ?? '';
+        await _client.functions.invoke(
+          'send-seeker-status-email',
+          body: {
+            'applicationId': applicationId,
+            'applicantUserId': applicantUserId,
+            'applicantEmail': applicantEmail,
+            'applicantName': applicantName,
+            'jobId': jobId,
+            'newStatus': Application.normalizeStatus(status),
+            'statusUpdatedAt': updatedAt,
+          },
+        );
+      } catch (_) {
+        // Notification sending should never block status persistence.
+      }
     } catch (_) {
       await localFallback.updateApplicationStatus(applicationId, status);
     }
@@ -733,6 +763,34 @@ class SupabaseAppRepository implements AppRepository {
     }
   }
 
+  @override
+  Future<String> sendSeekerNotificationTestEmail() async {
+    final userId = _currentUserId;
+    if (!SupabaseBootstrap.isConfigured || userId == null) {
+      return localFallback.sendSeekerNotificationTestEmail();
+    }
+
+    try {
+      final response = await _client.functions.invoke(
+        'send-seeker-job-alert',
+        body: {'test': true, 'seekerUserId': userId},
+      );
+      final data = response.data;
+      if (data is Map<String, dynamic>) {
+        if (data['success'] == true) {
+          return 'Seeker test notification email sent.';
+        }
+        final reason = data['reason']?.toString();
+        if (reason != null && reason.isNotEmpty) {
+          return reason;
+        }
+      }
+      return 'Seeker test notification request completed.';
+    } catch (e) {
+      return mapNotificationTestEmailError(e);
+    }
+  }
+
   Application _fromApplicationRow(Map<String, dynamic> row) {
     final data = Map<String, dynamic>.from((row['data'] as Map?) ?? const {});
     data['id'] = row['id'] ?? data['id'];
@@ -880,6 +938,16 @@ class SupabaseAppRepository implements AppRepository {
       'specialty_flight_hours_map': profile.specialtyFlightHoursMap,
       'aircraft_flown': profile.aircraftFlown,
       'total_flight_hours': profile.totalFlightHours,
+      'notify_on_application_status_change':
+          profile.notifyOnApplicationStatusChange,
+      'new_job_alert_enabled': profile.newJobAlertEnabled,
+      'new_job_alert_state_only': profile.newJobAlertStateOnly,
+      'new_job_alert_airframe_match': profile.newJobAlertAirframeMatch,
+      'new_job_alert_minimum_match_percent':
+          profile.newJobAlertMinimumMatchPercent,
+      'new_job_alert_certificate_match': profile.newJobAlertCertificateMatch,
+      'resume_url': profile.resumeUrl,
+      'resume_file_name': profile.resumeFileName,
     };
   }
 
@@ -914,6 +982,16 @@ class SupabaseAppRepository implements AppRepository {
         (row['aircraft_flown'] as List?) ?? const [],
       ),
       'totalFlightHours': row['total_flight_hours'] ?? 0,
+      'notifyOnApplicationStatusChange':
+          row['notify_on_application_status_change'],
+      'newJobAlertEnabled': row['new_job_alert_enabled'],
+      'newJobAlertStateOnly': row['new_job_alert_state_only'],
+      'newJobAlertAirframeMatch': row['new_job_alert_airframe_match'],
+      'newJobAlertMinimumMatchPercent':
+          row['new_job_alert_minimum_match_percent'],
+      'newJobAlertCertificateMatch': row['new_job_alert_certificate_match'],
+      'resumeUrl': row['resume_url'],
+      'resumeFileName': row['resume_file_name'],
     };
   }
 
@@ -1034,4 +1112,113 @@ class SupabaseAppRepository implements AppRepository {
       );
     }
   }
+
+  @override
+  Future<List<SavedSearch>> loadSavedSearches() async {
+    final userId = _currentUserId;
+    if (!SupabaseBootstrap.isConfigured || userId == null) {
+      return localFallback.loadSavedSearches();
+    }
+
+    try {
+      final rows = await _client
+          .from('saved_searches')
+          .select()
+          .eq('user_id', userId)
+          .order('created_at', ascending: false);
+
+      return rows
+          .map((row) => SavedSearch.fromJson(Map<String, dynamic>.from(row)))
+          .toList();
+    } catch (_) {
+      return localFallback.loadSavedSearches();
+    }
+  }
+
+  @override
+  Future<void> saveSavedSearch(SavedSearch search) async {
+    final userId = _currentUserId;
+    if (!SupabaseBootstrap.isConfigured || userId == null) {
+      await localFallback.saveSavedSearch(search);
+      return;
+    }
+
+    try {
+      await _client.from('saved_searches').upsert({
+        'id': search.id,
+        'user_id': userId,
+        'name': search.name,
+        'created_at': search.createdAt.toIso8601String(),
+        'type_filter': search.typeFilter,
+        'location_filter': search.locationFilter,
+        'position_filter': search.positionFilter,
+        'faa_rule_filter': search.faaRuleFilter,
+        'airframe_scope_filter': search.airframeScopeFilter,
+        'specialty_filter': search.specialtyFilter,
+        'certificate_filter': search.certificateFilter,
+        'rating_filter': search.ratingFilter,
+        'instructor_hours_filter': search.instructorHoursFilter,
+        'flight_hours_filter': search.flightHoursFilter,
+        'specialty_hours_filter': search.specialtyHoursFilter,
+        'status_filter': search.statusFilter,
+        'sort': search.sort,
+        'minimum_match_percent': search.minimumMatchPercent,
+        'is_favorite': search.isFavorite,
+      });
+    } catch (_) {
+      await localFallback.saveSavedSearch(search);
+    }
+  }
+
+  @override
+  Future<void> updateSavedSearch(SavedSearch search) async {
+    final userId = _currentUserId;
+    if (!SupabaseBootstrap.isConfigured || userId == null) {
+      await localFallback.updateSavedSearch(search);
+      return;
+    }
+
+    try {
+      await _client.from('saved_searches').update({
+        'name': search.name,
+        'type_filter': search.typeFilter,
+        'location_filter': search.locationFilter,
+        'position_filter': search.positionFilter,
+        'faa_rule_filter': search.faaRuleFilter,
+        'airframe_scope_filter': search.airframeScopeFilter,
+        'specialty_filter': search.specialtyFilter,
+        'certificate_filter': search.certificateFilter,
+        'rating_filter': search.ratingFilter,
+        'instructor_hours_filter': search.instructorHoursFilter,
+        'flight_hours_filter': search.flightHoursFilter,
+        'specialty_hours_filter': search.specialtyHoursFilter,
+        'status_filter': search.statusFilter,
+        'sort': search.sort,
+        'minimum_match_percent': search.minimumMatchPercent,
+        'is_favorite': search.isFavorite,
+      }).eq('id', search.id).eq('user_id', userId);
+    } catch (_) {
+      await localFallback.updateSavedSearch(search);
+    }
+  }
+
+  @override
+  Future<void> deleteSavedSearch(String searchId) async {
+    final userId = _currentUserId;
+    if (!SupabaseBootstrap.isConfigured || userId == null) {
+      await localFallback.deleteSavedSearch(searchId);
+      return;
+    }
+
+    try {
+      await _client
+          .from('saved_searches')
+          .delete()
+          .eq('id', searchId)
+          .eq('user_id', userId);
+    } catch (_) {
+      await localFallback.deleteSavedSearch(searchId);
+    }
+  }
 }
+

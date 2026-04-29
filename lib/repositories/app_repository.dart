@@ -6,6 +6,7 @@ import '../models/job_listing_report.dart';
 import '../models/job_listing_template.dart';
 import '../models/job_load_result.dart';
 import '../models/job_seeker_profile.dart';
+import '../models/saved_search.dart';
 
 enum FeedbackSaveDestination { remote, local }
 
@@ -51,6 +52,15 @@ abstract class AppRepository {
   Future<List<ApplicationFeedback>> getAllFeedback();
   Future<ApplicationFeedback?> getFeedbackForApplication(String applicationId);
 
+  // Saved searches
+  Future<List<SavedSearch>> loadSavedSearches();
+  Future<void> saveSavedSearch(SavedSearch search);
+  Future<void> updateSavedSearch(SavedSearch search);
+  Future<void> deleteSavedSearch(String searchId);
+
   // Employer notification utilities
   Future<String> sendEmployerNotificationTestEmail(String employerId);
+
+  // Seeker notification utilities (temporary pre-launch testing)
+  Future<String> sendSeekerNotificationTestEmail();
 }

@@ -370,9 +370,51 @@ class SupabaseAdminRepository implements AdminRepository {
   }) async {
     final now = DateTime.now();
     final listingId = 'external-${now.microsecondsSinceEpoch}';
+    final employerId = 'ext-company-${now.microsecondsSinceEpoch}';
+    final normalizedCompany = company.trim().isEmpty
+        ? 'External Company'
+        : company.trim();
+    final normalizedContactName = contactName?.trim() ?? '';
+    final normalizedContactEmail = contactEmail?.trim().toLowerCase() ?? '';
+    final normalizedCompanyPhone = companyPhone?.trim() ?? '';
+    final normalizedCompanyUrl = companyUrl?.trim() ?? '';
+    final normalizedReason = reason?.trim();
+
+    final insertedEmployer = await _client
+        .from('employer_profiles')
+        .insert({
+          'id': employerId,
+          'owner_user_id': _adminUserId,
+          'company_name': normalizedCompany,
+          'website': normalizedCompanyUrl,
+          'contact_name': normalizedContactName,
+          'contact_email': normalizedContactEmail,
+          'contact_phone': normalizedCompanyPhone,
+          'company_description':
+              'Auto-generated from external listing $listingId.',
+          'company_benefits': const <String>[],
+        })
+        .select()
+        .single();
+
+    await logAdminAction(
+      AdminActionLog(
+        id: _pendingId,
+        adminUserId: _adminUserId,
+        actionType: AdminActionLog.actionCreate,
+        resourceType: AdminActionLog.resourceEmployerProfile,
+        resourceId: employerId,
+        changesAfter: Map<String, dynamic>.from(insertedEmployer),
+        reason: normalizedReason?.isNotEmpty == true
+            ? '$normalizedReason (auto-generated provisional employer profile for external listing)'
+            : 'Admin auto-generated provisional employer profile for external listing.',
+        timestamp: now,
+      ),
+    );
+
     final payload = <String, dynamic>{
       'id': listingId,
-      'employer_id': null,
+      'employer_id': employerId,
       'title': title,
       'company': company,
       'location': location,
@@ -424,12 +466,133 @@ class SupabaseAdminRepository implements AdminRepository {
         resourceType: AdminActionLog.resourceJobListing,
         resourceId: listingId,
         changesAfter: Map<String, dynamic>.from(inserted),
-        reason: reason,
+        reason: normalizedReason,
         timestamp: now,
       ),
     );
 
+    if (normalizedContactEmail.isNotEmpty) {
+      try {
+        await assignEmployerProfileToEmail(
+          employerId: employerId,
+          email: normalizedContactEmail,
+          reason:
+              'Auto-handoff attempt from external listing creation: $listingId',
+        );
+      } catch (_) {
+        // Keep admin-owned provisional profile when no account exists yet.
+      }
+    }
+
     return JobListing.fromJson(_fromJobListingRow(inserted));
+  }
+
+  @override
+  Future<void> assignEmployerProfileToEmail({
+    required String employerId,
+    required String email,
+    String? reason,
+  }) async {
+    final normalizedEmployerId = employerId.trim();
+    final normalizedEmail = email.trim().toLowerCase();
+    final normalizedReason = reason?.trim();
+
+    if (normalizedEmployerId.isEmpty) {
+      throw StateError('Employer profile id is required.');
+    }
+    if (normalizedEmail.isEmpty) {
+      throw StateError('Email is required for handoff.');
+    }
+
+    final result = await _client.rpc(
+      'admin_set_user_profile_type',
+      params: {
+        'target_email': normalizedEmail,
+        'new_profile_type': 'employer',
+      },
+    );
+
+    final payload = result is Map<String, dynamic>
+        ? result
+        : Map<String, dynamic>.from((result as Map?) ?? const {});
+    final targetUserId = payload['user_id']?.toString() ?? '';
+    if (targetUserId.isEmpty) {
+      throw StateError('No user found for that email.');
+    }
+
+    final beforeRow = await _client
+        .from('employer_profiles')
+        .select()
+        .eq('id', normalizedEmployerId)
+        .maybeSingle();
+    if (beforeRow == null) {
+      throw StateError('Employer profile could not be found.');
+    }
+
+    final updatedRow = await _client
+        .from('employer_profiles')
+        .update({'owner_user_id': targetUserId})
+        .eq('id', normalizedEmployerId)
+        .select()
+        .single();
+
+    await _client.from('user_preferences').upsert({
+      'user_id': targetUserId,
+      'selected_employer_profile_id': normalizedEmployerId,
+    });
+
+    await logAdminAction(
+      AdminActionLog(
+        id: _pendingId,
+        adminUserId: _adminUserId,
+        actionType: AdminActionLog.actionUpdate,
+        resourceType: AdminActionLog.resourceEmployerProfile,
+        resourceId: normalizedEmployerId,
+        changesBefore: Map<String, dynamic>.from(beforeRow),
+        changesAfter: {
+          ...Map<String, dynamic>.from(updatedRow),
+          'handoff_email': normalizedEmail,
+        },
+        reason: normalizedReason?.isNotEmpty == true
+            ? normalizedReason
+            : 'Admin handed off employer profile to verified account email.',
+        timestamp: DateTime.now(),
+      ),
+    );
+  }
+
+  @override
+  Future<Map<String, bool>> getEmployerProfileAdminOwnership(
+    List<String> employerIds,
+  ) async {
+    final normalizedIds = employerIds
+        .map((id) => id.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList();
+    if (normalizedIds.isEmpty) {
+      return const {};
+    }
+
+    final rows = await _client
+        .from('employer_profiles')
+        .select('id, owner_user_id')
+        .inFilter('id', normalizedIds);
+
+    final result = <String, bool>{};
+    for (final row in rows) {
+      final data = Map<String, dynamic>.from(row as Map);
+      final id = data['id']?.toString() ?? '';
+      if (id.isEmpty) {
+        continue;
+      }
+      result[id] = (data['owner_user_id']?.toString() ?? '') == _adminUserId;
+    }
+
+    for (final id in normalizedIds) {
+      result.putIfAbsent(id, () => false);
+    }
+    return result;
   }
 
   // ── Delete ────────────────────────────────────────────────────────────────

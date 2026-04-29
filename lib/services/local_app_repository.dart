@@ -11,6 +11,7 @@ import '../models/job_listing_report.dart';
 import '../models/job_listing_template.dart';
 import '../models/job_load_result.dart';
 import '../models/job_seeker_profile.dart';
+import '../models/saved_search.dart';
 import '../repositories/app_repository.dart';
 
 class LocalAppRepository implements AppRepository {
@@ -21,6 +22,7 @@ class LocalAppRepository implements AppRepository {
   static const String _applicationsKey = 'job_applications';
   static const String _feedbackKey = 'application_feedback';
   static const String _jobListingReportsKey = 'job_listing_reports';
+  static const String _savedSearchesKey = 'saved_searches';
 
   @override
   Future<Set<String>> loadFavoriteIds() async {
@@ -449,7 +451,70 @@ class LocalAppRepository implements AppRepository {
   }
 
   @override
+  Future<List<SavedSearch>> loadSavedSearches() async {
+    final prefs = await SharedPreferences.getInstance();
+    final stored = prefs.getString(_savedSearchesKey);
+    if (stored == null || stored.isEmpty) {
+      return [];
+    }
+
+    try {
+      final json = jsonDecode(stored);
+      if (json is List) {
+        return json
+            .map((item) => SavedSearch.fromJson(
+                Map<String, dynamic>.from(item as Map)))
+            .toList();
+      }
+      return [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  @override
+  Future<void> saveSavedSearch(SavedSearch search) async {
+    final prefs = await SharedPreferences.getInstance();
+    final existing = await loadSavedSearches();
+    final index = existing.indexWhere((s) => s.id == search.id);
+    if (index >= 0) {
+      existing[index] = search;
+    } else {
+      existing.add(search);
+    }
+
+    final json = jsonEncode(existing.map((s) => s.toJson()).toList());
+    await prefs.setString(_savedSearchesKey, json);
+  }
+
+  @override
+  Future<void> updateSavedSearch(SavedSearch search) async {
+    final prefs = await SharedPreferences.getInstance();
+    final existing = await loadSavedSearches();
+    final index = existing.indexWhere((s) => s.id == search.id);
+    if (index >= 0) {
+      existing[index] = search;
+      final json = jsonEncode(existing.map((s) => s.toJson()).toList());
+      await prefs.setString(_savedSearchesKey, json);
+    }
+  }
+
+  @override
+  Future<void> deleteSavedSearch(String searchId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final existing = await loadSavedSearches();
+    existing.removeWhere((s) => s.id == searchId);
+    final json = jsonEncode(existing.map((s) => s.toJson()).toList());
+    await prefs.setString(_savedSearchesKey, json);
+  }
+
+  @override
   Future<String> sendEmployerNotificationTestEmail(String employerId) async {
+    return 'Test email is available when Supabase mode is enabled.';
+  }
+
+  @override
+  Future<String> sendSeekerNotificationTestEmail() async {
     return 'Test email is available when Supabase mode is enabled.';
   }
 }

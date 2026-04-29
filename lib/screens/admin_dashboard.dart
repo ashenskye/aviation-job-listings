@@ -409,6 +409,8 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
   JobListing? _editingListing;
   final Set<String> _archivingListingIds = <String>{};
   final Set<String> _deletingListingIds = <String>{};
+  final Set<String> _handingOffListingIds = <String>{};
+  final Map<String, bool> _listingProfileAdminOwned = <String, bool>{};
   bool _externalListingsLoading = false;
   bool _isSubmitting = false;
   String? _selectedPositionOption;
@@ -467,10 +469,30 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
     setState(() => _externalListingsLoading = true);
     try {
       final listings = await widget.adminRepository.getExternalJobListings();
+      final employerIds = listings
+          .map((listing) => listing.employerId?.trim() ?? '')
+          .where((id) => id.isNotEmpty)
+          .toSet()
+          .toList();
+      final ownershipByEmployerId =
+          await widget.adminRepository.getEmployerProfileAdminOwnership(
+            employerIds,
+          );
+      final ownershipByListingId = <String, bool>{
+        for (final listing in listings)
+          if ((listing.employerId?.trim().isNotEmpty ?? false))
+            listing.id:
+                ownershipByEmployerId[listing.employerId!.trim()] ?? false,
+      };
       if (!mounted) {
         return;
       }
-      setState(() => _externalListings = listings);
+      setState(() {
+        _externalListings = listings;
+        _listingProfileAdminOwned
+          ..clear()
+          ..addAll(ownershipByListingId);
+      });
     } catch (_) {
       if (!mounted) {
         return;
@@ -694,8 +716,15 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
 
         setState(() => _selectedView = _ExternalPostsView.view);
 
+        final linkedProfileId = created.employerId?.trim() ?? '';
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('External listing posted: ${created.title}')),
+          SnackBar(
+            content: Text(
+              linkedProfileId.isEmpty
+                  ? 'External listing posted: ${created.title}'
+                  : 'External listing posted: ${created.title}. Profile ID: $linkedProfileId',
+            ),
+          ),
         );
       } else {
         final updated = activeEditListing.copyWith(
@@ -1494,6 +1523,121 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
       if (mounted) {
         setState(() {
           _deletingListingIds.remove(listing.id);
+        });
+      }
+    }
+  }
+
+  Future<void> _handoffExternalListingProfile(JobListing listing) async {
+    if (_handingOffListingIds.contains(listing.id)) {
+      return;
+    }
+
+    final employerId = listing.employerId?.trim() ?? '';
+    if (employerId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'This external listing is not linked to a company profile yet.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final seededEmail = (listing.contactEmail?.trim().isNotEmpty ?? false)
+        ? listing.contactEmail!.trim()
+        : _extractDetailLine(listing.description, 'Contact Email:');
+    final emailController = TextEditingController(text: seededEmail);
+    String? errorText;
+    final email = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Hand Off Company Profile'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Profile ID: $employerId'),
+              const SizedBox(height: 12),
+              TextField(
+                controller: emailController,
+                keyboardType: TextInputType.emailAddress,
+                decoration: InputDecoration(
+                  labelText: 'Employer Account Email',
+                  border: const OutlineInputBorder(),
+                  errorText: errorText,
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                final value = emailController.text.trim().toLowerCase();
+                const emailPattern = r'^[^@\s]+@[^@\s]+\.[^@\s]+$';
+                if (!RegExp(emailPattern).hasMatch(value)) {
+                  setDialogState(() {
+                    errorText = 'Enter a valid email address.';
+                  });
+                  return;
+                }
+                Navigator.of(dialogContext).pop(value);
+              },
+              child: const Text('Hand Off'),
+            ),
+          ],
+        ),
+      ),
+    );
+    emailController.dispose();
+
+    if (email == null || email.isEmpty) {
+      return;
+    }
+
+    setState(() {
+      _handingOffListingIds.add(listing.id);
+    });
+
+    try {
+      await widget.adminRepository.assignEmployerProfileToEmail(
+        employerId: employerId,
+        email: email,
+        reason:
+            'External listing profile handoff for listing ${listing.id}: ${listing.title}',
+      );
+      if (!mounted) {
+        return;
+      }
+      await widget.onCreated();
+      await _loadExternalListings();
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Profile $employerId was handed off to $email.',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not hand off profile: $e')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _handingOffListingIds.remove(listing.id);
         });
       }
     }
@@ -2645,6 +2789,10 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
               ?.toLocal()
               .toString()
               .substring(0, 19);
+          final ownershipKnown = _listingProfileAdminOwned.containsKey(
+            listing.id,
+          );
+          final isAdminOwned = _listingProfileAdminOwned[listing.id] ?? false;
 
           return Card(
             margin: const EdgeInsets.only(bottom: 10),
@@ -2680,6 +2828,30 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
                     ),
                     const SizedBox(height: 4),
                     Text('${listing.company} • ${listing.location}'),
+                    if (ownershipKnown) ...[
+                      const SizedBox(height: 6),
+                      Chip(
+                        visualDensity: VisualDensity.compact,
+                        label: Text(
+                          isAdminOwned ? 'Admin-Owned Profile' : 'Handed Off',
+                          style: TextStyle(
+                            color: isAdminOwned
+                                ? Colors.orange.shade900
+                                : Colors.green.shade900,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 12,
+                          ),
+                        ),
+                        backgroundColor: isAdminOwned
+                            ? Colors.orange.shade50
+                            : Colors.green.shade50,
+                        side: BorderSide(
+                          color: isAdminOwned
+                              ? Colors.orange.shade200
+                              : Colors.green.shade200,
+                        ),
+                      ),
+                    ],
                     const SizedBox(height: 4),
                     Text('Type: ${listing.type}'),
                     if (createdLabel != null) ...[
@@ -2701,6 +2873,26 @@ class _ExternalPostingsTabState extends State<_ExternalPostingsTab> {
                           onPressed: () => _beginEditExternalListing(listing),
                           icon: const Icon(Icons.edit_outlined),
                           label: const Text('Edit'),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed:
+                              _handingOffListingIds.contains(listing.id)
+                              ? null
+                              : () => _handoffExternalListingProfile(listing),
+                          icon: _handingOffListingIds.contains(listing.id)
+                              ? const SizedBox(
+                                  width: 14,
+                                  height: 14,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(Icons.assignment_ind_outlined),
+                          label: Text(
+                            _handingOffListingIds.contains(listing.id)
+                                ? 'Handing Off...'
+                                : 'Hand Off Profile',
+                          ),
                         ),
                         if (listing.isActive)
                           OutlinedButton.icon(

@@ -22,6 +22,7 @@ import 'models/job_listing.dart';
 import 'models/job_listing_report.dart';
 import 'models/job_listing_template.dart';
 import 'models/job_seeker_profile.dart';
+import 'models/saved_search.dart';
 import 'repositories/app_repository.dart';
 import 'screens/admin_dashboard.dart';
 import 'screens/sign_in_screen.dart';
@@ -185,16 +186,12 @@ class _LinkifiedText extends StatelessWidget {
   const _LinkifiedText({
     required this.text,
     this.style,
-    this.maxLines,
-    this.overflow,
     this.onTapUrl,
     this.onTapPhone,
   });
 
   final String text;
   final TextStyle? style;
-  final int? maxLines;
-  final TextOverflow? overflow;
   final ValueChanged<String>? onTapUrl;
   final ValueChanged<String>? onTapPhone;
 
@@ -275,19 +272,10 @@ class _LinkifiedText extends StatelessWidget {
       spans.add(TextSpan(text: text, style: baseStyle));
     }
 
-    // Use SelectableText.rich in full-view contexts (no maxLines) so users
-    // can right-click / long-press to copy URLs, emails, and phone numbers.
-    if (maxLines == null) {
-      return SelectableText.rich(
-        TextSpan(children: spans),
-        style: baseStyle,
-      );
-    }
-
-    return RichText(
-      maxLines: maxLines,
-      overflow: overflow ?? TextOverflow.clip,
-      text: TextSpan(children: spans),
+    // Use SelectableText.rich so users can copy URLs, emails, and phone numbers.
+    return SelectableText.rich(
+      TextSpan(children: spans),
+      style: baseStyle,
     );
   }
 }
@@ -929,6 +917,7 @@ class _MyHomePageState extends State<MyHomePage> {
   // Tracks whether the Employer Profile tab is in edit mode.
   bool _employerProfileEditing = false;
   String _query = '';
+  String _browseTabSort = 'newest';
   String _searchTabQuery = '';
   String _searchTabGuideCountry = 'United States';
   int _searchTabGuideStateResetCount = 0;
@@ -942,6 +931,7 @@ class _MyHomePageState extends State<MyHomePage> {
   String _searchTabRatingFilter = 'all';
   String _searchTabFlightHoursFilter = 'all';
   String _searchTabInstructorHoursFilter = 'all';
+  String _searchTabStatusFilter = 'active';
   String? _searchTabActiveRegion;
   int _searchTabMinimumMatchPercent = 0;
   String _searchTabSort = 'best_match';
@@ -954,6 +944,7 @@ class _MyHomePageState extends State<MyHomePage> {
   String? _searchTabPendingInstructorHoursFilter;
   String? _searchTabPendingCertificateFilter;
   String? _searchTabPendingRatingFilter;
+  String? _searchTabPendingStatusFilter;
   String? _searchTabPendingSort;
   bool _searchTabPrimaryFiltersDrawerOpen = true;
   bool _searchTabEmploymentTypeExpanded = false;
@@ -995,11 +986,26 @@ class _MyHomePageState extends State<MyHomePage> {
   bool _uploadingEmployerLogoImage = false;
   bool _uploadingEmployerBannerImage = false;
   bool _sendingEmployerNotificationTestEmail = false;
+  bool _sendingSeekerNotificationTestEmail = false;
   DateTime? _lastEmployerNotificationTestAt;
   String? _lastEmployerNotificationTestMessage;
   bool? _lastEmployerNotificationTestSucceeded;
+  bool _uploadingResumeFile = false;
+  String? _uploadedResumeFileName;
+  int? _uploadedResumeFileSizeBytes;
+  DateTime? _uploadedResumeUpdatedAt;
+  String _generatedResumeDraft = '';
+  DateTime? _generatedResumeUpdatedAt;
   static const String _employerNotificationTestStatusKeyPrefix =
       'employer_notification_test_status_';
+  static const String _resumeStorageKeyPrefix = 'job_seeker_resume_';
+  String? _pendingSharedJobId;
+
+  // ============================================================================
+  // SAVED SEARCHES STATE
+  // ============================================================================
+
+  List<SavedSearch> _savedSearches = const [];
 
   // ============================================================================
   // JOB LISTING STATE: Data models and data persistence
@@ -1114,6 +1120,409 @@ class _MyHomePageState extends State<MyHomePage> {
     final hour = local.hour.toString().padLeft(2, '0');
     final minute = local.minute.toString().padLeft(2, '0');
     return '$month/$day/$year $hour:$minute';
+  }
+
+  String _resumeStorageKey(String suffix) {
+    return '$_resumeStorageKeyPrefix${_currentJobSeekerId()}_$suffix';
+  }
+
+  Future<void> _loadResumeWorkspaceState() async {
+    final prefs = await SharedPreferences.getInstance();
+    final uploadedName = prefs.getString(_resumeStorageKey('uploaded_name'));
+    final uploadedSize = prefs.getInt(_resumeStorageKey('uploaded_size'));
+    final uploadedAtRaw = prefs.getString(_resumeStorageKey('uploaded_at'));
+    final generatedDraft =
+        prefs.getString(_resumeStorageKey('generated_draft')) ?? '';
+    final generatedAtRaw = prefs.getString(_resumeStorageKey('generated_at'));
+
+    DateTime? uploadedAt;
+    if (uploadedAtRaw != null && uploadedAtRaw.trim().isNotEmpty) {
+      uploadedAt = DateTime.tryParse(uploadedAtRaw.trim());
+    }
+
+    DateTime? generatedAt;
+    if (generatedAtRaw != null && generatedAtRaw.trim().isNotEmpty) {
+      generatedAt = DateTime.tryParse(generatedAtRaw.trim());
+    }
+
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _uploadedResumeFileName = uploadedName;
+      _uploadedResumeFileSizeBytes = uploadedSize;
+      _uploadedResumeUpdatedAt = uploadedAt;
+      _generatedResumeDraft = generatedDraft;
+      _generatedResumeUpdatedAt = generatedAt;
+    });
+  }
+
+  Future<void> _persistResumeWorkspaceState() async {
+    final prefs = await SharedPreferences.getInstance();
+
+    if (_uploadedResumeFileName != null &&
+        _uploadedResumeFileName!.trim().isNotEmpty) {
+      await prefs.setString(
+        _resumeStorageKey('uploaded_name'),
+        _uploadedResumeFileName!.trim(),
+      );
+    } else {
+      await prefs.remove(_resumeStorageKey('uploaded_name'));
+    }
+
+    if (_uploadedResumeFileSizeBytes != null) {
+      await prefs.setInt(
+        _resumeStorageKey('uploaded_size'),
+        _uploadedResumeFileSizeBytes!,
+      );
+    } else {
+      await prefs.remove(_resumeStorageKey('uploaded_size'));
+    }
+
+    if (_uploadedResumeUpdatedAt != null) {
+      await prefs.setString(
+        _resumeStorageKey('uploaded_at'),
+        _uploadedResumeUpdatedAt!.toIso8601String(),
+      );
+    } else {
+      await prefs.remove(_resumeStorageKey('uploaded_at'));
+    }
+
+    if (_generatedResumeDraft.trim().isNotEmpty) {
+      await prefs.setString(
+        _resumeStorageKey('generated_draft'),
+        _generatedResumeDraft.trim(),
+      );
+    } else {
+      await prefs.remove(_resumeStorageKey('generated_draft'));
+    }
+
+    if (_generatedResumeUpdatedAt != null) {
+      await prefs.setString(
+        _resumeStorageKey('generated_at'),
+        _generatedResumeUpdatedAt!.toIso8601String(),
+      );
+    } else {
+      await prefs.remove(_resumeStorageKey('generated_at'));
+    }
+  }
+
+  String _formatFileSize(int bytes) {
+    if (bytes < 1024) {
+      return '$bytes B';
+    }
+    if (bytes < 1024 * 1024) {
+      final kb = bytes / 1024;
+      return '${kb.toStringAsFixed(kb >= 100 ? 0 : 1)} KB';
+    }
+    final mb = bytes / (1024 * 1024);
+    return '${mb.toStringAsFixed(mb >= 100 ? 0 : 1)} MB';
+  }
+
+  String _resumeFileMimeType(String extension) {
+    switch (extension.toLowerCase()) {
+      case 'pdf':
+        return 'application/pdf';
+      case 'doc':
+        return 'application/msword';
+      case 'docx':
+        return 'application/vnd.openxmlformats-officedocument'
+            '.wordprocessingml.document';
+      case 'rtf':
+        return 'application/rtf';
+      default:
+        return 'text/plain';
+    }
+  }
+
+  Future<String?> _uploadResumeToStorage(PlatformFile file) async {
+    final bytes = file.bytes;
+    if (bytes == null || bytes.isEmpty) {
+      return null;
+    }
+
+    // Local mode: no remote storage — file metadata is tracked in workspace
+    // state (_uploadedResumeFileName / size / date). Nothing to persist here.
+    if (!SupabaseBootstrap.isConfigured) {
+      return null;
+    }
+
+    final userId = Supabase.instance.client.auth.currentUser?.id;
+    if (userId == null || userId.isEmpty) {
+      return null;
+    }
+
+    final ext = (file.extension ?? 'pdf').toLowerCase();
+    final mime = _resumeFileMimeType(ext);
+    // Sanitize filename to prevent path traversal and special-character issues
+    // in the storage object key.
+    final safeName = file.name.replaceAll(RegExp(r'[^a-zA-Z0-9._-]'), '_');
+    final objectPath =
+        '$userId/${DateTime.now().millisecondsSinceEpoch}_$safeName';
+
+    final bucket = Supabase.instance.client.storage.from('seeker-resumes');
+    await bucket.uploadBinary(
+      objectPath,
+      bytes,
+      fileOptions: FileOptions(contentType: mime, upsert: false),
+    );
+    // seeker-resumes is a private bucket. Store the object path so a signed
+    // URL can be generated on demand when the file needs to be displayed or
+    // shared (use storage.from('seeker-resumes').createSignedUrl(path, expiry)).
+    return objectPath;
+  }
+
+  Future<void> _pickResumeFile() async {
+    if (_uploadingResumeFile) {
+      return;
+    }
+
+    setState(() {
+      _uploadingResumeFile = true;
+    });
+
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        allowMultiple: false,
+        withData: true,
+        type: FileType.custom,
+        allowedExtensions: const ['pdf', 'doc', 'docx', 'rtf', 'txt'],
+      );
+
+      if (!mounted) {
+        return;
+      }
+      if (result == null || result.files.isEmpty) {
+        return;
+      }
+
+      final picked = result.files.first;
+      final selectedName = picked.name.trim();
+      if (selectedName.isEmpty) {
+        return;
+      }
+
+      // Upload to Supabase Storage (or local data-URI fallback).
+      final uploadedUrl = await _uploadResumeToStorage(picked);
+
+      if (!mounted) {
+        return;
+      }
+
+      final now = DateTime.now();
+      setState(() {
+        _uploadedResumeFileName = selectedName;
+        _uploadedResumeFileSizeBytes = picked.size;
+        _uploadedResumeUpdatedAt = now;
+        if (uploadedUrl != null && uploadedUrl.isNotEmpty) {
+          _jobSeekerProfile = _jobSeekerProfile.copyWith(
+            resumeUrl: uploadedUrl,
+            resumeFileName: selectedName,
+          );
+        }
+      });
+      await _persistResumeWorkspaceState();
+      if (uploadedUrl != null && uploadedUrl.isNotEmpty) {
+        await _saveJobSeekerProfile();
+      }
+
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            SupabaseBootstrap.isConfigured
+                ? 'Resume uploaded: $selectedName'
+                : 'Resume selected: $selectedName',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Resume upload failed. Please try again.')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _uploadingResumeFile = false;
+        });
+      }
+    }
+  }
+
+  String _buildGeneratedResumeDraftText({
+    required String targetRole,
+    required String summary,
+    required String recentExperience,
+    required String keyCertifications,
+    required String aircraft,
+  }) {
+    final name = _jobSeekerProfile.fullName.trim().isNotEmpty
+        ? _jobSeekerProfile.fullName.trim()
+        : 'Job Seeker';
+    final city = _jobSeekerProfile.city.trim();
+    final state = _jobSeekerProfile.stateOrProvince.trim();
+    final location = [city, state].where((part) => part.isNotEmpty).join(', ');
+    final certLine = keyCertifications.trim().isNotEmpty
+        ? keyCertifications.trim()
+        : 'Not specified';
+    final aircraftLine = aircraft.trim().isNotEmpty
+        ? aircraft.trim()
+        : 'Not specified';
+
+    return [
+      name,
+      if (location.isNotEmpty) location,
+      if (_resolvedJobSeekerEmail(_jobSeekerProfile).trim().isNotEmpty)
+        _resolvedJobSeekerEmail(_jobSeekerProfile).trim(),
+      if (_jobSeekerProfile.phone.trim().isNotEmpty)
+        _formatPhoneNumber(_jobSeekerProfile.phone),
+      '',
+      'TARGET ROLE',
+      targetRole.trim(),
+      '',
+      'PROFESSIONAL SUMMARY',
+      summary.trim(),
+      '',
+      'RECENT EXPERIENCE HIGHLIGHTS',
+      recentExperience.trim(),
+      '',
+      'KEY CERTIFICATIONS',
+      certLine,
+      '',
+      'AIRCRAFT EXPERIENCE',
+      aircraftLine,
+    ].join('\n');
+  }
+
+  Future<void> _openResumeGeneratorDialog() async {
+    final defaultRole = _jobSeekerProfile.fullName.trim().isNotEmpty
+        ? 'Aviation Professional'
+        : 'Pilot';
+    final defaultSummary = _jobSeekerProfile.totalFlightHours > 0
+        ? 'Aviation professional with ${_jobSeekerProfile.totalFlightHours} total flight hours focused on safe, efficient operations.'
+        : 'Aviation professional focused on safe, efficient operations and strong crew coordination.';
+    final defaultExperience = _jobSeekerProfile.specialtyFlightHours.isNotEmpty
+        ? _jobSeekerProfile.specialtyFlightHours.join(', ')
+        : 'Line operations and mission readiness support.';
+    final defaultCertifications = _jobSeekerProfile.faaCertificates.isNotEmpty
+        ? _jobSeekerProfile.faaCertificates.join(', ')
+        : '';
+    final defaultAircraft = _jobSeekerProfile.aircraftFlown.isNotEmpty
+        ? _jobSeekerProfile.aircraftFlown.join(', ')
+        : '';
+
+    final roleController = TextEditingController(text: defaultRole);
+    final summaryController = TextEditingController(text: defaultSummary);
+    final experienceController = TextEditingController(text: defaultExperience);
+    final certsController = TextEditingController(text: defaultCertifications);
+    final aircraftController = TextEditingController(text: defaultAircraft);
+
+    try {
+      final generatedDraft = await showDialog<String>(
+        context: context,
+        builder: (dialogContext) {
+          return AlertDialog(
+            title: const Text('Generate Resume Draft'),
+            content: SizedBox(
+              width: 560,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    TextField(
+                      controller: roleController,
+                      decoration: const InputDecoration(
+                        labelText: 'Target Role',
+                        hintText: 'e.g. Part 135 Captain',
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: summaryController,
+                      maxLines: 3,
+                      decoration: const InputDecoration(
+                        labelText: 'Professional Summary',
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: experienceController,
+                      maxLines: 3,
+                      decoration: const InputDecoration(
+                        labelText: 'Recent Experience Highlights',
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: certsController,
+                      decoration: const InputDecoration(
+                        labelText: 'Key Certifications',
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: aircraftController,
+                      decoration: const InputDecoration(
+                        labelText: 'Aircraft Experience',
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () {
+                  final draft = _buildGeneratedResumeDraftText(
+                    targetRole: roleController.text,
+                    summary: summaryController.text,
+                    recentExperience: experienceController.text,
+                    keyCertifications: certsController.text,
+                    aircraft: aircraftController.text,
+                  );
+                  Navigator.of(dialogContext).pop(draft);
+                },
+                child: const Text('Generate'),
+              ),
+            ],
+          );
+        },
+      );
+
+      if (!mounted || generatedDraft == null || generatedDraft.trim().isEmpty) {
+        return;
+      }
+
+      setState(() {
+        _generatedResumeDraft = generatedDraft.trim();
+        _generatedResumeUpdatedAt = DateTime.now();
+      });
+      await _persistResumeWorkspaceState();
+
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Resume draft generated.')),
+      );
+    } finally {
+      roleController.dispose();
+      summaryController.dispose();
+      experienceController.dispose();
+      certsController.dispose();
+      aircraftController.dispose();
+    }
   }
 
   String _currentJobSeekerId() {
@@ -1275,8 +1684,14 @@ class _MyHomePageState extends State<MyHomePage> {
     _loadMyApplications();
     _loadEmployerApplications();
     _loadAllFeedback();
+    _loadSavedSearches();
+    _loadResumeWorkspaceState();
     _loadCookieConsentPreference();
     _syncSearchTabMatchPercentController();
+    if (kIsWeb) {
+      final sharedJobId = Uri.base.queryParameters['job']?.trim() ?? '';
+      _pendingSharedJobId = sharedJobId.isEmpty ? null : sharedJobId;
+    }
     _fetchJobs();
   }
 
@@ -2181,7 +2596,7 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Future<void> _contactExternalEmployer(JobListing job) async {
-    final rawUrl = job.externalApplyUrl?.trim() ?? '';
+    final rawUrl = job.companyUrl?.trim() ?? '';
     if (rawUrl.isNotEmpty) {
       final uri = _parseLaunchableHttpUri(rawUrl);
       if (uri != null) {
@@ -2194,7 +2609,7 @@ class _MyHomePageState extends State<MyHomePage> {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
                 content: Text(
-                  'Opening external listing. Contact the employer directly to apply.',
+                  'Opening company website. Contact the employer directly to apply.',
                 ),
               ),
             );
@@ -2211,7 +2626,7 @@ class _MyHomePageState extends State<MyHomePage> {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
         content: Text(
-          'External listing: contact the employer directly to apply.',
+          'No company website available. Contact the employer directly to apply.',
         ),
       ),
     );
@@ -4775,6 +5190,47 @@ class _MyHomePageState extends State<MyHomePage> {
     }
   }
 
+  Future<void> _sendSeekerNotificationTestEmail() async {
+    if (_sendingSeekerNotificationTestEmail) {
+      return;
+    }
+
+    setState(() {
+      _sendingSeekerNotificationTestEmail = true;
+    });
+
+    try {
+      final message = await _appRepository.sendSeekerNotificationTestEmail();
+      if (!mounted) {
+        return;
+      }
+
+      final normalized = message.toLowerCase();
+      final indicatesFailure =
+          normalized.contains('error') ||
+          normalized.contains('failed') ||
+          normalized.contains('could not');
+      final shouldShowCopyableDialog = indicatesFailure || message.length > 120;
+
+      if (shouldShowCopyableDialog) {
+        await _showCopyableMessageDialog(
+          title: 'Seeker Notification Test Result',
+          message: message,
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(message)),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _sendingSeekerNotificationTestEmail = false;
+        });
+      }
+    }
+  }
+
   Future<void> _showCopyableMessageDialog({
     required String title,
     required String message,
@@ -4877,6 +5333,54 @@ class _MyHomePageState extends State<MyHomePage> {
       _loadingError = result.warningMessage;
       _page = 1;
       _loading = false;
+    });
+
+    _openPendingSharedJobIfAny();
+  }
+
+  void _openPendingSharedJobIfAny() {
+    final pendingId = _pendingSharedJobId;
+    if (pendingId == null || pendingId.isEmpty) {
+      return;
+    }
+
+    JobListing? pendingJob;
+    bool existsButHidden = false;
+    for (final job in _allJobs) {
+      if (job.id == pendingId) {
+        if (job.shouldShow) {
+          pendingJob = job;
+          break;
+        }
+        existsButHidden = true;
+      }
+    }
+
+    if (pendingJob == null) {
+      _pendingSharedJobId = null;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) {
+          return;
+        }
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              existsButHidden
+                  ? 'This listing is no longer available.'
+                  : 'We could not find that listing.',
+            ),
+          ),
+        );
+      });
+      return;
+    }
+
+    _pendingSharedJobId = null;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      _openDetails(pendingJob!);
     });
   }
 
@@ -5774,18 +6278,94 @@ class _MyHomePageState extends State<MyHomePage> {
   List<JobListing> get _filteredJobs {
     final visibleJobs = _visibleJobs;
 
-    if (_query.isEmpty) return visibleJobs;
+    final filtered = _query.isEmpty
+        ? List<JobListing>.from(visibleJobs)
+        : visibleJobs.where((job) {
+            final locationAliases = _locationSearchAliases(job.location);
+            final q = _query.toLowerCase();
+            return job.title.toLowerCase().contains(q) ||
+                job.company.toLowerCase().contains(q) ||
+                job.location.toLowerCase().contains(q) ||
+                locationAliases.any((alias) => alias.contains(q)) ||
+                job.type.toLowerCase().contains(q) ||
+                job.description.toLowerCase().contains(q);
+          }).toList();
 
-    final q = _query.toLowerCase();
-    return visibleJobs.where((job) {
-      final locationAliases = _locationSearchAliases(job.location);
-      return job.title.toLowerCase().contains(q) ||
-          job.company.toLowerCase().contains(q) ||
-          job.location.toLowerCase().contains(q) ||
-          locationAliases.any((alias) => alias.contains(q)) ||
-          job.type.toLowerCase().contains(q) ||
-          job.description.toLowerCase().contains(q);
-    }).toList();
+    if (_profileType != ProfileType.jobSeeker) {
+      return filtered;
+    }
+
+    filtered.sort((a, b) {
+      final aMismatch = _airframeScopeMismatch(a, _jobSeekerProfile) ? 1 : 0;
+      final bMismatch = _airframeScopeMismatch(b, _jobSeekerProfile) ? 1 : 0;
+      if (aMismatch != bMismatch) {
+        return aMismatch.compareTo(bMismatch);
+      }
+
+      switch (_browseTabSort) {
+        case 'best_match':
+          final matchCompare = _evaluateJobMatch(
+            b,
+          ).matchPercentage.compareTo(_evaluateJobMatch(a).matchPercentage);
+          if (matchCompare != 0) {
+            return matchCompare;
+          }
+          final bDate = b.updatedAt ?? b.createdAt;
+          final aDate = a.updatedAt ?? a.createdAt;
+          if (aDate != null && bDate != null) {
+            return bDate.compareTo(aDate);
+          }
+          if (bDate != null) {
+            return 1;
+          }
+          if (aDate != null) {
+            return -1;
+          }
+          return a.title.toLowerCase().compareTo(b.title.toLowerCase());
+        case 'deadline':
+          final aDeadline = a.deadlineDate;
+          final bDeadline = b.deadlineDate;
+          if (aDeadline != null && bDeadline != null) {
+            final deadlineCompare = aDeadline.compareTo(bDeadline);
+            if (deadlineCompare != 0) {
+              return deadlineCompare;
+            }
+          } else if (aDeadline != null) {
+            return -1;
+          } else if (bDeadline != null) {
+            return 1;
+          }
+          final bDate = b.updatedAt ?? b.createdAt;
+          final aDate = a.updatedAt ?? a.createdAt;
+          if (aDate != null && bDate != null) {
+            return bDate.compareTo(aDate);
+          }
+          if (bDate != null) {
+            return 1;
+          }
+          if (aDate != null) {
+            return -1;
+          }
+          return a.title.toLowerCase().compareTo(b.title.toLowerCase());
+        case 'newest':
+        default:
+          final aDate = a.updatedAt ?? a.createdAt;
+          final bDate = b.updatedAt ?? b.createdAt;
+          if (aDate != null && bDate != null) {
+            final dateCompare = bDate.compareTo(aDate);
+            if (dateCompare != 0) {
+              return dateCompare;
+            }
+          } else if (aDate != null) {
+            return -1;
+          } else if (bDate != null) {
+            return 1;
+          }
+          return a.title.toLowerCase().compareTo(b.title.toLowerCase());
+      }
+    });
+
+    return filtered;
   }
 
   List<String> get _searchTabTypeOptions {
@@ -6083,6 +6663,25 @@ class _MyHomePageState extends State<MyHomePage> {
     return sorted.join('|');
   }
 
+  List<JobListing> _searchTabJobsForStatusFilter(String statusFilter) {
+    if (_profileType == ProfileType.employer) {
+      return _visibleJobs;
+    }
+
+    final publicNonArchivedJobs = _allJobs.where((job) => !job.isArchived);
+    switch (statusFilter) {
+      case 'expired_only':
+        return publicNonArchivedJobs.where((job) => job.isExpired).toList();
+      case 'active_or_expired':
+        return publicNonArchivedJobs
+            .where((job) => job.shouldShow || job.isExpired)
+            .toList();
+      case 'active':
+      default:
+        return publicNonArchivedJobs.where((job) => job.shouldShow).toList();
+    }
+  }
+
   List<JobListing> get _searchTabFilteredJobs {
     final typeFilters = _decodeSearchTabMultiFilter(
       _searchTabTypeFilter,
@@ -6126,8 +6725,9 @@ class _MyHomePageState extends State<MyHomePage> {
     );
 
     final query = _searchTabQuery.toLowerCase();
+    final searchSourceJobs = _searchTabJobsForStatusFilter(_searchTabStatusFilter);
 
-    final filtered = _visibleJobs.where((job) {
+    final filtered = searchSourceJobs.where((job) {
       if (_searchTabExternalOnly && !job.isExternal) {
         return false;
       }
@@ -6493,6 +7093,200 @@ class _MyHomePageState extends State<MyHomePage> {
     setState(() {
       _allFeedback = feedback;
     });
+  }
+
+  Future<void> _loadSavedSearches() async {
+    if (_profileType != ProfileType.jobSeeker) {
+      return;
+    }
+
+    try {
+      final searches = await _appRepository.loadSavedSearches();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _savedSearches = searches;
+      });
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+      // Silently fail to load saved searches
+    }
+  }
+
+  SavedSearch _createSavedSearchFromCurrentFilters(String name) {
+    return SavedSearch(
+      id: 'search_${DateTime.now().millisecondsSinceEpoch}',
+      name: name,
+      createdAt: DateTime.now(),
+      typeFilter: _searchTabTypeFilter,
+      locationFilter: _searchTabLocationFilter,
+      positionFilter: _searchTabPositionFilter,
+      faaRuleFilter: _searchTabFaaRuleFilter,
+      airframeScopeFilter: _searchTabAirframeScopeFilter,
+      specialtyFilter: _searchTabSpecialtyFilter,
+      certificateFilter: _searchTabCertificateFilter,
+      ratingFilter: _searchTabRatingFilter,
+      instructorHoursFilter: _searchTabInstructorHoursFilter,
+      flightHoursFilter: _searchTabFlightHoursFilter,
+      specialtyHoursFilter: 'all',
+      statusFilter: _searchTabStatusFilter,
+      sort: _searchTabSort,
+      minimumMatchPercent: _searchTabMinimumMatchPercent,
+      isFavorite: false,
+    );
+  }
+
+  Future<void> _saveCurrentSearch() async {
+    final nameController = TextEditingController();
+
+    if (!mounted) {
+      return;
+    }
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Save Search'),
+        content: TextField(
+          controller: nameController,
+          decoration: const InputDecoration(
+            labelText: 'Search name',
+            hintText: 'e.g., Part 135 Captain Jobs',
+          ),
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+
+    final searchName = nameController.text.trim();
+    if (searchName.isEmpty) {
+      return;
+    }
+
+    final search = _createSavedSearchFromCurrentFilters(searchName);
+
+    try {
+      await _appRepository.saveSavedSearch(search);
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _savedSearches = [search, ..._savedSearches];
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Saved search "$searchName"')),
+      );
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error saving search: $e')),
+      );
+    }
+
+    nameController.dispose();
+  }
+
+  Future<void> _applySavedSearch(SavedSearch search) async {
+    setState(() {
+      _searchTabTypeFilter = search.typeFilter;
+      _searchTabLocationFilter = search.locationFilter;
+      _searchTabPositionFilter = search.positionFilter;
+      _searchTabFaaRuleFilter = search.faaRuleFilter;
+      _searchTabAirframeScopeFilter = search.airframeScopeFilter;
+      _searchTabSpecialtyFilter = search.specialtyFilter;
+      _searchTabCertificateFilter = search.certificateFilter;
+      _searchTabRatingFilter = search.ratingFilter;
+      _searchTabInstructorHoursFilter = search.instructorHoursFilter;
+      _searchTabStatusFilter = search.statusFilter;
+      _searchTabSort = search.sort;
+      _searchTabMinimumMatchPercent = search.minimumMatchPercent;
+      _searchTabPendingTypeFilter = null;
+      _searchTabPendingLocationFilter = null;
+      _searchTabPendingPositionFilter = null;
+      _searchTabPendingFaaRuleFilter = null;
+      _searchTabPendingAirframeScopeFilter = null;
+      _searchTabPendingSpecialtyFilter = null;
+      _searchTabPendingCertificateFilter = null;
+      _searchTabPendingRatingFilter = null;
+      _searchTabPendingStatusFilter = null;
+      _searchTabPendingSort = null;
+    });
+
+    _syncSearchTabMatchPercentController();
+
+    if (!mounted) {
+      return;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Applied search "${search.name}"')),
+    );
+  }
+
+  Future<void> _deleteSavedSearch(SavedSearch search) async {
+    try {
+      await _appRepository.deleteSavedSearch(search.id);
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _savedSearches.removeWhere((s) => s.id == search.id);
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Deleted search "${search.name}"')),
+      );
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error deleting search: $e')),
+      );
+    }
+  }
+
+  Future<void> _toggleSavedSearchFavorite(SavedSearch search) async {
+    final updated = search.copyWith(isFavorite: !search.isFavorite);
+
+    try {
+      await _appRepository.updateSavedSearch(updated);
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        final index = _savedSearches.indexWhere((s) => s.id == search.id);
+        if (index >= 0) {
+          _savedSearches[index] = updated;
+        }
+      });
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error updating search: $e')),
+      );
+    }
   }
 
   Future<void> _applyToJob(JobListing job, {String? coverLetter}) async {
@@ -7005,6 +7799,9 @@ class _MyHomePageState extends State<MyHomePage> {
       final nextStatus =
           feedbackType == ApplicationFeedback.feedbackTypeInterested
           ? Application.statusInterested
+          : feedbackType ==
+            ApplicationFeedback.feedbackTypeFutureConsideration
+          ? Application.statusFutureConsideration
           : Application.statusRejected;
       await _appRepository.updateApplicationStatus(applicationId, nextStatus);
 
@@ -7064,6 +7861,42 @@ class _MyHomePageState extends State<MyHomePage> {
 
   Future<void> _openApplicantDetails(Application app, JobListing job) async {
     final existingFeedback = _getFeedbackForApplication(app.id);
+    final isAutoRejected =
+        app.status == Application.statusRejected &&
+        existingFeedback != null &&
+        existingFeedback.isAutoGenerated;
+
+    if (!isAutoRejected && app.status == Application.statusApplied) {
+      try {
+        await _appRepository.updateApplicationStatus(
+          app.id,
+          Application.statusViewed,
+        );
+        if (mounted) {
+          final viewedAt = DateTime.now();
+          setState(() {
+            _employerApplications = _employerApplications
+                .map(
+                  (candidate) => candidate.id == app.id
+                      ? candidate.copyWith(
+                          status: Application.statusViewed,
+                          updatedAt: viewedAt,
+                        )
+                      : candidate,
+                )
+                .toList();
+          });
+        }
+        _loadMyApplications();
+      } catch (_) {
+        // If this fails, still allow employer to view details.
+      }
+    }
+
+    if (!mounted) {
+      return;
+    }
+
     final customMessageController = TextEditingController();
     String? selectedFeedbackType;
 
@@ -7192,6 +8025,21 @@ class _MyHomePageState extends State<MyHomePage> {
                         },
                       ),
                       ChoiceChip(
+                        label: const Text('Future Consideration'),
+                        selected:
+                            selectedFeedbackType ==
+                            ApplicationFeedback
+                                .feedbackTypeFutureConsideration,
+                        selectedColor: Colors.amber.shade100,
+                        onSelected: (_) {
+                          setDialogState(() {
+                            selectedFeedbackType =
+                                ApplicationFeedback
+                                    .feedbackTypeFutureConsideration;
+                          });
+                        },
+                      ),
+                      ChoiceChip(
                         label: const Text('Not a Fit'),
                         selected:
                             selectedFeedbackType ==
@@ -7248,6 +8096,10 @@ class _MyHomePageState extends State<MyHomePage> {
                   final message =
                       type == ApplicationFeedback.feedbackTypeInterested
                       ? 'We are interested in your application and would like to move forward.'
+                      : type ==
+                        ApplicationFeedback
+                          .feedbackTypeFutureConsideration
+                      ? 'Thank you for your interest. We would like to reconnect once you gain more experience for this role.'
                       : type == ApplicationFeedback.feedbackTypeNotFit
                       ? 'Thank you for your interest. Unfortunately, you are not a fit for this role at this time.'
                       : customMessageController.text.trim();
@@ -7334,21 +8186,47 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Future<void> _shareJobListing(JobListing job) async {
-    final details = StringBuffer()
-      ..writeln('Aviation Job Listing')
-      ..writeln('Title: ${job.title}')
-      ..writeln('Company: ${job.company}')
-      ..writeln('Location: ${job.location}')
-      ..writeln('Type: ${job.type}')
-      ..writeln('Description: ${job.description}');
+    final configuredBaseUrl =
+        const String.fromEnvironment('APP_PUBLIC_URL').trim();
+    Uri? baseUri;
 
-    await Clipboard.setData(ClipboardData(text: details.toString()));
+    if (configuredBaseUrl.isNotEmpty) {
+      final parsed = Uri.tryParse(configuredBaseUrl);
+      if (parsed != null && parsed.hasScheme && parsed.host.isNotEmpty) {
+        baseUri = parsed;
+      }
+    }
+
+    if (baseUri == null) {
+      if (!kIsWeb) {
+        if (!mounted) {
+          return;
+        }
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Set --dart-define=APP_PUBLIC_URL to enable shareable listing links on this platform.',
+            ),
+          ),
+        );
+        return;
+      }
+      baseUri = Uri.base;
+    }
+
+    final shareUrl = baseUri.replace(
+      path: baseUri.path.isEmpty ? '/' : baseUri.path,
+      queryParameters: {'job': job.id},
+      fragment: '',
+    );
+
+    await Clipboard.setData(ClipboardData(text: shareUrl.toString()));
     if (!mounted) {
       return;
     }
 
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Listing details copied to clipboard.')),
+      const SnackBar(content: Text('Listing URL copied to clipboard.')),
     );
   }
 
@@ -10291,6 +11169,11 @@ class _MyHomePageState extends State<MyHomePage> {
     final mediaQuery = MediaQuery.of(context);
     final jobs = _pagedJobs;
     final totalPages = (_filteredJobs.length / _pageSize).ceil().clamp(1, 999);
+    final browseSortLabel = switch (_browseTabSort) {
+      'best_match' => 'Best Match',
+      'deadline' => 'Closing Soon',
+      _ => 'Newest Listings',
+    };
     final bottomSystemInset = math.max(
       mediaQuery.viewPadding.bottom,
       math.max(
@@ -10312,43 +11195,105 @@ class _MyHomePageState extends State<MyHomePage> {
         child: Column(
           children: [
             if (_profileType == ProfileType.jobSeeker)
-              Row(
+              Column(
                 children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _searchController,
-                      decoration: InputDecoration(
-                        labelText: 'Search jobs',
-                        hintText: 'Flutter, remote, analyst...',
-                        prefixIcon: const Icon(Icons.search),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _searchController,
+                          decoration: InputDecoration(
+                            labelText: 'Search jobs',
+                            hintText: 'Captain, Part 135, turbine, Dallas...',
+                            prefixIcon: const Icon(Icons.search),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            suffixIcon: _query.isNotEmpty
+                                ? IconButton(
+                                    icon: const Icon(Icons.clear),
+                                    onPressed: () {
+                                      _searchController.clear();
+                                      setState(() {
+                                        _query = '';
+                                        _page = 1;
+                                      });
+                                    },
+                                  )
+                                : null,
+                          ),
+                          onChanged: (value) {
+                            setState(() {
+                              _query = value.trim();
+                              _page = 1;
+                            });
+                          },
                         ),
-                        suffixIcon: _query.isNotEmpty
-                            ? IconButton(
-                                icon: const Icon(Icons.clear),
-                                onPressed: () {
-                                  _searchController.clear();
-                                  setState(() {
-                                    _query = '';
-                                    _page = 1;
-                                  });
-                                },
-                              )
-                            : null,
                       ),
-                      onChanged: (value) {
-                        setState(() {
-                          _query = value.trim();
-                          _page = 1;
-                        });
-                      },
-                    ),
+                      const SizedBox(width: 8),
+                      ElevatedButton(
+                        onPressed: _fetchJobs,
+                        child: const Text('Refresh'),
+                      ),
+                    ],
                   ),
-                  const SizedBox(width: 8),
-                  ElevatedButton(
-                    onPressed: _fetchJobs,
-                    child: const Text('Refresh'),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'Showing ${_filteredJobs.length} of ${_visibleJobs.length} jobs',
+                          style: TextStyle(
+                            color: Colors.grey.shade800,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      PopupMenuButton<String>(
+                        key: const ValueKey('browse-sort-menu'),
+                        tooltip: 'Sort browse results',
+                        initialValue: _browseTabSort,
+                        onSelected: (value) {
+                          setState(() {
+                            _browseTabSort = value;
+                            _page = 1;
+                          });
+                        },
+                        itemBuilder: (context) => const [
+                          PopupMenuItem(
+                            value: 'newest',
+                            child: Text('Newest Listings'),
+                          ),
+                          PopupMenuItem(
+                            value: 'best_match',
+                            child: Text('Best Match'),
+                          ),
+                          PopupMenuItem(
+                            value: 'deadline',
+                            child: Text('Closing Soon'),
+                          ),
+                        ],
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 10,
+                          ),
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: Colors.grey.shade400),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.sort, size: 18),
+                              const SizedBox(width: 8),
+                              Text(browseSortLabel),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -10790,21 +11735,6 @@ class _MyHomePageState extends State<MyHomePage> {
                                       },
                                     ),
                                     const SizedBox(height: 8),
-                                    _LinkifiedText(
-                                      text: job.description,
-                                      maxLines: 2,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: TextStyle(
-                                        color: Colors.grey.shade800,
-                                      ),
-                                      onTapUrl: (url) {
-                                        _openDetectedLink(url);
-                                      },
-                                      onTapPhone: (phone) {
-                                        _openPhoneCall(phone);
-                                      },
-                                    ),
-                                    const SizedBox(height: 8),
                                     Align(
                                       alignment: Alignment.centerRight,
                                       child: Wrap(
@@ -10959,7 +11889,9 @@ class _MyHomePageState extends State<MyHomePage> {
         }
 
         final statusLabel = switch (app.status) {
+          'viewed' => 'Viewed by employer',
           'reviewed' => 'Reviewed by employer',
+          'future_consideration' => '⏳ Future consideration',
           'interested' => '⭐ Employer interested',
           'rejected' => 'Not moving forward',
           _ => 'Submitted',
@@ -10970,18 +11902,23 @@ class _MyHomePageState extends State<MyHomePage> {
 
         final feedbackIcon = switch (feedback?.feedbackType) {
           ApplicationFeedback.feedbackTypeInterested => '✅',
+          ApplicationFeedback.feedbackTypeFutureConsideration => '⏳',
           ApplicationFeedback.feedbackTypeNotFit => '❌',
           _ => 'ℹ️',
         };
 
         final feedbackColor = switch (feedback?.feedbackType) {
           ApplicationFeedback.feedbackTypeInterested => Colors.green.shade50,
+          ApplicationFeedback.feedbackTypeFutureConsideration =>
+            Colors.amber.shade50,
           ApplicationFeedback.feedbackTypeNotFit => Colors.red.shade50,
           _ => Colors.blue.shade50,
         };
 
         final feedbackBorderColor = switch (feedback?.feedbackType) {
           ApplicationFeedback.feedbackTypeInterested => Colors.green.shade200,
+          ApplicationFeedback.feedbackTypeFutureConsideration =>
+            Colors.amber.shade200,
           ApplicationFeedback.feedbackTypeNotFit => Colors.red.shade200,
           _ => Colors.blue.shade200,
         };
@@ -11063,6 +12000,17 @@ class _MyHomePageState extends State<MyHomePage> {
                   'Applied ${_formatYmd(app.appliedAt.toLocal())}',
                   style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
                 ),
+                if (app.status != Application.statusApplied)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Text(
+                      'Status updated ${_formatYmd(app.updatedAt.toLocal())}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey.shade600,
+                      ),
+                    ),
+                  ),
                 // Feedback section
                 if (hasFeedback) ...[
                   const SizedBox(height: 10),
@@ -11111,7 +12059,9 @@ class _MyHomePageState extends State<MyHomePage> {
     final filterOptions = const [
       ('all', 'All'),
       ('applied', 'Submitted'),
+      ('viewed', 'Viewed'),
       ('reviewed', 'Reviewed'),
+      ('future_consideration', 'Future Consideration'),
       ('interested', 'Interested'),
       ('rejected', 'Not Moving Forward'),
     ];
@@ -11122,9 +12072,13 @@ class _MyHomePageState extends State<MyHomePage> {
     ];
     final countsByStatus = {
       'applied': allApplications.where((app) => app.status == 'applied').length,
+      'viewed': allApplications.where((app) => app.status == 'viewed').length,
       'reviewed': allApplications
           .where((app) => app.status == 'reviewed')
           .length,
+      'future_consideration': allApplications
+        .where((app) => app.status == 'future_consideration')
+        .length,
       'interested': allApplications
           .where((app) => app.status == 'interested')
           .length,
@@ -11159,14 +12113,18 @@ class _MyHomePageState extends State<MyHomePage> {
             switch (status) {
               case 'applied':
                 return 0;
-              case 'reviewed':
+              case 'viewed':
                 return 1;
-              case 'interested':
+              case 'reviewed':
                 return 2;
-              case 'rejected':
+              case 'future_consideration':
                 return 3;
-              default:
+              case 'interested':
                 return 4;
+              case 'rejected':
+                return 5;
+              default:
+                return 6;
             }
           }
 
@@ -11318,14 +12276,18 @@ class _MyHomePageState extends State<MyHomePage> {
         );
 
         final statusLabel = switch (app.status) {
+          'viewed' => 'Viewed',
           'reviewed' => 'Reviewed',
+          'future_consideration' => 'Future consideration',
           'interested' => 'Interested',
           'rejected' => 'Not moving forward',
           _ => 'Submitted',
         };
 
         final statusColor = switch (app.status) {
+          'viewed' => Colors.lightBlue.shade100,
           'reviewed' => Colors.blueGrey.shade100,
+          'future_consideration' => Colors.amber.shade100,
           'interested' => Colors.green.shade100,
           'rejected' => Colors.red.shade100,
           _ => Colors.orange.shade100,
@@ -11597,6 +12559,15 @@ class _MyHomePageState extends State<MyHomePage> {
                       child: const Text('Interested'),
                     ),
                     OutlinedButton(
+                      onPressed: app.status == 'future_consideration'
+                          ? null
+                          : () => _updateApplicationStatus(
+                              app,
+                              'future_consideration',
+                            ),
+                      child: const Text('Future Consideration'),
+                    ),
+                    OutlinedButton(
                       onPressed: app.status == 'rejected'
                           ? null
                           : () => _updateApplicationStatus(app, 'rejected'),
@@ -11752,7 +12723,7 @@ class _MyHomePageState extends State<MyHomePage> {
   // ---------------------------------------------------------------------------
 
   Widget _buildSearchTab() {
-    final allVisibleJobs = _visibleJobs;
+    final allVisibleJobs = _searchTabJobsForStatusFilter(_searchTabStatusFilter);
     final filteredJobs = _searchTabFilteredJobs;
     final typeOptions = _searchTabTypeOptions;
     final locationOptions = _searchTabLocationOptions;
@@ -11800,6 +12771,10 @@ class _MyHomePageState extends State<MyHomePage> {
       _searchTabInstructorHoursFilter,
       instructorHoursOptions,
     );
+    final selectedStatus = switch (_searchTabStatusFilter) {
+      'active_or_expired' || 'expired_only' => _searchTabStatusFilter,
+      _ => 'active',
+    };
     final selectedSort = switch (_searchTabSort) {
       'newest' || 'deadline' || 'company' => _searchTabSort,
       _ => 'best_match',
@@ -11846,6 +12821,10 @@ class _MyHomePageState extends State<MyHomePage> {
       _searchTabPendingRatingFilter ?? _encodeSearchTabMultiFilter(selectedRatingFilters),
       ratingOptions,
     );
+    final pendingStatus = const {'active', 'active_or_expired', 'expired_only'}
+        .contains(_searchTabPendingStatusFilter)
+      ? _searchTabPendingStatusFilter!
+      : selectedStatus;
     final pendingSort = const {'best_match', 'newest', 'deadline', 'company'}
         .contains(_searchTabPendingSort)
       ? _searchTabPendingSort!
@@ -11860,6 +12839,7 @@ class _MyHomePageState extends State<MyHomePage> {
       !setEquals(pendingInstructorHourFilters, selectedInstructorHourFilters) ||
       !setEquals(pendingCertificateFilters, selectedCertificateFilters) ||
       !setEquals(pendingRatingFilters, selectedRatingFilters) ||
+      pendingStatus != selectedStatus ||
       pendingSort != selectedSort;
     final hasAnyVisibleDrawerSelections =
       !pendingTypeFilters.contains('all') ||
@@ -11869,7 +12849,8 @@ class _MyHomePageState extends State<MyHomePage> {
       !pendingSpecialtyFilters.contains('all') ||
       !pendingInstructorHourFilters.contains('all') ||
       !pendingCertificateFilters.contains('all') ||
-      !pendingRatingFilters.contains('all');
+      !pendingRatingFilters.contains('all') ||
+      pendingStatus != 'active';
     List<String> orderOptionsByPreference(
       List<String> options,
       List<String> preferredOrder,
@@ -12040,6 +13021,7 @@ class _MyHomePageState extends State<MyHomePage> {
       _searchTabPendingRatingFilter = _encodeSearchTabMultiFilter(
         selectedRatingFilters,
       );
+      _searchTabPendingStatusFilter = selectedStatus;
       _searchTabPendingSort = selectedSort;
     }
 
@@ -12454,6 +13436,19 @@ class _MyHomePageState extends State<MyHomePage> {
         });
       });
     }
+    if (selectedStatus != 'active') {
+      final statusLabel = switch (selectedStatus) {
+        'active_or_expired' => 'Status: Active + Expired',
+        'expired_only' => 'Status: Expired Only',
+        _ => 'Status: Active',
+      };
+      addActiveFilter(statusLabel, () {
+        setState(() {
+          _searchTabStatusFilter = 'active';
+          _searchTabPendingStatusFilter = 'active';
+        });
+      });
+    }
     for (final entry in _searchTabFlightHourMinimums.entries) {
       if (entry.value > 0) {
         addActiveFilter('${entry.key}: ${entry.value}+ hrs', () {
@@ -12845,56 +13840,6 @@ class _MyHomePageState extends State<MyHomePage> {
                   ),
                 ),
                 const SizedBox(height: 12),
-                Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Icon(Icons.search, color: colorScheme.primary),
-                            const SizedBox(width: 8),
-                            Text(
-                              'Search Query',
-                              style: Theme.of(context).textTheme.titleSmall,
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-                        TextField(
-                          key: const ValueKey('search-tab-query'),
-                          controller: _searchTabController,
-                          decoration: InputDecoration(
-                            labelText: 'Search jobs and keywords',
-                            hintText: 'Part 135, Captain, Dallas, turbine...',
-                            prefixIcon: const Icon(Icons.search),
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            suffixIcon: _searchTabQuery.isNotEmpty
-                                ? IconButton(
-                                    onPressed: () {
-                                      setState(() {
-                                        _searchTabQuery = '';
-                                        _searchTabController.clear();
-                                      });
-                                    },
-                                    icon: const Icon(Icons.close),
-                                  )
-                                : null,
-                          ),
-                          onChanged: (value) {
-                            setState(() {
-                              _searchTabQuery = value.trim();
-                            });
-                          },
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 12),
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -13282,6 +14227,7 @@ class _MyHomePageState extends State<MyHomePage> {
                                                   _searchTabPendingInstructorHoursFilter = 'all';
                                                   _searchTabPendingCertificateFilter = 'all';
                                                   _searchTabPendingRatingFilter = 'all';
+                                                  _searchTabPendingStatusFilter = 'active';
                                                   _searchTabFiltersPinned = false;
                                                       });
                                                     }
@@ -13328,6 +14274,8 @@ class _MyHomePageState extends State<MyHomePage> {
                                                           _encodeSearchTabMultiFilter(
                                                             pendingRatingFilters,
                                                           );
+                                                        _searchTabStatusFilter =
+                                                            pendingStatus;
                                                         _searchTabSort = pendingSort;
                                                         _searchTabFiltersPinned = false;
                                                       });
@@ -13455,12 +14403,68 @@ class _MyHomePageState extends State<MyHomePage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        'Showing ${filteredJobs.length} of ${allVisibleJobs.length} jobs',
-                        style: TextStyle(
-                          color: Colors.grey.shade800,
-                          fontWeight: FontWeight.w700,
-                        ),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            'Showing ${filteredJobs.length} of ${allVisibleJobs.length} jobs',
+                            style: TextStyle(
+                              color: Colors.grey.shade800,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          FilledButton.tonal(
+                            key: const ValueKey('save-search-button'),
+                            onPressed: _saveCurrentSearch,
+                            child: const Text('Save Search'),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          Text(
+                            'Status:',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: Colors.grey.shade800,
+                            ),
+                          ),
+                          ChoiceChip(
+                            key: const ValueKey('search-status-active'),
+                            label: const Text('Active'),
+                            selected: selectedStatus == 'active',
+                            onSelected: (_) {
+                              setState(() {
+                                _searchTabStatusFilter = 'active';
+                              });
+                            },
+                          ),
+                          ChoiceChip(
+                            key: const ValueKey('search-status-active-or-expired'),
+                            label: const Text('Active + Expired'),
+                            selected: selectedStatus == 'active_or_expired',
+                            onSelected: (_) {
+                              setState(() {
+                                _searchTabStatusFilter = 'active_or_expired';
+                              });
+                            },
+                          ),
+                          ChoiceChip(
+                            key: const ValueKey('search-status-expired-only'),
+                            label: const Text('Expired Only'),
+                            selected: selectedStatus == 'expired_only',
+                            onSelected: (_) {
+                              setState(() {
+                                _searchTabStatusFilter = 'expired_only';
+                              });
+                            },
+                          ),
+                        ],
                       ),
                       if (activeFilters.isNotEmpty) ...[
                         const SizedBox(height: 8),
@@ -13473,6 +14477,130 @@ class _MyHomePageState extends State<MyHomePage> {
                     ],
                   ),
                 ),
+                if (_savedSearches.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Icon(Icons.bookmark, color: colorScheme.primary),
+                              const SizedBox(width: 8),
+                              Text(
+                                'Saved Searches (${_savedSearches.length})',
+                                style: Theme.of(context).textTheme.titleSmall,
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 10),
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: _savedSearches.map((search) {
+                              return Container(
+                                decoration: BoxDecoration(
+                                  border: Border.all(
+                                    color: colorScheme.outline,
+                                  ),
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Expanded(
+                                      child: Padding(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 10,
+                                          vertical: 6,
+                                        ),
+                                        child: GestureDetector(
+                                          onTap: () => _applySavedSearch(search),
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Text(
+                                                search.name,
+                                                style: const TextStyle(
+                                                  fontWeight: FontWeight.w600,
+                                                  fontSize: 13,
+                                                ),
+                                              ),
+                                              const SizedBox(height: 2),
+                                              Text(
+                                                'Tap to apply',
+                                                style: TextStyle(
+                                                  fontSize: 11,
+                                                  color:
+                                                      Colors.grey.shade600,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                    PopupMenuButton<String>(
+                                      onSelected: (value) {
+                                        if (value == 'delete') {
+                                          _deleteSavedSearch(search);
+                                        } else if (value == 'favorite') {
+                                          _toggleSavedSearchFavorite(search);
+                                        }
+                                      },
+                                      itemBuilder: (context) => [
+                                        PopupMenuItem(
+                                          value: 'favorite',
+                                          child: Row(
+                                            children: [
+                                              Icon(
+                                                search.isFavorite
+                                                    ? Icons.star
+                                                    : Icons.star_border,
+                                              ),
+                                              const SizedBox(width: 8),
+                                              Text(
+                                                search.isFavorite
+                                                    ? 'Unstar'
+                                                    : 'Star',
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                        PopupMenuItem(
+                                          value: 'delete',
+                                          child: Row(
+                                            children: [
+                                              const Icon(Icons.delete),
+                                              const SizedBox(width: 8),
+                                              const Text('Delete'),
+                                            ],
+                                          ),
+                                        ),
+                                      ],
+                                      child: Padding(
+                                        padding: const EdgeInsets.all(8),
+                                        child: Icon(
+                                          Icons.more_vert,
+                                          size: 18,
+                                          color: Colors.grey.shade600,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              );
+                            }).toList(),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
                 if (filteredJobs.isEmpty) ...[
                   const SizedBox(height: 10),
                   Card(
@@ -13625,6 +14753,31 @@ class _MyHomePageState extends State<MyHomePage> {
                                         ),
                                       ),
                                     ),
+                                  if (job.isExpired)
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 8,
+                                        vertical: 3,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: Colors.grey.shade100,
+                                        borderRadius: BorderRadius.circular(
+                                          999,
+                                        ),
+                                        border: Border.all(
+                                          color: Colors.grey.shade400,
+                                        ),
+                                      ),
+                                      child: Text(
+                                        'Expired',
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w700,
+                                          color: Colors.grey.shade800,
+                                          letterSpacing: 0.3,
+                                        ),
+                                      ),
+                                    ),
                                 ],
                               ),
                               const SizedBox(height: 4),
@@ -13632,8 +14785,6 @@ class _MyHomePageState extends State<MyHomePage> {
                                 '${job.company} • ${job.location}',
                                 style: TextStyle(color: Colors.grey.shade800),
                               ),
-                              if (job.isExternal)
-                                _buildExternalListingPhoneCta(job),
                               const SizedBox(height: 4),
                               Wrap(
                                 spacing: 8,
@@ -13693,19 +14844,6 @@ class _MyHomePageState extends State<MyHomePage> {
                                 ),
                         ),
                       ],
-                    ),
-                    const SizedBox(height: 8),
-                    _LinkifiedText(
-                      text: job.description,
-                      maxLines: 3,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(color: Colors.grey.shade800),
-                      onTapUrl: (url) {
-                        _openDetectedLink(url);
-                      },
-                      onTapPhone: (phone) {
-                        _openPhoneCall(phone);
-                      },
                     ),
                     const SizedBox(height: 10),
                     Wrap(
@@ -15173,6 +16311,221 @@ class _MyHomePageState extends State<MyHomePage> {
                 ),
               ),
             ],
+          ),
+          const SizedBox(height: 16),
+          _buildSummarySectionCard(
+            title: 'Notification Preferences',
+            subtitle: 'Control which emails you receive from this app',
+            icon: Icons.notifications_outlined,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Application status updates'),
+                  subtitle: const Text(
+                    'Email me when an employer views, reviews, shortlists, or declines my application.',
+                  ),
+                  value: _jobSeekerProfile.notifyOnApplicationStatusChange,
+                  onChanged: (value) async {
+                    final updated = _jobSeekerProfile.copyWith(
+                      notifyOnApplicationStatusChange: value,
+                    );
+                    setState(() {
+                      _jobSeekerProfile = updated;
+                    });
+                    _syncJobSeekerProfileControllers(updated);
+                    await _saveJobSeekerProfile();
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          value
+                              ? 'Application notifications enabled.'
+                              : 'Application notifications disabled.',
+                        ),
+                      ),
+                    );
+                  },
+                ),
+                const Divider(),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('New job alerts'),
+                  subtitle: const Text(
+                    'Email me a daily digest when new job listings are posted.',
+                  ),
+                  value: _jobSeekerProfile.newJobAlertEnabled,
+                  onChanged: (value) async {
+                    final updated = _jobSeekerProfile.copyWith(
+                      newJobAlertEnabled: value,
+                    );
+                    setState(() {
+                      _jobSeekerProfile = updated;
+                    });
+                    _syncJobSeekerProfileControllers(updated);
+                    await _saveJobSeekerProfile();
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          value
+                              ? 'New job alerts enabled.'
+                              : 'New job alerts disabled.',
+                        ),
+                      ),
+                    );
+                  },
+                ),
+                if (_jobSeekerProfile.newJobAlertEnabled) ...[
+                  Padding(
+                    padding: const EdgeInsets.only(left: 16, bottom: 8),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Alert filters (combine any)',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.grey.shade700,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        CheckboxListTile(
+                          contentPadding: EdgeInsets.zero,
+                          dense: true,
+                          title: const Text('Jobs in my state / region only'),
+                          subtitle: Text(
+                            _jobSeekerProfile.stateOrProvince.isEmpty
+                                ? 'Set your state in Personal Information first'
+                                : 'Filters to jobs mentioning ${_jobSeekerProfile.stateOrProvince}',
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                          value: _jobSeekerProfile.newJobAlertStateOnly,
+                          onChanged: _jobSeekerProfile.stateOrProvince.isEmpty
+                              ? null
+                              : (value) async {
+                                  final updated = _jobSeekerProfile.copyWith(
+                                    newJobAlertStateOnly: value ?? false,
+                                  );
+                                  setState(() {
+                                    _jobSeekerProfile = updated;
+                                  });
+                                  _syncJobSeekerProfileControllers(updated);
+                                  await _saveJobSeekerProfile();
+                                },
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.only(top: 8),
+                          child: Text(
+                            'Minimum profile match: ${_jobSeekerProfile.newJobAlertMinimumMatchPercent}%',
+                            style: const TextStyle(fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        const Text(
+                          'Only alert me for jobs at or above this match score.',
+                          style: TextStyle(fontSize: 12),
+                        ),
+                        Slider(
+                          value: _jobSeekerProfile
+                              .newJobAlertMinimumMatchPercent
+                              .toDouble(),
+                          min: 0,
+                          max: 100,
+                          divisions: 20,
+                          label:
+                              '${_jobSeekerProfile.newJobAlertMinimumMatchPercent}%',
+                          onChanged: (value) {
+                            setState(() {
+                              _jobSeekerProfile = _jobSeekerProfile.copyWith(
+                                newJobAlertMinimumMatchPercent: value.round(),
+                              );
+                            });
+                          },
+                          onChangeEnd: (value) async {
+                            final updated = _jobSeekerProfile.copyWith(
+                              newJobAlertMinimumMatchPercent: value.round(),
+                            );
+                            setState(() {
+                              _jobSeekerProfile = updated;
+                            });
+                            _syncJobSeekerProfileControllers(updated);
+                            await _saveJobSeekerProfile();
+                          },
+                        ),
+                        CheckboxListTile(
+                          contentPadding: EdgeInsets.zero,
+                          dense: true,
+                          title: const Text('Require my certificate type'),
+                          subtitle: const Text(
+                            'Only jobs that list at least one of your FAA certificates',
+                            style: TextStyle(fontSize: 12),
+                          ),
+                          value: _jobSeekerProfile.newJobAlertCertificateMatch,
+                          onChanged: (value) async {
+                            final updated = _jobSeekerProfile.copyWith(
+                              newJobAlertCertificateMatch: value ?? false,
+                            );
+                            setState(() {
+                              _jobSeekerProfile = updated;
+                            });
+                            _syncJobSeekerProfileControllers(updated);
+                            await _saveJobSeekerProfile();
+                          },
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Text(
+                            'Alerts are sent as a daily digest. Filters are combined: a job must satisfy all checked criteria.',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: Colors.grey.shade600,
+                              fontStyle: FontStyle.italic,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            OutlinedButton.icon(
+                              onPressed: _sendingSeekerNotificationTestEmail
+                                  ? null
+                                  : _sendSeekerNotificationTestEmail,
+                              icon: _sendingSeekerNotificationTestEmail
+                                  ? const SizedBox(
+                                      width: 14,
+                                      height: 14,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : const Icon(Icons.email_outlined, size: 16),
+                              label: Text(
+                                _sendingSeekerNotificationTestEmail
+                                    ? 'Sending Test...'
+                                    : 'Send Test Email',
+                              ),
+                            ),
+                            Text(
+                              'Temporary pre-launch tool',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: Colors.grey.shade600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ],
+            ),
           ),
           const SizedBox(height: 16),
         ],
@@ -16759,6 +18112,201 @@ class _MyHomePageState extends State<MyHomePage> {
     );
   }
 
+  Widget _buildResumeTab() {
+    Widget actionCard({
+      required IconData icon,
+      required String title,
+      required String description,
+      required String buttonLabel,
+      required VoidCallback onPressed,
+    }) {
+      return Card(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(icon, size: 28),
+              const SizedBox(height: 10),
+              Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                description,
+                style: TextStyle(color: Colors.grey.shade700),
+              ),
+              const SizedBox(height: 14),
+              FilledButton.icon(
+                onPressed: onPressed,
+                icon: Icon(icon),
+                label: Text(buttonLabel),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final wide = constraints.maxWidth >= 900;
+
+        final uploadCard = actionCard(
+          icon: Icons.upload_file,
+          title: 'Upload',
+          description:
+              'Upload your latest resume file so it is ready to reference in future application flows.',
+          buttonLabel: 'Upload Resume',
+          onPressed: _pickResumeFile,
+        );
+
+        final generateCard = actionCard(
+          icon: Icons.auto_awesome,
+          title: 'Generate',
+          description:
+              'Open a guided form to generate a resume draft from your profile details and goals.',
+          buttonLabel: 'Generate Resume',
+          onPressed: _openResumeGeneratorDialog,
+        );
+
+        final uploadedSummary = _uploadedResumeFileName == null
+            ? null
+            : 'Last file: ${_uploadedResumeFileName!}';
+        final uploadedMeta = _uploadedResumeFileName == null
+            ? null
+            : [
+                if (_uploadedResumeFileSizeBytes != null)
+                  _formatFileSize(_uploadedResumeFileSizeBytes!),
+                if (_uploadedResumeUpdatedAt != null)
+                  'Updated ${_formatNotificationTestTimestamp(_uploadedResumeUpdatedAt!)}',
+              ].where((item) => item.trim().isNotEmpty).join('  •  ');
+
+        final generatedPreview = _generatedResumeDraft.trim();
+
+        final resultCards = <Widget>[];
+        if (uploadedSummary != null) {
+          resultCards.add(
+            Card(
+              child: ListTile(
+                leading: const Icon(Icons.description_outlined),
+                title: Text(uploadedSummary),
+                subtitle: uploadedMeta == null || uploadedMeta.trim().isEmpty
+                    ? null
+                    : Text(uploadedMeta),
+                trailing: _uploadingResumeFile
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : null,
+              ),
+            ),
+          );
+        }
+        if (generatedPreview.isNotEmpty) {
+          resultCards.add(
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.text_snippet_outlined),
+                        const SizedBox(width: 8),
+                        const Expanded(
+                          child: Text(
+                            'Generated Resume Draft',
+                            style: TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                        ),
+                        TextButton.icon(
+                          onPressed: () async {
+                            await Clipboard.setData(
+                              ClipboardData(text: generatedPreview),
+                            );
+                            if (!context.mounted) {
+                              return;
+                            }
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('Generated draft copied.'),
+                              ),
+                            );
+                          },
+                          icon: const Icon(Icons.copy_outlined),
+                          label: const Text('Copy'),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    SelectableText(
+                      generatedPreview,
+                      maxLines: 12,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        }
+
+        const heading = Text(
+          'Resume',
+          style: TextStyle(fontSize: 24, fontWeight: FontWeight.w700),
+        );
+        final subtitle = Text(
+          'Choose one of the resume actions below.',
+          style: TextStyle(color: Colors.grey.shade700),
+        );
+
+        if (wide) {
+          return ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              heading,
+              const SizedBox(height: 8),
+              subtitle,
+              const SizedBox(height: 16),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(child: uploadCard),
+                  const SizedBox(width: 12),
+                  Expanded(child: generateCard),
+                ],
+              ),
+              if (resultCards.isNotEmpty) const SizedBox(height: 12),
+              ...resultCards,
+            ],
+          );
+        }
+
+        return ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            heading,
+            const SizedBox(height: 8),
+            subtitle,
+            const SizedBox(height: 12),
+            uploadCard,
+            const SizedBox(height: 8),
+            generateCard,
+            if (resultCards.isNotEmpty) const SizedBox(height: 8),
+            ...resultCards,
+          ],
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final isEmployer = _profileType == ProfileType.employer;
@@ -16771,8 +18319,9 @@ class _MyHomePageState extends State<MyHomePage> {
             Tab(text: 'Applicants'),
           ]
         : const [
-            Tab(text: 'Jobs'),
-            Tab(text: 'Search'),
+            Tab(text: 'Browse'),
+            Tab(text: 'Filter'),
+            Tab(text: 'Resume'),
             Tab(text: 'Profile'),
             Tab(text: 'Favorites'),
             Tab(text: 'My Applications'),
@@ -16904,6 +18453,8 @@ class _MyHomePageState extends State<MyHomePage> {
                   _searchTabRatingFilter = 'all';
                   _searchTabFlightHoursFilter = 'all';
                   _searchTabInstructorHoursFilter = 'all';
+                  _searchTabStatusFilter = 'active';
+                  _searchTabPendingStatusFilter = 'active';
                   _setSearchTabMinimumMatchPercent(0);
                   _searchTabSort = 'best_match';
                   _searchTabExternalOnly = false;
@@ -17016,6 +18567,7 @@ class _MyHomePageState extends State<MyHomePage> {
                   : [
                       _buildResponsiveTabContent(_buildJobsTab()),
                       _buildResponsiveTabContent(_buildSearchTab()),
+                      _buildResponsiveTabContent(_buildResumeTab()),
                       _buildResponsiveTabContent(_buildProfileTab()),
                       _buildResponsiveTabContent(_buildFavoritesTab()),
                       _buildResponsiveTabContent(_buildMyApplicationsTab()),
@@ -18278,7 +19830,7 @@ class JobDetailsPage extends StatelessWidget {
 
   Widget _buildApplyButton(BuildContext context) {
     if (job.isExternal) {
-      final hasExternalUrl = (job.externalApplyUrl?.trim().isNotEmpty ?? false);
+      final hasExternalUrl = (job.companyUrl?.trim().isNotEmpty ?? false);
       return FilledButton.icon(
         onPressed: onApply,
         icon: const Icon(Icons.open_in_new),
@@ -18424,43 +19976,6 @@ class JobDetailsPage extends StatelessWidget {
 
   Widget _buildChipWrap(List<Widget> chips) {
     return Wrap(spacing: 8, runSpacing: 8, children: chips);
-  }
-
-  Widget _buildRequirementTag({
-    required String label,
-    Color? textColor,
-    Color? borderColor,
-    Color? backgroundColor,
-  }) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: backgroundColor ?? Colors.grey.shade50,
-        border: Border.all(color: borderColor ?? Colors.grey.shade300),
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Text(
-        label,
-        style: TextStyle(
-          fontSize: 13,
-          fontWeight: FontWeight.w500,
-          color: textColor ?? Colors.blueGrey.shade800,
-        ),
-      ),
-    );
-  }
-
-  Widget _buildRequirementChip({
-    required String label,
-    required bool isPreferred,
-  }) {
-    return _buildRequirementTag(
-      label: label,
-      backgroundColor:
-          isPreferred ? Colors.orange.shade50 : Colors.green.shade50,
-      borderColor: isPreferred ? Colors.orange.shade200 : Colors.green.shade200,
-      textColor: isPreferred ? Colors.orange.shade900 : Colors.green.shade900,
-    );
   }
 
   Widget _buildWideComparisonGrid(BuildContext context) {
@@ -18621,24 +20136,25 @@ class JobDetailsPage extends StatelessWidget {
                           .titleMedium
                           ?.copyWith(fontWeight: FontWeight.bold)),
                 ]),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                  constraints: const BoxConstraints(minHeight: 32),
-                  decoration: BoxDecoration(
-                    color: badgeBackground,
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                  child: Text(
-                    '${match.matchPercentage}% Match',
-                    style: TextStyle(
-                      color: badgeTextColor,
-                      fontWeight: FontWeight.w800,
-                      fontSize: 15,
-                      height: 1,
+                if (!scopeMismatch)
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    constraints: const BoxConstraints(minHeight: 32),
+                    decoration: BoxDecoration(
+                      color: badgeBackground,
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text(
+                      '${match.matchPercentage}% Match',
+                      style: TextStyle(
+                        color: badgeTextColor,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 15,
+                        height: 1,
+                      ),
                     ),
                   ),
-                ),
               ],
             ),
             Row(children: [
@@ -18655,28 +20171,28 @@ class JobDetailsPage extends StatelessWidget {
           sep,
 
           // ── Airframe Category ──
-          gridRow(
-            Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              secHeader(Icons.flight_outlined, 'Airframe Category'),
-              matchItem(!scopeMismatch,
-                  seekerAirframeScope.isNotEmpty
-                      ? seekerAirframeScope
-                      : 'Not provided'),
-            ]),
-            Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              secHeader(Icons.flight_outlined, 'Airframe Category'),
-              reqItem(job.airframeScope.isNotEmpty
-                  ? job.airframeScope
-                  : 'Not specified'),
-            ]),
-          ),
+          if (!scopeMismatch)
+            gridRow(
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                secHeader(Icons.flight_outlined, 'Airframe Category'),
+                matchItem(!scopeMismatch,
+                    seekerAirframeScope.isNotEmpty
+                        ? seekerAirframeScope
+                        : 'Not provided'),
+              ]),
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                secHeader(Icons.flight_outlined, 'Airframe Category'),
+                reqItem(job.airframeScope.isNotEmpty
+                    ? job.airframeScope
+                    : 'Not specified'),
+              ]),
+            ),
 
-          // ── Scope mismatch warning ──
+          // ── Scope mismatch handling ──
           if (scopeMismatch) ...[
             sep,
-            Padding(
-              padding: cellPad,
-              child: Container(
+            gridRow(
+              Container(
                 width: double.infinity,
                 padding:
                     const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -18693,7 +20209,7 @@ class JobDetailsPage extends StatelessWidget {
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
-                        '⚠ Airframe category mismatch — your flight hours won\'t count toward this role. '
+                        'Airframe category mismatch — your flight hours won\'t count toward this role. '
                         'This role requires ${job.airframeScope} experience, but your profile shows ${profile!.airframeScope}.',
                         style: TextStyle(
                             color: Colors.orange.shade900, fontSize: 13),
@@ -18702,9 +20218,94 @@ class JobDetailsPage extends StatelessWidget {
                   ],
                 ),
               ),
+              Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    secHeader(Icons.flight_outlined, 'Airframe Category'),
+                    reqItem(job.airframeScope.isNotEmpty
+                        ? job.airframeScope
+                        : 'Not specified'),
+                    if (job.faaCertificates.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      secHeader(Icons.badge_outlined, 'FAA Certificates'),
+                      ...job.faaCertificates
+                          .map((cert) => reqItem(canonicalCertificateLabel(cert))),
+                    ],
+                    if (job.requiredRatings.isNotEmpty) ...[
+                      if (job.faaCertificates.isNotEmpty)
+                        const SizedBox(height: 8),
+                      secHeader(Icons.fact_check_outlined, 'Required Ratings'),
+                      ...job.requiredRatings.map((r) => reqItem(r)),
+                    ],
+                    if (job.typeRatingsRequired.isNotEmpty) ...[
+                      if (job.faaCertificates.isNotEmpty ||
+                          job.requiredRatings.isNotEmpty)
+                        const SizedBox(height: 8),
+                      secHeader(
+                          Icons.confirmation_number_outlined, 'Type Ratings'),
+                      ...job.typeRatingsRequired.map((r) => reqItem(r)),
+                    ],
+                    if (showBaseline || standardFlightEntries.isNotEmpty) ...[
+                      if (job.faaCertificates.isNotEmpty ||
+                          job.requiredRatings.isNotEmpty ||
+                          job.typeRatingsRequired.isNotEmpty)
+                        const SizedBox(height: 8),
+                      secHeader(Icons.schedule_outlined, 'Flight Hours'),
+                      if (showBaseline)
+                        Tooltip(
+                          message: baselineFlightTooltip ?? baselineFlightLabel,
+                          child: reqItem(baselineFlightLabel),
+                        ),
+                      ...standardFlightEntries.map((e) => reqItem(
+                          _formatHoursRequirementLabel(e.key, e.value,
+                              job.preferredFlightHours.contains(e.key)))),
+                    ],
+                    if (specialtyEntries.isNotEmpty) ...[
+                      if (job.faaCertificates.isNotEmpty ||
+                          job.requiredRatings.isNotEmpty ||
+                          job.typeRatingsRequired.isNotEmpty ||
+                          showBaseline ||
+                          standardFlightEntries.isNotEmpty)
+                        const SizedBox(height: 8),
+                      secHeader(
+                          Icons.workspace_premium_outlined, 'Specialty Hours'),
+                      ...specialtyEntries.map((e) => reqItem(
+                          _formatHoursRequirementLabel(e.key, e.value,
+                              job.preferredSpecialtyHours.contains(e.key)))),
+                    ],
+                    if (instructorEntries.isNotEmpty) ...[
+                      if (job.faaCertificates.isNotEmpty ||
+                          job.requiredRatings.isNotEmpty ||
+                          job.typeRatingsRequired.isNotEmpty ||
+                          showBaseline ||
+                          standardFlightEntries.isNotEmpty ||
+                          specialtyEntries.isNotEmpty)
+                        const SizedBox(height: 8),
+                      secHeader(Icons.school_outlined, 'Instructor Hours'),
+                      ...instructorEntries.map((e) => reqItem(
+                          _formatHoursRequirementLabel(
+                              e.key,
+                              e.value,
+                              _containsInstructorHourLabel(
+                                  job.preferredInstructorHours, e.key)))),
+                    ],
+                    if (job.aircraftFlown.isNotEmpty) ...[
+                      if (job.faaCertificates.isNotEmpty ||
+                          job.requiredRatings.isNotEmpty ||
+                          job.typeRatingsRequired.isNotEmpty ||
+                          showBaseline ||
+                          standardFlightEntries.isNotEmpty ||
+                          specialtyEntries.isNotEmpty ||
+                          instructorEntries.isNotEmpty)
+                        const SizedBox(height: 8),
+                      secHeader(Icons.flight_outlined, 'Aircraft Experience'),
+                      ...job.aircraftFlown.map((a) => reqItem(a)),
+                    ],
+                  ]),
             ),
           ],
 
+          if (!scopeMismatch) ...[
           // ── FAA Certificates ──
           if (job.faaCertificates.isNotEmpty) ...[
             sep,
@@ -18790,7 +20391,7 @@ class JobDetailsPage extends StatelessWidget {
                     secHeader(Icons.schedule_outlined, 'Flight Hours'),
                     if (showBaseline) ...[
                       (() {
-                        final met = baselineFlightHours!.entries.every((e) {
+                        final met = baselineFlightHours.entries.every((e) {
                           final ph = profile!.flightHours[e.key] ?? 0;
                           return profile!.flightHoursTypes.contains(e.key) &&
                               ph >= e.value;
@@ -18907,6 +20508,7 @@ class JobDetailsPage extends StatelessWidget {
                     ...job.aircraftFlown.map((a) => reqItem(a)),
                   ]),
             ),
+          ],
           ],
         ],
       ),
@@ -19069,7 +20671,7 @@ class JobDetailsPage extends StatelessWidget {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    '⚠ Airframe category mismatch — your flight hours won\'t count toward this role. '
+                    'Airframe category mismatch — your flight hours won\'t count toward this role. '
                     'This role requires ${job.airframeScope} experience, but your profile shows ${profile!.airframeScope}.',
                     style: TextStyle(
                       color: Colors.orange.shade900,
@@ -19536,7 +21138,6 @@ class PublicCompanyInfoPage extends StatelessWidget {
                   children: [
                     Container(
                       width: double.infinity,
-                      padding: const EdgeInsets.all(18),
                       decoration: BoxDecoration(
                         color: Colors.white,
                         border: Border.all(color: Colors.grey.shade300),
@@ -19545,21 +21146,68 @@ class PublicCompanyInfoPage extends StatelessWidget {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Row(
+                          // Banner image
+                          if (employerProfile != null &&
+                              employerProfile!.companyBannerUrl.trim().isNotEmpty)
+                            ClipRRect(
+                              borderRadius: const BorderRadius.only(
+                                topLeft: Radius.circular(14),
+                                topRight: Radius.circular(14),
+                              ),
+                              child: Image.network(
+                                employerProfile!.companyBannerUrl.trim(),
+                                width: double.infinity,
+                                height: 130,
+                                fit: BoxFit.cover,
+                                webHtmlElementStrategy:
+                                    WebHtmlElementStrategy.prefer,
+                                errorBuilder: (context, _, _) =>
+                                    const SizedBox.shrink(),
+                              ),
+                            ),
+                          Padding(
+                          padding: const EdgeInsets.all(18),
+                          child: Row(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Container(
-                                width: 52,
-                                height: 52,
-                                decoration: BoxDecoration(
-                                  color: Colors.blueGrey.shade50,
-                                  borderRadius: BorderRadius.circular(14),
+                              // Logo or fallback icon
+                              if (employerProfile != null &&
+                                  employerProfile!.companyLogoUrl.trim().isNotEmpty)
+                                Container(
+                                  width: 56,
+                                  height: 56,
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    border: Border.all(color: Colors.grey.shade300),
+                                    color: Colors.grey.shade100,
+                                  ),
+                                  child: ClipOval(
+                                    child: Image.network(
+                                      employerProfile!.companyLogoUrl.trim(),
+                                      fit: BoxFit.cover,
+                                      webHtmlElementStrategy:
+                                          WebHtmlElementStrategy.prefer,
+                                      errorBuilder: (context, _, _) => Icon(
+                                        Icons.business,
+                                        size: 28,
+                                        color: Colors.blueGrey.shade500,
+                                      ),
+                                    ),
+                                  ),
+                                )
+                              else
+                                Container(
+                                  width: 56,
+                                  height: 56,
+                                  decoration: BoxDecoration(
+                                    color: Colors.blueGrey.shade50,
+                                    borderRadius: BorderRadius.circular(14),
+                                  ),
+                                  child: Icon(
+                                    Icons.business,
+                                    color: Colors.blueGrey.shade700,
+                                  ),
                                 ),
-                                child: Icon(
-                                  Icons.business,
-                                  color: Colors.blueGrey.shade700,
-                                ),
-                              ),
                               const SizedBox(width: 14),
                               Expanded(
                                 child: Column(
@@ -19603,6 +21251,7 @@ class PublicCompanyInfoPage extends StatelessWidget {
                                   ),
                                 ),
                             ],
+                          ),
                           ),
                           const SizedBox(height: 14),
                           Wrap(

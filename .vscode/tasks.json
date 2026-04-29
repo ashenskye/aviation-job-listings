@@ -10,7 +10,8 @@
 				"-d",
 				"chrome",
 				"--dart-define=SUPABASE_URL=https://agwwrrzemmuztzciuamn.supabase.co",
-				"--dart-define=SUPABASE_PUBLISHABLE_KEY=sb_publishable_ohxdWpUf_-SJpk-5JpNG0g_KcblPeAO"
+				"--dart-define=SUPABASE_PUBLISHABLE_KEY=sb_publishable_ohxdWpUf_-SJpk-5JpNG0g_KcblPeAO",
+				"--dart-define=APP_PUBLIC_URL=https://lastfrontieraviation.com"
 			],
 			"isBackground": true,
 			"presentation": {
@@ -28,7 +29,8 @@
 				"-d",
 				"R5CXB1CK3HD",
 				"--dart-define=SUPABASE_URL=https://agwwrrzemmuztzciuamn.supabase.co",
-				"--dart-define=SUPABASE_PUBLISHABLE_KEY=sb_publishable_ohxdWpUf_-SJpk-5JpNG0g_KcblPeAO"
+				"--dart-define=SUPABASE_PUBLISHABLE_KEY=sb_publishable_ohxdWpUf_-SJpk-5JpNG0g_KcblPeAO",
+				"--dart-define=APP_PUBLIC_URL=https://lastfrontieraviation.com"
 			],
 			"isBackground": true,
 			"group": {

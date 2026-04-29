@@ -3,6 +3,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:aviation_job_listings/main.dart';
+import 'package:aviation_job_listings/models/application.dart';
+import 'package:aviation_job_listings/models/application_feedback.dart';
 import 'package:aviation_job_listings/models/job_listing.dart';
 import 'package:aviation_job_listings/models/job_seeker_profile.dart';
 
@@ -166,7 +168,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Favorites'), findsOneWidget);
 
-      await tester.tap(find.text('Jobs'));
+      await tester.tap(find.text('Browse'));
       await tester.pumpAndSettle();
 
       expect(find.text('E2E Apply Role'), findsOneWidget);
@@ -256,6 +258,7 @@ void main() {
         'aircraftFlown': const <String>[],
         'isExternal': true,
         'externalApplyUrl': 'https://example.com/apply',
+        'companyUrl': 'https://mountainaircharter.com',
       });
 
       await tester.pumpWidget(
@@ -281,6 +284,61 @@ void main() {
       await tester.tap(find.text('Apply Externally'));
       await tester.pumpAndSettle();
       expect(applyTapped, isTrue);
+    },
+  );
+
+  testWidgets(
+    'wide match vs requirements shows mismatch warning and hides seeker-side comparison rows',
+    (WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(1400, 1000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      final mismatchJob = const JobListing(
+        id: 'wide-mismatch-warning',
+        title: 'Rotor Captain',
+        company: 'HeliOps',
+        location: 'Phoenix, AZ',
+        type: 'Full-Time',
+        crewRole: 'Captain',
+        faaRules: ['Part 91'],
+        description: 'Wide layout mismatch rendering test.',
+        faaCertificates: ['Airline Transport Pilot (ATP)'],
+        flightExperience: ['Total Time'],
+        flightHours: {'Total Time': 1500},
+        aircraftFlown: ['Airbus H125'],
+        airframeScope: 'Helicopter',
+        employerId: 'emp-heliops',
+      );
+
+      const mismatchProfile = JobSeekerProfile(
+        airframeScope: 'Fixed Wing',
+        faaCertificates: ['Airline Transport Pilot (ATP)'],
+        flightHoursTypes: ['Total Time'],
+        flightHours: {'Total Time': 2000},
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: JobDetailsPage(
+            job: mismatchJob,
+            isFavorite: false,
+            onFavorite: () {},
+            onApply: () {},
+            profile: mismatchProfile,
+            hasApplied: false,
+            matchPercentage: 100,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Airframe category mismatch'), findsOneWidget);
+      expect(find.text('100% Match'), findsNothing);
+
+      // With mismatch, requirement labels should render only on the
+      // Requirements side (single occurrence) and not be duplicated on
+      // the Match side.
+      expect(find.text('Airline Transport Pilot (ATP)'), findsOneWidget);
     },
   );
 
@@ -337,7 +395,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      await tester.tap(find.text('Jobs'));
+      await tester.tap(find.text('Browse'));
       await tester.pumpAndSettle();
 
       await tester.enterText(
@@ -349,16 +407,10 @@ void main() {
       expect(find.text('External Label Regression Role'), findsWidgets);
       expect(find.text('EXTERNAL JOB'), findsOneWidget);
 
-      await tester.tap(find.text('Search').last);
+      await tester.tap(find.text('Filter').last);
       await tester.pumpAndSettle();
 
-      await tester.enterText(
-        find.byKey(const ValueKey('search-tab-query')),
-        'External Label Regression Role',
-      );
-      await tester.pumpAndSettle();
-
-      expect(find.text('Showing 1 of 2 jobs'), findsOneWidget);
+      expect(find.text('Showing 2 of 2 jobs'), findsOneWidget);
       await tester.drag(find.byType(ListView).last, const Offset(0, -1200));
       await tester.pumpAndSettle();
       await tester.drag(find.byType(ListView).last, const Offset(0, -1200));
@@ -376,6 +428,127 @@ void main() {
         findsOneWidget,
       );
       expect(find.text('EXTERNAL JOB'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'browse tab sorts by newest, best match, and closing soon',
+    (WidgetTester tester) async {
+      final repository = FakeAppRepository();
+      await repository.saveJobSeekerProfile(
+        const JobSeekerProfile(
+          faaCertificates: ['Airline Transport Pilot (ATP)'],
+          flightHoursTypes: ['Total Time'],
+          flightHours: {'Total Time': 2000},
+          airframeScope: 'Fixed Wing',
+        ),
+      );
+
+      await repository.createJob(
+        JobListing(
+          id: 'browse-sort-newest',
+          title: 'Newest Sort Role',
+          company: 'Update Air',
+          location: 'Dallas, TX',
+          type: 'Full-Time',
+          crewRole: 'Single Pilot',
+          faaRules: const ['Part 91'],
+          description: 'Recently updated listing for browse sorting.',
+          faaCertificates: const ['Dispatcher (DSP)'],
+          flightExperience: const [],
+          aircraftFlown: const ['Cessna 172'],
+          employerId: 'emp-update-air',
+          createdAt: DateTime(2026, 4, 1),
+          updatedAt: DateTime(2026, 4, 28),
+          deadlineDate: DateTime(2026, 6, 15),
+        ),
+      );
+
+      await repository.createJob(
+        JobListing(
+          id: 'browse-sort-best-match',
+          title: 'Best Match Role',
+          company: 'Match Air',
+          location: 'Phoenix, AZ',
+          type: 'Full-Time',
+          crewRole: 'Single Pilot',
+          faaRules: const ['Part 91'],
+          description: 'Strong match listing for browse sorting.',
+          faaCertificates: const ['Airline Transport Pilot (ATP)'],
+          flightExperience: const ['Total Time'],
+          flightHours: const {'Total Time': 1500},
+          aircraftFlown: const ['Pilatus PC-12'],
+          employerId: 'emp-match-air',
+          createdAt: DateTime(2026, 3, 15),
+          updatedAt: DateTime(2026, 4, 10),
+          deadlineDate: DateTime(2026, 5, 20),
+        ),
+      );
+
+      await repository.createJob(
+        JobListing(
+          id: 'browse-sort-deadline',
+          title: 'Closing Soon Role',
+          company: 'Deadline Air',
+          location: 'Boise, ID',
+          type: 'Full-Time',
+          crewRole: 'Single Pilot',
+          faaRules: const ['Part 91'],
+          description: 'Earliest deadline listing for browse sorting.',
+          faaCertificates: const [],
+          flightExperience: const [],
+          aircraftFlown: const ['Beechcraft Bonanza'],
+          employerId: 'emp-deadline-air',
+          createdAt: DateTime(2026, 2, 15),
+          updatedAt: DateTime(2026, 4, 5),
+          deadlineDate: DateTime(2026, 5, 1),
+        ),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: MyHomePage(
+            title: 'Aviation Job Listings',
+            repository: repository,
+            initialProfileType: ProfileType.jobSeeker,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.descendant(
+          of: find.byType(Card).first,
+          matching: find.text('Newest Sort Role'),
+        ),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.byKey(const ValueKey('browse-sort-menu')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Best Match').last);
+      await tester.pumpAndSettle();
+
+      expect(
+        find.descendant(
+          of: find.byType(Card).first,
+          matching: find.text('Best Match Role'),
+        ),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.byKey(const ValueKey('browse-sort-menu')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Closing Soon').last);
+      await tester.pumpAndSettle();
+
+      expect(
+        find.descendant(
+          of: find.byType(Card).first,
+          matching: find.text('Closing Soon Role'),
+        ),
+        findsOneWidget,
+      );
     },
   );
 
@@ -599,7 +772,7 @@ void main() {
       await tester.pumpAndSettle();
 
       // View jobs
-      await tester.tap(find.text('Jobs'));
+      await tester.tap(find.text('Browse'));
       await tester.pumpAndSettle();
 
       // Tap on the advanced instructor role
@@ -694,7 +867,7 @@ void main() {
       expect(find.text('Favorites'), findsOneWidget);
 
       // Step 5: Navigate to jobs listing
-      await tester.tap(find.text('Jobs'));
+      await tester.tap(find.text('Browse'));
       await tester.pumpAndSettle();
 
       // Step 6: Find the created job listing
@@ -768,7 +941,7 @@ void main() {
       await tester.pumpAndSettle();
 
       // Navigate to Jobs tab (default profile is job seeker).
-      await tester.tap(find.text('Jobs'));
+      await tester.tap(find.text('Browse'));
       await tester.pumpAndSettle();
 
       expect(find.text('Senior ATP Captain'), findsOneWidget);
@@ -796,6 +969,276 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Senior ATP Captain'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'job details shows disabled ✓ Applied button and no apply CTA when already applied',
+    (WidgetTester tester) async {
+      final job = const JobListing(
+        id: 'already-applied-role',
+        title: 'Already Applied Role',
+        company: 'Summit Air',
+        location: 'Denver, CO',
+        type: 'Full-Time',
+        crewRole: 'Single Pilot',
+        faaRules: ['Part 91'],
+        description: 'Test listing for already-applied state.',
+        faaCertificates: ['Airline Transport Pilot (ATP)'],
+        flightExperience: ['Total Time'],
+        flightHours: {'Total Time': 1500},
+        aircraftFlown: ['Cessna 172'],
+        employerId: 'emp-summit',
+      );
+
+      var applyTapped = false;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: JobDetailsPage(
+            job: job,
+            isFavorite: false,
+            onFavorite: () {},
+            onApply: () => applyTapped = true,
+            profile: const JobSeekerProfile(),
+            hasApplied: true,
+            matchPercentage: 90,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Should show the applied indicator.
+      expect(find.text('✓ Applied'), findsOneWidget);
+
+      // No active apply CTAs should be visible.
+      expect(_hasAnyApplyCtaVisible(), isFalse);
+
+      // The applied button must be disabled (onPressed == null).
+      final button = tester.widget<OutlinedButton>(
+        find.widgetWithText(OutlinedButton, '✓ Applied'),
+      );
+      expect(button.onPressed, isNull);
+
+      // Tapping the disabled button must not fire the apply callback.
+      expect(applyTapped, isFalse);
+    },
+  );
+
+  testWidgets(
+    'opening applicant details marks non-auto-rejected application as Viewed and shows status update date to seeker',
+    (WidgetTester tester) async {
+      final repository = FakeAppRepository();
+      const applicationId = 'app-viewed-non-auto';
+
+      await repository.createJob(
+        const JobListing(
+          id: 'job-viewed-flow',
+          title: 'Viewed Status Test Role',
+          company: 'My Company',
+          location: 'Phoenix, AZ',
+          type: 'Full-Time',
+          crewRole: 'Captain',
+          faaRules: ['Part 91'],
+          description: 'Used for viewed status behavior test.',
+          faaCertificates: ['Airline Transport Pilot (ATP)'],
+          flightExperience: ['Total Time'],
+          flightHours: {'Total Time': 1500},
+          aircraftFlown: ['Cessna Citation'],
+          employerId: 'default',
+        ),
+      );
+
+      await repository.saveApplication(
+        Application(
+          id: applicationId,
+          jobSeekerId: 'local_seeker',
+          jobId: 'job-viewed-flow',
+          employerId: 'default',
+          applicantName: 'Jordan Flyer',
+          applicantEmail: 'jordan@example.com',
+          applicantCity: 'Phoenix',
+          applicantStateOrProvince: 'AZ',
+          status: Application.statusApplied,
+          matchPercentage: 92,
+          coverLetter: 'Ready to fly.',
+          appliedAt: DateTime(2026, 4, 20),
+          updatedAt: DateTime(2026, 4, 20),
+        ),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: MyHomePage(
+            title: 'Aviation Job Listings',
+            repository: repository,
+            initialProfileType: ProfileType.employer,
+            adminDashboardBuilder: (ctx, onSwitch) => const SizedBox(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final applicantsTab = find.text('Applicants').last;
+      await tester.ensureVisible(applicantsTab);
+      await tester.tap(applicantsTab);
+      await tester.pumpAndSettle();
+      expect(find.text('Viewed Status Test Role'), findsOneWidget);
+
+      final viewedRoleCard = find.ancestor(
+        of: find.text('Viewed Status Test Role'),
+        matching: find.byType(Card),
+      );
+      final viewFeedbackButton = find.descendant(
+        of: viewedRoleCard.first,
+        matching: find.widgetWithText(OutlinedButton, 'View & Send Feedback'),
+      );
+      final applicantsScrollable = find.ancestor(
+        of: viewFeedbackButton.first,
+        matching: find.byType(Scrollable),
+      );
+      for (var i = 0; i < 8; i++) {
+        if (viewFeedbackButton.hitTestable().evaluate().isNotEmpty) {
+          break;
+        }
+        await tester.drag(applicantsScrollable.first, const Offset(0, -200));
+        await tester.pumpAndSettle();
+      }
+      await tester.tap(viewFeedbackButton.hitTestable().first);
+      await tester.pumpAndSettle();
+      expect(find.text('Applicant Details'), findsOneWidget);
+
+      await tester.tap(find.widgetWithText(TextButton, 'Close').first);
+      await tester.pumpAndSettle();
+
+      // Switch back to seeker and verify viewed state is visible.
+      await tester.tap(find.byIcon(Icons.person));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Job Seeker').last);
+      await tester.pumpAndSettle();
+
+      final myApplicationsTab = find.text('My Applications').last;
+      await tester.ensureVisible(myApplicationsTab);
+      await tester.tap(myApplicationsTab);
+      await tester.pumpAndSettle();
+
+      expect(find.text('Viewed by employer'), findsOneWidget);
+      expect(find.textContaining('Status updated'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'opening applicant details does not mark auto-rejected application as Viewed',
+    (WidgetTester tester) async {
+      final repository = FakeAppRepository();
+      const applicationId = 'app-viewed-auto-rejected';
+
+      await repository.createJob(
+        const JobListing(
+          id: 'job-auto-rejected-viewed-guard',
+          title: 'Auto Rejected View Guard Role',
+          company: 'My Company',
+          location: 'Mesa, AZ',
+          type: 'Full-Time',
+          crewRole: 'Captain',
+          faaRules: ['Part 135'],
+          description: 'Used to ensure auto-rejected apps are not auto-viewed.',
+          faaCertificates: ['Airline Transport Pilot (ATP)'],
+          flightExperience: ['Total Time'],
+          flightHours: {'Total Time': 2000},
+          aircraftFlown: ['King Air 350'],
+          employerId: 'default',
+          autoRejectThreshold: 85,
+        ),
+      );
+
+      await repository.saveApplication(
+        Application(
+          id: applicationId,
+          jobSeekerId: 'local_seeker',
+          jobId: 'job-auto-rejected-viewed-guard',
+          employerId: 'default',
+          applicantName: 'Casey Pilot',
+          applicantEmail: 'casey@example.com',
+          applicantCity: 'Mesa',
+          applicantStateOrProvince: 'AZ',
+          status: Application.statusRejected,
+          matchPercentage: 90,
+          coverLetter: '',
+          appliedAt: DateTime(2026, 4, 21),
+          updatedAt: DateTime(2026, 4, 21),
+        ),
+      );
+
+      await repository.saveFeedback(
+        ApplicationFeedback(
+          id: 'feedback-auto-generated',
+          applicationId: applicationId,
+          message: 'Auto-rejected by threshold.',
+          feedbackType: ApplicationFeedback.feedbackTypeNotFit,
+          sentByEmployer: true,
+          sentAt: DateTime(2026, 4, 21),
+          isAutoGenerated: true,
+        ),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: MyHomePage(
+            title: 'Aviation Job Listings',
+            repository: repository,
+            initialProfileType: ProfileType.employer,
+            adminDashboardBuilder: (ctx, onSwitch) => const SizedBox(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final applicantsTab = find.text('Applicants').last;
+      await tester.ensureVisible(applicantsTab);
+      await tester.tap(applicantsTab);
+      await tester.pumpAndSettle();
+      expect(find.text('Auto Rejected View Guard Role'), findsOneWidget);
+      expect(find.textContaining('Auto-rejected'), findsOneWidget);
+
+      final autoRejectedRoleCard = find.ancestor(
+        of: find.text('Auto Rejected View Guard Role'),
+        matching: find.byType(Card),
+      );
+      final viewFeedbackButton = find.descendant(
+        of: autoRejectedRoleCard.first,
+        matching: find.widgetWithText(OutlinedButton, 'View & Send Feedback'),
+      );
+      final applicantsScrollable = find.ancestor(
+        of: viewFeedbackButton.first,
+        matching: find.byType(Scrollable),
+      );
+      for (var i = 0; i < 8; i++) {
+        if (viewFeedbackButton.hitTestable().evaluate().isNotEmpty) {
+          break;
+        }
+        await tester.drag(applicantsScrollable.first, const Offset(0, -200));
+        await tester.pumpAndSettle();
+      }
+      await tester.tap(viewFeedbackButton.hitTestable().first);
+      await tester.pumpAndSettle();
+      expect(find.text('Applicant Details'), findsOneWidget);
+      await tester.tap(find.widgetWithText(TextButton, 'Close').first);
+      await tester.pumpAndSettle();
+
+      // Switch back to seeker and verify status did not change to viewed.
+      await tester.tap(find.byIcon(Icons.person));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Job Seeker').last);
+      await tester.pumpAndSettle();
+
+      final myApplicationsTab = find.text('My Applications').last;
+      await tester.ensureVisible(myApplicationsTab);
+      await tester.tap(myApplicationsTab);
+      await tester.pumpAndSettle();
+
+      expect(find.text('Viewed by employer'), findsNothing);
+      expect(find.text('Not moving forward'), findsOneWidget);
     },
   );
 }

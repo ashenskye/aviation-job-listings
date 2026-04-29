@@ -90,12 +90,28 @@ Future<void> _pumpSearchTab(WidgetTester tester) async {
       aircraftFlown: ['Embraer E-175'],
     ),
   );
+  await repository.createJob(
+    const JobListing(
+      id: 'search-6-expired',
+      title: 'Expired Test Role',
+      company: 'Legacy Air',
+      location: 'Anchorage, AK',
+      type: 'Full-Time',
+      crewRole: 'Single Pilot',
+      faaRules: ['Part 91'],
+      description: 'Expired listing fixture for status filter tests.',
+      faaCertificates: [],
+      flightExperience: [],
+      aircraftFlown: ['Beechcraft 1900'],
+      status: 'expired',
+    ),
+  );
 
   await tester.pumpWidget(MyApp(repository: repository));
   await tester.pumpAndSettle();
-  await tester.tap(find.text('Search').last);
+  await tester.tap(find.text('Filter').last);
   await tester.pumpAndSettle();
-  expect(find.byKey(const ValueKey('search-tab-query')), findsOneWidget);
+  expect(find.text('Location Search'), findsOneWidget);
   expect(find.text('Showing 5 of 5 jobs'), findsOneWidget);
 }
 
@@ -197,6 +213,21 @@ Future<void> _selectFilterOption(
   await tester.pumpAndSettle();
 }
 
+Future<void> _submitCitySearch(WidgetTester tester, String city) async {
+  final cityRow = find.ancestor(
+    of: find.byTooltip('Search city'),
+    matching: find.byType(Row),
+  ).first;
+  final cityField = find.descendant(
+    of: cityRow,
+    matching: find.byType(TextField),
+  ).first;
+  await tester.enterText(cityField, city);
+  final widget = tester.widget<TextField>(cityField);
+  widget.onSubmitted?.call(city);
+  await tester.pumpAndSettle();
+}
+
 void main() {
   testWidgets('search tab FAA rule filter shows Part 135 IFR and VFR options', (
     WidgetTester tester,
@@ -270,16 +301,12 @@ void main() {
     expect(find.text('Showing 1 of 5 jobs'), findsOneWidget);
   });
 
-  testWidgets('search tab supports query and match filters', (
+  testWidgets('search tab supports city search and match filters', (
     WidgetTester tester,
   ) async {
     await _pumpSearchTab(tester);
 
-    await tester.enterText(
-      find.byKey(const ValueKey('search-tab-query')),
-      'Rescue',
-    );
-    await tester.pumpAndSettle();
+    await _submitCitySearch(tester, 'Miami');
     expect(find.text('Showing 1 of 5 jobs'), findsOneWidget);
   });
 
@@ -328,6 +355,37 @@ void main() {
     expect(find.text('Showing 1 of 5 jobs'), findsOneWidget);
   });
 
+  testWidgets('search tab can include expired listings and shows expired flag', (
+    WidgetTester tester,
+  ) async {
+    await _pumpSearchTab(tester);
+
+    expect(find.text('Showing 5 of 5 jobs'), findsOneWidget);
+    expect(find.text('Expired'), findsNothing);
+
+    final statusChip = find.byKey(
+      const ValueKey('search-status-active-or-expired'),
+    );
+    await tester.dragUntilVisible(
+      statusChip,
+      find.byKey(const ValueKey('search-tab-scroll')),
+      const Offset(0, -240),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(statusChip);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Showing 6 of 6 jobs'), findsOneWidget);
+  await _submitCitySearch(tester, 'Anchorage');
+    expect(find.text('Showing 1 of 6 jobs'), findsOneWidget);
+    await tester.drag(
+      find.byKey(const ValueKey('search-tab-scroll')),
+      const Offset(0, -1800),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Expired'), findsWidgets);
+  });
+
   testWidgets('search tab supports flight instruction filter', (
     WidgetTester tester,
   ) async {
@@ -367,7 +425,7 @@ void main() {
 
     await tester.pumpWidget(MyApp(repository: repository));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Search').last);
+    await tester.tap(find.text('Filter').last);
     await tester.pumpAndSettle();
 
     expect(find.text('Showing 2 of 2 jobs'), findsOneWidget);
@@ -380,17 +438,13 @@ void main() {
 
     expect(find.text('Showing 1 of 2 jobs'), findsOneWidget);
 
-    await tester.enterText(
-      find.byKey(const ValueKey('search-tab-query')),
-      'Ramp Agent',
-    );
-    await tester.pumpAndSettle();
+    await _submitCitySearch(tester, 'Dallas');
 
     expect(find.text('Showing 0 of 2 jobs'), findsOneWidget);
   });
 
   testWidgets(
-    'search tab query matches state and province full names against abbreviations',
+    'search tab location search matches state and province full names against abbreviations',
     (WidgetTester tester) async {
       final repository = FakeAppRepository();
       await repository.createJob(
@@ -443,36 +497,39 @@ void main() {
 
       await tester.pumpWidget(MyApp(repository: repository));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Search').last);
+      await tester.tap(find.text('Filter').last);
       await tester.pumpAndSettle();
 
       expect(find.text('Showing 3 of 3 jobs'), findsOneWidget);
 
-      await tester.enterText(
-        find.byKey(const ValueKey('search-tab-query')),
-        'Alaska',
-      );
+      await tester.enterText(find.byType(TextField).first, 'Alaska');
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Alaska (AK)').last);
       await tester.pumpAndSettle();
       expect(find.text('Showing 1 of 3 jobs'), findsOneWidget);
 
-      await tester.enterText(
-        find.byKey(const ValueKey('search-tab-query')),
-        'AK',
-      );
+      await tester.enterText(find.byType(TextField).first, 'AK');
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Alaska (AK)').last);
       await tester.pumpAndSettle();
       expect(find.text('Showing 1 of 3 jobs'), findsOneWidget);
 
-      await tester.enterText(
-        find.byKey(const ValueKey('search-tab-query')),
-        'Alberta, Canada',
+      final canadaChip = find.ancestor(
+        of: find.text('Canada').first,
+        matching: find.byType(ChoiceChip),
       );
+      await tester.tap(canadaChip.first);
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.byType(TextField).first, 'Alberta');
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Alberta (AB)').last);
       await tester.pumpAndSettle();
       expect(find.text('Showing 1 of 3 jobs'), findsOneWidget);
 
-      await tester.enterText(
-        find.byKey(const ValueKey('search-tab-query')),
-        'AB',
-      );
+      await tester.enterText(find.byType(TextField).first, 'AB');
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Alberta (AB)').last);
       await tester.pumpAndSettle();
       expect(find.text('Showing 1 of 3 jobs'), findsOneWidget);
     },

@@ -81,6 +81,14 @@ abstract class AdminRepository {
     String? companyUrl,
     String? reason,
   });
+  Future<void> assignEmployerProfileToEmail({
+    required String employerId,
+    required String email,
+    String? reason,
+  });
+  Future<Map<String, bool>> getEmployerProfileAdminOwnership(
+    List<String> employerIds,
+  );
 
   // Delete (soft delete recommended)
   Future<void> deleteApplication(String appId, String reason);

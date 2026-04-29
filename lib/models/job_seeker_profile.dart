@@ -18,6 +18,16 @@ class JobSeekerProfile {
   final Map<String, int> specialtyFlightHoursMap;
   final List<String> aircraftFlown;
   final int totalFlightHours;
+  final bool notifyOnApplicationStatusChange;
+  final String resumeUrl;
+  final String resumeFileName;
+
+  // Job alert preferences
+  final bool newJobAlertEnabled;
+  final bool newJobAlertStateOnly;
+  final bool newJobAlertAirframeMatch;
+  final int newJobAlertMinimumMatchPercent;
+  final bool newJobAlertCertificateMatch;
 
   const JobSeekerProfile({
     this.firstName = '',
@@ -37,6 +47,14 @@ class JobSeekerProfile {
     this.specialtyFlightHoursMap = const {},
     this.aircraftFlown = const [],
     this.totalFlightHours = 0,
+    this.notifyOnApplicationStatusChange = true,
+    this.resumeUrl = '',
+    this.resumeFileName = '',
+    this.newJobAlertEnabled = false,
+    this.newJobAlertStateOnly = false,
+    this.newJobAlertAirframeMatch = true,
+    this.newJobAlertMinimumMatchPercent = 100,
+    this.newJobAlertCertificateMatch = false,
   });
 
   static List<String> _splitFullName(String fullName) {
@@ -135,15 +153,42 @@ class JobSeekerProfile {
               .toList() ??
           [],
       totalFlightHours: json['totalFlightHours'] ?? 0,
+      notifyOnApplicationStatusChange:
+          (json['notifyOnApplicationStatusChange'] as bool?) ??
+          (json['notify_on_application_status_change'] as bool?) ??
+          true,
+      newJobAlertEnabled:
+          (json['newJobAlertEnabled'] as bool?) ??
+          (json['new_job_alert_enabled'] as bool?) ??
+          false,
+      newJobAlertStateOnly:
+          (json['newJobAlertStateOnly'] as bool?) ??
+          (json['new_job_alert_state_only'] as bool?) ??
+          false,
+      newJobAlertAirframeMatch:
+          (json['newJobAlertAirframeMatch'] as bool?) ??
+          (json['new_job_alert_airframe_match'] as bool?) ??
+          true,
+        newJobAlertMinimumMatchPercent:
+          (json['newJobAlertMinimumMatchPercent'] as num?)?.toInt() ??
+          (json['new_job_alert_minimum_match_percent'] as num?)?.toInt() ??
+          100,
+      newJobAlertCertificateMatch:
+          (json['newJobAlertCertificateMatch'] as bool?) ??
+          (json['new_job_alert_certificate_match'] as bool?) ??
+          false,
+      resumeUrl: json['resumeUrl']?.toString() ?? json['resume_url']?.toString() ?? '',
+      resumeFileName: json['resumeFileName']?.toString() ?? json['resume_file_name']?.toString() ?? '',
     );
   }
 
   Map<String, dynamic> toJson() => {
     'firstName': firstName,
     'lastName': lastName,
-    'fullName': combineName(firstName, lastName).isNotEmpty
-        ? combineName(firstName, lastName)
-        : fullName,
+    'fullName': () {
+      final combined = combineName(firstName, lastName);
+      return combined.isNotEmpty ? combined : fullName;
+    }(),
     'email': email,
     'phone': phone,
     'city': city,
@@ -158,6 +203,14 @@ class JobSeekerProfile {
     'specialtyFlightHoursMap': specialtyFlightHoursMap,
     'aircraftFlown': aircraftFlown,
     'totalFlightHours': totalFlightHours,
+    'notifyOnApplicationStatusChange': notifyOnApplicationStatusChange,
+    'newJobAlertEnabled': newJobAlertEnabled,
+    'newJobAlertStateOnly': newJobAlertStateOnly,
+    'newJobAlertAirframeMatch': newJobAlertAirframeMatch,
+    'newJobAlertMinimumMatchPercent': newJobAlertMinimumMatchPercent,
+    'newJobAlertCertificateMatch': newJobAlertCertificateMatch,
+    'resumeUrl': resumeUrl,
+    'resumeFileName': resumeFileName,
   };
 
   JobSeekerProfile copyWith({
@@ -178,6 +231,14 @@ class JobSeekerProfile {
     Map<String, int>? specialtyFlightHoursMap,
     List<String>? aircraftFlown,
     int? totalFlightHours,
+    bool? notifyOnApplicationStatusChange,
+    bool? newJobAlertEnabled,
+    bool? newJobAlertStateOnly,
+    bool? newJobAlertAirframeMatch,
+    int? newJobAlertMinimumMatchPercent,
+    bool? newJobAlertCertificateMatch,
+    String? resumeUrl,
+    String? resumeFileName,
   }) {
     final splitFullName = fullName == null ? null : _splitFullName(fullName);
     final nextFirstName = firstName ?? splitFullName?[0] ?? this.firstName;
@@ -206,6 +267,20 @@ class JobSeekerProfile {
           specialtyFlightHoursMap ?? this.specialtyFlightHoursMap,
       aircraftFlown: aircraftFlown ?? this.aircraftFlown,
       totalFlightHours: totalFlightHours ?? this.totalFlightHours,
+      notifyOnApplicationStatusChange:
+          notifyOnApplicationStatusChange ??
+          this.notifyOnApplicationStatusChange,
+      newJobAlertEnabled: newJobAlertEnabled ?? this.newJobAlertEnabled,
+      newJobAlertStateOnly: newJobAlertStateOnly ?? this.newJobAlertStateOnly,
+      newJobAlertAirframeMatch:
+          newJobAlertAirframeMatch ?? this.newJobAlertAirframeMatch,
+      newJobAlertMinimumMatchPercent:
+          (newJobAlertMinimumMatchPercent ?? this.newJobAlertMinimumMatchPercent)
+              .clamp(0, 100),
+      newJobAlertCertificateMatch:
+          newJobAlertCertificateMatch ?? this.newJobAlertCertificateMatch,
+      resumeUrl: resumeUrl ?? this.resumeUrl,
+      resumeFileName: resumeFileName ?? this.resumeFileName,
     );
   }
 }
