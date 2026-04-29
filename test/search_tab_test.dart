@@ -111,6 +111,7 @@ Future<void> _pumpSearchTab(WidgetTester tester) async {
   await tester.pumpAndSettle();
   await tester.tap(find.text('Filter').last);
   await tester.pumpAndSettle();
+  await _ensureLocationSearchExpanded(tester);
   expect(find.text('Location Search'), findsOneWidget);
   expect(find.text('Showing 5 of 5 jobs'), findsOneWidget);
 }
@@ -118,14 +119,26 @@ Future<void> _pumpSearchTab(WidgetTester tester) async {
 Future<void> _openFiltersDrawer(WidgetTester tester) async {
   final openFiltersButton = find.text('Open Filters');
   final expandFiltersButton = find.text('Expand Filters');
+  final expandFiltersPanelIcon = find.byTooltip('Expand filters panel');
   if (openFiltersButton.evaluate().isNotEmpty) {
     await tester.tap(openFiltersButton.hitTestable().first);
     await tester.pumpAndSettle();
   } else if (expandFiltersButton.evaluate().isNotEmpty) {
     await tester.tap(expandFiltersButton.hitTestable().first);
     await tester.pumpAndSettle();
+  } else if (expandFiltersPanelIcon.evaluate().isNotEmpty) {
+    await tester.tap(expandFiltersPanelIcon.hitTestable().first);
+    await tester.pumpAndSettle();
   }
   expect(find.byKey(const ValueKey('search-primary-filters-open')), findsOneWidget);
+}
+
+Future<void> _ensureLocationSearchExpanded(WidgetTester tester) async {
+  final expandLocationSearchButton = find.byTooltip('Expand location search');
+  if (expandLocationSearchButton.evaluate().isNotEmpty) {
+    await tester.tap(expandLocationSearchButton.hitTestable().first);
+    await tester.pumpAndSettle();
+  }
 }
 
 void _invokeTapCallback(WidgetTester tester, Finder target) {
@@ -214,6 +227,7 @@ Future<void> _selectFilterOption(
 }
 
 Future<void> _submitCitySearch(WidgetTester tester, String city) async {
+  await _ensureLocationSearchExpanded(tester);
   final cityRow = find.ancestor(
     of: find.byTooltip('Search city'),
     matching: find.byType(Row),
@@ -427,6 +441,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Filter').last);
     await tester.pumpAndSettle();
+    await _ensureLocationSearchExpanded(tester);
 
     expect(find.text('Showing 2 of 2 jobs'), findsOneWidget);
 
@@ -499,6 +514,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('Filter').last);
       await tester.pumpAndSettle();
+      await _ensureLocationSearchExpanded(tester);
 
       expect(find.text('Showing 3 of 3 jobs'), findsOneWidget);
 

@@ -740,11 +740,6 @@ class SupabaseAdminRepository implements AdminRepository {
 
   @override
   Future<void> deleteEmployerProfile(String employerId, String reason) async {
-    final isAdminOwnedEmployer = await _isAdminOwnedEmployer(employerId);
-    if (isAdminOwnedEmployer) {
-      throw StateError('Cannot delete an admin employer profile.');
-    }
-
     final beforeRow = await _client
         .from('employer_profiles')
         .select()

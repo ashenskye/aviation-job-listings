@@ -1668,6 +1668,12 @@ class _MyHomePageState extends State<MyHomePage> {
   @override
   void initState() {
     super.initState();
+    final isMobilePlatform =
+        !kIsWeb &&
+        (defaultTargetPlatform == TargetPlatform.android ||
+            defaultTargetPlatform == TargetPlatform.iOS);
+    _searchTabPrimaryFiltersDrawerOpen = !isMobilePlatform;
+    _searchTabLocationGuideExpanded = !isMobilePlatform;
     _appRepository = widget.repository;
     _profileType = widget.initialProfileType ?? ProfileType.jobSeeker;
     _allJobs = const [];
